@@ -1,246 +1,200 @@
 const axios = require("axios");
-const { HttpsProxyAgent } = (() => { try { return require("https-proxy-agent"); } catch { return {}; } })();
 
-// ─── Proxy support ────────────────────────────────────────────────────────────
-// If HTTP_PROXY or HTTPS_PROXY is set in .env, route all Binance requests through it.
-// This is the recommended fix for Indian servers where fapi.binance.com is blocked.
-// Usage in .env:  HTTP_PROXY=http://proxy-ip:port
-function getProxyAgent() {
-  const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.http_proxy;
-  if (proxyUrl && HttpsProxyAgent) {
-    console.log(`[Binance] Using proxy: ${proxyUrl}`);
-    return new HttpsProxyAgent(proxyUrl);
-  }
-  return undefined;
-}
-
-const proxyAgent = getProxyAgent();
-
-// ─── Endpoint config ──────────────────────────────────────────────────────────
-// Binance Futures (fapi) is geo-blocked in India and some other regions.
-// We try multiple base URLs in order — first one that responds wins.
-// Also falls back to Spot API for price data if Futures is unavailable.
-
-const FUTURES_HOSTS = [
-  "https://fapi.binance.com",
-  "https://fapi1.binance.com",
-  "https://fapi2.binance.com",
-  "https://fapi3.binance.com",
-  "https://fapi4.binance.com",
-];
-
-const SPOT_HOST = "https://api.binance.com";
-
-// In-memory: which futures host is currently working
-let activeHost = FUTURES_HOSTS[0];
-let lastHostCheck = 0;
-const HOST_CHECK_INTERVAL = 5 * 60 * 1000; // re-check every 5 min
-
-// Simple in-memory price cache to avoid hammering API on repeated calls
-const priceCache = new Map(); // symbol → { price, ts }
-const CACHE_TTL  = 8 * 1000; // 8 seconds
-
-// ─── Create clients ───────────────────────────────────────────────────────────
-function makeFuturesClient(host) {
-  return axios.create({
-    baseURL: host,
-    timeout: 10000,
-    ...(proxyAgent ? { httpsAgent: proxyAgent } : {}),
-  });
-}
-
-const spotClient = axios.create({
-  baseURL: SPOT_HOST,
-  timeout: 10000,
-  ...(proxyAgent ? { httpsAgent: proxyAgent } : {}),
+const client = axios.create({
+  baseURL: "https://fapi.binance.com",
+  timeout: 15000,
 });
 
-// ─── Host resolver ────────────────────────────────────────────────────────────
-// Tries each futures host in order, returns first reachable one.
-async function resolveActiveHost() {
-  const now = Date.now();
-  if (now - lastHostCheck < HOST_CHECK_INTERVAL) return activeHost;
+// ─── Cache for exchange info (coins list) ─────────────────────────────────────
+// Refresh every 10 minutes — new listings don't need instant detection
+let _coinsCache     = null;
+let _coinsCacheTime = 0;
+const COINS_CACHE_TTL = 10 * 60 * 1000;
 
-  for (const host of FUTURES_HOSTS) {
-    try {
-      await axios.get(`${host}/fapi/v1/ping`, { timeout: 5000 });
-      activeHost    = host;
-      lastHostCheck = now;
-      console.log(`[Binance] Active futures host: ${host}`);
-      return host;
-    } catch {}
-  }
+// ─── Price cache — prevent stale values ──────────────────────────────────────
+// Binance /ticker/price can return cached values up to ~500ms old.
+// We use /ticker/bookTicker (best bid/ask midpoint) for tighter real-time price.
+let _priceCache     = {};
+let _priceCacheTime = 0;
+const PRICE_CACHE_TTL = 2000; // 2 seconds — refresh at most every 2s
 
-  // All futures hosts failed — will use spot fallback
-  lastHostCheck = now;
-  console.warn("[Binance] All futures hosts unreachable, using spot fallback");
-  return null;
-}
-
-// ─── Normalize kline ──────────────────────────────────────────────────────────
-function normalizeKline(k) {
+// ─── Normalize kline array → object ──────────────────────────────────────────
+function normalizeKline(kline) {
   return {
-    openTime:  Number(k[0]),
-    open:      Number(k[1]),
-    high:      Number(k[2]),
-    low:       Number(k[3]),
-    close:     Number(k[4]),
-    volume:    Number(k[5]),
-    closeTime: Number(k[6]),
+    openTime: Number(kline[0]),
+    open:     Number(kline[1]),
+    high:     Number(kline[2]),
+    low:      Number(kline[3]),
+    close:    Number(kline[4]),
+    volume:   Number(kline[5]),
+    closeTime: Number(kline[6]),
   };
 }
 
-// ─── getKlines ────────────────────────────────────────────────────────────────
-// Fetches OHLCV candles. Tries Futures first, falls back to Spot.
-// Drops the last (incomplete/open) candle to avoid dirty signals.
-async function getKlines(symbol, interval, limit = 251) {
-  // Fetch one extra so we can drop the unfinished current candle
-  const fetchLimit = limit + 1;
+// ─── Get all active USDT perpetual futures symbols ────────────────────────────
+// Returns array like ["BTCUSDT", "ETHUSDT", ...]
+// Filtered: only USDT pairs, only PERPETUAL contracts, only TRADING status
+async function getAllFuturesCoins() {
+  const now = Date.now();
 
-  // Try Futures
-  const host = await resolveActiveHost();
-  if (host) {
-    try {
-      const res = await makeFuturesClient(host).get("/fapi/v1/klines", {
-        params: { symbol, interval, limit: fetchLimit },
-      });
-      if (Array.isArray(res.data) && res.data.length > 1) {
-        // Drop last candle (open/unfinished)
-        const candles = res.data.slice(0, -1).map(normalizeKline);
-        return candles;
-      }
-    } catch (err) {
-      console.warn(`[Binance] Futures klines failed for ${symbol}/${interval}: ${err.message}`);
-      // Mark host as stale so next call re-checks
-      lastHostCheck = 0;
-    }
+  // Return cached list if still fresh
+  if (_coinsCache && now - _coinsCacheTime < COINS_CACHE_TTL) {
+    return _coinsCache;
   }
 
-  // Fallback: Spot API
-  // Note: 12h interval not available on spot — map to closest
-  const spotInterval = interval === "12h" ? "1d" : interval;
   try {
-    const res = await spotClient.get("/api/v3/klines", {
-      params: { symbol, interval: spotInterval, limit: fetchLimit },
-    });
-    if (Array.isArray(res.data) && res.data.length > 1) {
-      return res.data.slice(0, -1).map(normalizeKline);
-    }
-  } catch (err) {
-    console.error(`[Binance] Spot klines also failed for ${symbol}/${interval}: ${err.message}`);
-  }
+    const response = await client.get("/fapi/v1/exchangeInfo");
+    const symbols = response.data?.symbols || [];
 
-  return [];
+    const coins = symbols
+      .filter(s =>
+        s.quoteAsset === "USDT" &&
+        s.contractType === "PERPETUAL" &&
+        s.status === "TRADING"
+      )
+      .map(s => s.symbol)
+      .sort();
+
+    if (coins.length) {
+      _coinsCache     = coins;
+      _coinsCacheTime = now;
+    }
+
+    return coins;
+  } catch (err) {
+    console.error("[binanceService] getAllFuturesCoins failed:", err.message);
+    // Fallback to a reasonable default list if API fails
+    return _coinsCache || [
+      "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
+      "ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","DOTUSDT",
+      "MATICUSDT","TRXUSDT","LTCUSDT","ATOMUSDT","APTUSDT",
+      "NEARUSDT","ARBUSDT","OPUSDT","SUIUSDT","INJUSDT",
+    ];
+  }
 }
 
-// ─── getPrices ────────────────────────────────────────────────────────────────
-// Returns { BTCUSDT: 65000, ETHUSDT: 3200, ... }
-// Cached for 8 seconds to avoid per-coin hammering during a scan.
+// ─── Fetch klines (OHLCV candles) ─────────────────────────────────────────────
+// Drops the last (currently open) candle to avoid unfinished candle analysis
+async function getKlines(symbol, interval, limit = 250) {
+  try {
+    const response = await client.get("/fapi/v1/klines", {
+      params: { symbol, interval, limit: limit + 1 }, // +1 to drop unfinished
+    });
+
+    if (!Array.isArray(response.data) || response.data.length === 0) return [];
+
+    // Drop last candle (still open / unfinished)
+    const complete = response.data.slice(0, -1);
+    return complete.map(normalizeKline);
+  } catch (err) {
+    console.error(`[binanceService] getKlines(${symbol}, ${interval}) failed:`, err.message);
+    return [];
+  }
+}
+
+// ─── Get real-time prices using bookTicker ─────────────────────────────────────
+// bookTicker returns best bid/ask — midpoint is the most accurate real-time price.
+// Falls back to /ticker/price if bookTicker fails.
+// Result is cached for PRICE_CACHE_TTL to avoid hammering the API on bulk calls.
 async function getPrices(symbols = []) {
-  const result  = {};
-  const toFetch = [];
-  const now     = Date.now();
+  const now = Date.now();
 
-  // Serve from cache if fresh
-  for (const s of symbols) {
-    const cached = priceCache.get(s);
-    if (cached && now - cached.ts < CACHE_TTL) {
-      result[s] = cached.price;
-    } else {
-      toFetch.push(s);
-    }
-  }
-
-  if (!toFetch.length) return result;
-
-  // Try Futures price endpoint
-  const host = await resolveActiveHost();
-  if (host) {
+  // Refresh price cache if stale
+  if (now - _priceCacheTime > PRICE_CACHE_TTL) {
     try {
-      const res = await makeFuturesClient(host).get("/fapi/v2/ticker/price");
-      const tickers = Array.isArray(res.data) ? res.data : [];
-      const wanted  = new Set(toFetch.map(s => s.toUpperCase()));
+      // bookTicker = best bid + best ask (tightest spread, most accurate)
+      const response = await client.get("/fapi/v1/ticker/bookTicker");
+      const tickers  = Array.isArray(response.data) ? response.data : [];
+
+      const fresh = {};
       for (const t of tickers) {
-        const sym = String(t.symbol || "").toUpperCase();
-        if (wanted.has(sym)) {
-          const price = Number(t.price);
-          result[sym] = price;
-          priceCache.set(sym, { price, ts: now });
+        const sym  = String(t.symbol || "").toUpperCase();
+        const bid  = Number(t.bidPrice);
+        const ask  = Number(t.askPrice);
+        if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0) {
+          // Midpoint of bid/ask = most accurate market price
+          fresh[sym] = (bid + ask) / 2;
         }
       }
-      // Check if we got all prices
-      if (toFetch.every(s => result[s])) return result;
-    } catch (err) {
-      console.warn(`[Binance] Futures prices failed: ${err.message}`);
-      lastHostCheck = 0;
-    }
-  }
 
-  // Fallback: Spot prices for any missing
-  const stillMissing = toFetch.filter(s => !result[s]);
-  if (stillMissing.length) {
-    try {
-      const res = await spotClient.get("/api/v3/ticker/price");
-      const tickers = Array.isArray(res.data) ? res.data : [];
-      const wanted  = new Set(stillMissing.map(s => s.toUpperCase()));
-      for (const t of tickers) {
-        const sym = String(t.symbol || "").toUpperCase();
-        if (wanted.has(sym)) {
-          const price = Number(t.price);
-          result[sym] = price;
-          priceCache.set(sym, { price, ts: now });
-        }
+      if (Object.keys(fresh).length > 0) {
+        _priceCache     = fresh;
+        _priceCacheTime = now;
       }
-    } catch (err) {
-      console.error(`[Binance] Spot prices also failed: ${err.message}`);
+    } catch (bookTickerErr) {
+      // Fallback: use /ticker/price
+      try {
+        const response = await client.get("/fapi/v1/ticker/price");
+        const tickers  = Array.isArray(response.data) ? response.data : [];
+        const fresh    = {};
+        for (const t of tickers) {
+          const sym   = String(t.symbol || "").toUpperCase();
+          const price = Number(t.price);
+          if (Number.isFinite(price) && price > 0) fresh[sym] = price;
+        }
+        if (Object.keys(fresh).length > 0) {
+          _priceCache     = fresh;
+          _priceCacheTime = now;
+        }
+      } catch (fallbackErr) {
+        console.error("[binanceService] getPrices fallback also failed:", fallbackErr.message);
+      }
     }
   }
 
+  // If no specific symbols requested, return everything
+  if (!symbols.length) return { ..._priceCache };
+
+  // Return only requested symbols
+  const wanted = new Set(symbols.map(s => String(s).toUpperCase()));
+  const result = {};
+  for (const sym of wanted) {
+    if (Number.isFinite(_priceCache[sym])) {
+      result[sym] = _priceCache[sym];
+    }
+  }
   return result;
 }
 
-// ─── getAllTickerStats ────────────────────────────────────────────────────────
-// For Market page — 24hr stats. Tries Futures, falls back to Spot.
-async function getAllTickerStats() {
-  // Try Futures
-  const host = await resolveActiveHost();
-  if (host) {
-    try {
-      const res = await makeFuturesClient(host).get("/fapi/v1/ticker/24hr");
-      if (Array.isArray(res.data) && res.data.length > 10) return res.data;
-    } catch (err) {
-      console.warn(`[Binance] Futures 24hr stats failed: ${err.message}`);
-      lastHostCheck = 0;
+// ─── Get price for a single symbol (most accurate — direct book ticker) ───────
+async function getPrice(symbol) {
+  const sym = String(symbol).toUpperCase();
+  try {
+    const response = await client.get("/fapi/v1/ticker/bookTicker", {
+      params: { symbol: sym },
+    });
+    const bid = Number(response.data?.bidPrice);
+    const ask = Number(response.data?.askPrice);
+    if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0) {
+      return (bid + ask) / 2;
     }
-  }
+  } catch {}
 
-  // Fallback: Spot 24hr stats
+  // Fallback: direct price ticker
   try {
-    const res = await spotClient.get("/api/v3/ticker/24hr");
-    if (Array.isArray(res.data)) return res.data;
+    const r = await client.get("/fapi/v1/ticker/price", { params: { symbol: sym } });
+    const p = Number(r.data?.price);
+    if (Number.isFinite(p) && p > 0) return p;
+  } catch {}
+
+  return null;
+}
+
+// ─── 24H stats for all tickers (used in analytics) ────────────────────────────
+async function getAllTickerStats() {
+  try {
+    const response = await client.get("/fapi/v1/ticker/24hr");
+    return Array.isArray(response.data) ? response.data : [];
   } catch (err) {
-    console.error(`[Binance] Spot 24hr stats also failed: ${err.message}`);
-  }
-
-  return [];
-}
-
-// ─── Health check ─────────────────────────────────────────────────────────────
-// Called by engine status endpoint — tells frontend if data is available
-async function checkConnectivity() {
-  const host = await resolveActiveHost();
-
-  if (host) {
-    return { connected: true, source: "FUTURES", host };
-  }
-
-  // Test spot as last resort
-  try {
-    await spotClient.get("/api/v3/ping", { timeout: 4000 });
-    return { connected: true, source: "SPOT", host: SPOT_HOST };
-  } catch {
-    return { connected: false, source: null, host: null };
+    console.error("[binanceService] getAllTickerStats failed:", err.message);
+    return [];
   }
 }
 
-module.exports = { getAllTickerStats, getKlines, getPrices, checkConnectivity };
+module.exports = {
+  getAllFuturesCoins,
+  getAllTickerStats,
+  getKlines,
+  getPrice,
+  getPrices,
+};
