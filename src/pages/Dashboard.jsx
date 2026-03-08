@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import AppShell from "../components/AppShell";
 import DistributionList from "../components/DistributionList";
 import SignalTable from "../components/SignalTable";
@@ -131,17 +131,20 @@ export default function Dashboard() {
     });
   }, [availablePaymentMethods, availablePaymentSettings, availablePlans]);
 
+  // Stable string of active coin symbols — only changes when coins list changes
+  const activeCoinsParam = useMemo(
+    () => getSignalCoins(activeSignals).join(","),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeSignals.map((s) => s.coin).join(",")]
+  );
+
   useEffect(() => {
     let active = true;
 
     async function refreshLivePrices() {
-      if (!activeSignals.length) return;
-
-      const coinsParam = getSignalCoins(activeSignals).join(",");
-      if (!coinsParam) return;
-
+      if (!activeCoinsParam) return;
       try {
-        const response = await apiFetch(`/signals/live-prices?coins=${coinsParam}`);
+        const response = await apiFetch(`/signals/live-prices?coins=${activeCoinsParam}`);
         if (!active) return;
         setActiveSignals((current) => mergeSignalLivePrices(current, response.prices || []));
       } catch (error) {
@@ -156,7 +159,7 @@ export default function Dashboard() {
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [activeSignals.length]);
+  }, [activeCoinsParam]);
 
   async function loadPublicDashboardData() {
     const results = await Promise.allSettled([
