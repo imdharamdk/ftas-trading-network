@@ -111,7 +111,6 @@ export default function Dashboard() {
   const availablePaymentSettings = paymentSettings || fallbackPaymentSettings;
   const availablePaymentMethods = availablePaymentSettings.paymentMethods || [];
   const availablePlans = availablePaymentSettings.plans || [];
-  const signalCoinsKey = getSignalCoins(activeSignals).join(",");
 
   useEffect(() => {
     if (!availablePaymentSettings) {
@@ -136,14 +135,8 @@ export default function Dashboard() {
     let active = true;
 
     async function refreshLivePrices() {
-      if (!signalCoinsKey) {
-        return;
-      }
-
-    async function refreshLivePrices() {
       if (!activeSignals.length) return;
 
-      // Build coins list from current active signals
       const coinsParam = getSignalCoins(activeSignals).join(",");
       if (!coinsParam) return;
 
