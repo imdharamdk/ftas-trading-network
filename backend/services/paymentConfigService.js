@@ -1,8 +1,8 @@
 const { mutateCollection, readCollection } = require("../storage/fileStore");
 
-const DEFAULT_CONTACT_PERSON = "+91 8679215898";
+const DEFAULT_CONTACT_PERSON = "maidkhoon@gmail.com";
 const DEFAULT_PAYMENT_METHODS = [
-  { id: "method_upi", label: "UPI", value: "UPI" },
+  { id: "method_upi", label: "UPI", value: "" },
   { id: "method_bank", label: "Bank Transfer", value: "BANK" },
   { id: "method_crypto", label: "Crypto", value: "CRYPTO" },
 ];
