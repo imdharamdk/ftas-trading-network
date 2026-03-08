@@ -1,9 +1,10 @@
 const { SIGNAL_STATUS, createSignal } = require("../models/Signal");
 const { readCollection, mutateCollection } = require("../storage/fileStore");
-const { getKlines, getPrices } = require("./binanceService");
+const { getKlines, getPrices, getAllFuturesCoins } = require("./binanceService");
 const { analyzeCandles } = require("./indicatorEngine");
 
-const DEFAULT_COINS = [
+// Fallback list if Binance exchangeInfo API fails
+const FALLBACK_COINS = [
   "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
   "ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","DOTUSDT",
   "MATICUSDT","TRXUSDT","LTCUSDT","ATOMUSDT","APTUSDT",
@@ -34,9 +35,19 @@ function roundPrice(v) {
   return Number(v.toFixed(6));
 }
 function clamp(v, mn, mx) { return Math.min(Math.max(v, mn), mx); }
-function getCoinList() {
-  const raw = String(process.env.SCAN_COINS || "").split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
-  return raw.length ? raw : DEFAULT_COINS;
+// Dynamic coin list — fetches ALL active USDT perpetual pairs from Binance.
+// Falls back to env override (SCAN_COINS) or hardcoded list if API fails.
+async function getCoinList() {
+  const envOverride = String(process.env.SCAN_COINS || "")
+    .split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+  if (envOverride.length) return envOverride;
+
+  try {
+    const allCoins = await getAllFuturesCoins();
+    return allCoins.length ? allCoins : FALLBACK_COINS;
+  } catch {
+    return FALLBACK_COINS;
+  }
 }
 function getTradeTimeframes() {
   const raw = String(process.env.TRADE_TIMEFRAMES || "").split(",").map(s => s.trim()).filter(Boolean);
@@ -598,7 +609,7 @@ async function scanNow({ source = "ENGINE" } = {}) {
   const generatedSignals = [], errors = [];
   try {
     const closedSignals = await evaluateActiveSignals();
-    const coins = getCoinList();
+    const coins = await getCoinList();
     for (const coin of coins) {
       try {
         const candidate = await analyzeCoin(coin);
