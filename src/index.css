@@ -796,3 +796,117 @@ textarea {
     font-size: 2rem;
   }
 }
+
+/* ─── Coin chart button (in signal table) ─────────────────────────── */
+.coin-chart-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: inherit;
+  transition: color 0.15s;
+}
+.coin-chart-btn:hover strong {
+  text-decoration: underline;
+  color: var(--accent, #7c6aff);
+}
+.coin-chart-icon {
+  font-size: 0.85em;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+.coin-chart-btn:hover .coin-chart-icon {
+  opacity: 1;
+}
+
+/* ─── TradingView Chart Modal ─────────────────────────────────────── */
+.tv-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 16px;
+  animation: tv-fade-in 0.18s ease;
+}
+
+@keyframes tv-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.tv-modal-box {
+  background: #13131a;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  width: min(1100px, 95vw);
+  height: min(680px, 88vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.7);
+  animation: tv-slide-up 0.2s ease;
+}
+
+@keyframes tv-slide-up {
+  from { transform: translateY(20px); opacity: 0.6; }
+  to   { transform: translateY(0);    opacity: 1;   }
+}
+
+.tv-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  flex-shrink: 0;
+  background: #1a1a24;
+}
+
+.tv-modal-title {
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+  color: #e0e0e0;
+}
+
+.tv-modal-tf {
+  display: inline-block;
+  padding: 1px 8px;
+  background: rgba(124, 106, 255, 0.25);
+  color: #a89eff;
+  border-radius: 4px;
+  font-size: 0.78em;
+  font-weight: 600;
+}
+
+.tv-modal-close {
+  background: rgba(255,255,255,0.08);
+  border: none;
+  color: #aaa;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.tv-modal-close:hover {
+  background: rgba(255, 80, 80, 0.25);
+  color: #ff6b6b;
+}
+
+.tradingview-widget-container {
+  flex: 1;
+  min-height: 0;
+}
