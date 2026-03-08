@@ -1,0 +1,15 @@
+[
+  {
+    "id": "usr_admin_bootstrap_001",
+    "name": "FTAS Admin",
+    "email": "maidkhoon@gmail.com",
+    "passwordHash": "$2a$10$CORo55FJ0nR2VZPx.W1CA.kC/jY0BeVoLwDGNYCtLcBWIEkC8577y",
+    "role": "ADMIN",
+    "plan": "PREMIUM",
+    "isActive": true,
+    "subscriptionStatus": "ACTIVE",
+    "subscriptionEndsAt": null,
+    "createdAt": "2026-03-08T04:15:47.831Z",
+    "updatedAt": "2026-03-08T04:15:47.832Z"
+  }
+]
