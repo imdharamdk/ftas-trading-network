@@ -15,31 +15,40 @@ const { getStatus, start } = require("./services/signalEngine");
 const PORT     = Number(process.env.PORT || 5000);
 const distPath = path.join(__dirname, "..", "dist");
 
-// ─── Auto-bootstrap admin on startup (only if env vars set) ──────────────────
+// ─── Auto-bootstrap admin on every startup ────────────────────────────────────
+// Render free tier mein file system reset hota hai har redeploy pe.
+// Isliye har startup pe admin check aur recreate karte hain env vars se.
 async function maybeBootstrapAdmin() {
   const email    = process.env.ADMIN_BOOTSTRAP_EMAIL;
   const password = process.env.ADMIN_BOOTSTRAP_PASSWORD;
+  const name     = process.env.ADMIN_BOOTSTRAP_NAME || "FTAS Admin";
 
-  if (!email || !password) return;
+  if (!email || !password) {
+    console.warn("[bootstrap] ADMIN_BOOTSTRAP_EMAIL or ADMIN_BOOTSTRAP_PASSWORD not set — skipping");
+    return;
+  }
 
   try {
-    const bcrypt = require("bcryptjs");
+    const bcrypt        = require("bcryptjs");
     const { USER_ROLES, createUser, normalizeEmail } = require("./models/User");
-    const { readCollection, mutateCollection } = require("./storage/fileStore");
+    const { mutateCollection } = require("./storage/fileStore");
 
-    const users    = await readCollection("users");
-    const existing = users.find(u => u.email === normalizeEmail(email));
-
-    if (existing && existing.role === USER_ROLES.ADMIN) {
-      console.log("[bootstrap] Admin already exists:", email);
-      return;
-    }
-
+    const normalEmail  = normalizeEmail(email);
     const passwordHash = await bcrypt.hash(password, 10);
 
     await mutateCollection("users", (records) => {
-      const idx = records.findIndex(u => u.email === normalizeEmail(email));
+      const idx = records.findIndex(u => u.email === normalEmail);
 
+      // Already admin — just sync password in case it changed
+      if (idx !== -1 && records[idx].role === USER_ROLES.ADMIN) {
+        const updated = { ...records[idx], passwordHash, isActive: true, updatedAt: new Date().toISOString() };
+        const next = [...records];
+        next[idx] = updated;
+        console.log("[bootstrap] Admin password synced:", normalEmail);
+        return { records: next, value: updated };
+      }
+
+      // Exists but not admin — upgrade
       if (idx !== -1) {
         const updated = {
           ...records[idx],
@@ -53,12 +62,14 @@ async function maybeBootstrapAdmin() {
         };
         const next = [...records];
         next[idx] = updated;
+        console.log("[bootstrap] User upgraded to admin:", normalEmail);
         return { records: next, value: updated };
       }
 
+      // Fresh create
       const user = createUser({
-        email,
-        name: process.env.ADMIN_BOOTSTRAP_NAME || "FTAS Admin",
+        email: normalEmail,
+        name,
         passwordHash,
         role: USER_ROLES.ADMIN,
         plan: "PREMIUM",
@@ -66,10 +77,10 @@ async function maybeBootstrapAdmin() {
         subscriptionEndsAt: null,
         isActive: true,
       });
+      console.log("[bootstrap] Admin created:", normalEmail);
       return { records: [user, ...records], value: user };
     });
 
-    console.log("[bootstrap] Admin account ready:", email);
   } catch (err) {
     console.error("[bootstrap] Failed:", err.message);
   }
@@ -79,18 +90,16 @@ async function maybeBootstrapAdmin() {
 function createApp() {
   const app = express();
 
-  // CORS — allow all origins in dev, restrict to env var in production
   const allowedOrigin = process.env.FRONTEND_URL || true;
   app.use(cors({ origin: allowedOrigin, credentials: true }));
-
   app.use(express.json({ limit: "1mb" }));
 
-  // Health check — Render uses this to confirm service is up
+  // Health — Render uses this to confirm service is alive
   app.get("/api/health", (_req, res) => res.json({
-    name: "FTAS Signal Engine",
-    ok:   true,
+    name:      "FTAS Signal Engine",
+    ok:        true,
     timestamp: new Date().toISOString(),
-    engine: getStatus(),
+    engine:    getStatus(),
   }));
 
   app.use("/api/auth",     authRoutes);
@@ -99,7 +108,6 @@ function createApp() {
   app.use("/api/payments", paymentRoutes);
   app.use("/api/signals",  signalRoutes);
 
-  // Serve built frontend if dist/ exists (optional — not needed when using Vercel)
   if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
     app.get("*", (req, res, next) => {
@@ -111,27 +119,26 @@ function createApp() {
   return app;
 }
 
-// ─── Start server ─────────────────────────────────────────────────────────────
+// ─── Start ────────────────────────────────────────────────────────────────────
 async function startServer(port = PORT) {
-  // Bootstrap admin before accepting requests
   await maybeBootstrapAdmin();
 
   const app = createApp();
 
   app.listen(port, () => {
     console.log(`FTAS backend running on port ${port}`);
-    console.log("Engine status:", JSON.stringify(getStatus()));
+    console.log("Engine:", JSON.stringify(getStatus()));
 
     if (String(process.env.AUTO_START_ENGINE || "").toLowerCase() === "true") {
       start();
-      console.log("Signal scanner auto-started");
+      console.log("Signal scanner started");
     }
   });
 }
 
 if (require.main === module) {
   startServer().catch(err => {
-    console.error("Server failed to start:", err.message);
+    console.error("Startup failed:", err.message);
     process.exit(1);
   });
 }
