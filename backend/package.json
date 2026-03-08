@@ -1,0 +1,24 @@
+{
+  "name": "ftas-signal-engine-backend",
+  "version": "1.0.0",
+  "description": "FTAS crypto futures signal engine backend",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js",
+    "scan:once": "node scripts/scanOnce.js",
+    "bootstrap:admin": "node scripts/bootstrapAdmin.js"
+  },
+  "dependencies": {
+    "axios": "^1.8.4",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "technicalindicators": "^3.1.0"
+  },
+  "devDependencies": {
+    "supertest": "^7.2.2"
+  }
+}
