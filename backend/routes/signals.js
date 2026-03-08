@@ -2,7 +2,7 @@ const express = require("express");
 const { requireAdmin, requireAuth, requireSignalAccess } = require("../middleware/auth");
 const { SIGNAL_STATUS } = require("../models/Signal");
 const { mutateCollection, readCollection } = require("../storage/fileStore");
-const { getPrices } = require("../services/binanceService");
+const { getPrices, getAllFuturesCoins } = require("../services/binanceService");
 const { createManualSignal, getStatus, scanNow, seedDemoSignals, start, stop } = require("../services/signalEngine");
 
 const router = express.Router();
@@ -415,22 +415,6 @@ router.patch("/:id/status", requireAuth, requireAdmin, async (req, res) => {
     }
 
     return res.json({ signal: result });
-  } catch (error) {
-    return res.status(500).json({ message: error.message });
-  }
-});
-
-router.delete("/history/clear", requireAuth, requireAdmin, async (req, res) => {
-  try {
-    let removedCount = 0;
-
-    await mutateCollection("signals", (records) => {
-      const active = records.filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE);
-      removedCount = records.length - active.length;
-      return { records: active, value: removedCount };
-    });
-
-    return res.json({ cleared: true, removedCount });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }
