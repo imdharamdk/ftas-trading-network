@@ -155,9 +155,11 @@ function detectMarketRegime(closes, highs, lows, atr, adx) {
 }
 
 // ─── Support / Resistance levels ─────────────────────────────────────────────
-// Simple pivot-based S/R — finds recent swing high/lows and clusters them
+// Simple pivot-based S/R — finds recent swing high/lows and clusters them.
+// Results are sorted by proximity to the current price so index [0] is nearest.
 function detectSRLevels(candles, lookback = 50) {
   const c = candles.slice(-lookback);
+  const currentPrice = c[c.length - 1].close;
   const supports = [], resistances = [];
 
   for (let i = 2; i < c.length - 2; i++) {
@@ -173,9 +175,12 @@ function detectSRLevels(candles, lookback = 50) {
     }
   }
 
+  // Sort by proximity to current price — nearest level is index [0]
+  const byProximity = (a, b) => Math.abs(a - currentPrice) - Math.abs(b - currentPrice);
+
   return {
-    supports:    supports.slice(-3),     // 3 most recent supports
-    resistances: resistances.slice(-3),  // 3 most recent resistances
+    supports:    supports.sort(byProximity).slice(0, 3),
+    resistances: resistances.sort(byProximity).slice(0, 3),
   };
 }
 
@@ -290,7 +295,7 @@ function detectPatterns(candles) {
 
 // ─── Main Analysis ────────────────────────────────────────────────────────────
 function analyzeCandles(candles) {
-  if (!Array.isArray(candles) || candles.length < 210) return null;
+  if (!Array.isArray(candles) || candles.length < 220) return null;
 
   const opens   = candles.map(c => c.open);
   const highs   = candles.map(c => c.high);
@@ -421,8 +426,11 @@ function analyzeCandles(candles) {
   const haStrongBull = haLast3.every(c => c.close > c.open);
   const haStrongBear = haLast3.every(c => c.close < c.open);
   // HA no lower wick = strong bull; no upper wick = strong bear
-  const haNoLowerWick = haLast && (haLast.low >= Math.min(haLast.open, haLast.close) * 0.9999);
-  const haNoUpperWick = haLast && (haLast.high <= Math.max(haLast.open, haLast.close) * 1.0001);
+  // Use ATR-relative tolerance: wick is "negligible" if smaller than 5% of ATR
+  const haAtr = last(safeCalc("ATR", { period: 14, high: ha.map(c => c.high), low: ha.map(c => c.low), close: ha.map(c => c.close) }), null);
+  const haWickTolerance = haAtr ? haAtr * 0.05 : (haLast ? (haLast.high - haLast.low) * 0.05 : 0);
+  const haNoLowerWick = haLast && (Math.min(haLast.open, haLast.close) - haLast.low) <= haWickTolerance;
+  const haNoUpperWick = haLast && (haLast.high - Math.max(haLast.open, haLast.close)) <= haWickTolerance;
 
   // ── Divergences ───────────────────────────────────────────────────────────
   const rsiDivergence  = detectDivergence(closes, rsiSeries, 30);
