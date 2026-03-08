@@ -19,6 +19,8 @@ const SIGNAL_EXPIRY_MS = {
   "15m": 4   * 60 * 60 * 1000,
   "1h":  16  * 60 * 60 * 1000,
   "4h":  72  * 60 * 60 * 1000,
+  "12h": 7   * 24 * 60 * 60 * 1000,   // 7 days
+  "1d":  21  * 24 * 60 * 60 * 1000,   // 21 days
 };
 
 const engineState = {
@@ -159,12 +161,12 @@ function isPullbackComplete(side, analysis) {
   const nearLevel = atSupport || nearSR;
 
   if (side === "LONG") {
-    const rsiOk    = (rsi || 0) >= 38 && (rsi || 0) <= 62 && rsiRising;         // RSI recovering, MUST be rising
+    const rsiOk    = (rsi || 0) >= 45 && (rsi || 0) <= 78 && rsiRising;         // aligned with Gate 3 bullMomentum range
     const macdOk   = macdHistIncreasing;                                          // MACD turning up
     const stochOk  = stochK !== null ? stochK < 65 && stochK > 15 : true;
     return nearLevel && rsiOk && macdOk && stochOk;
   } else {
-    const rsiOk    = (rsi || 100) <= 62 && (rsi || 100) >= 38 && rsiFalling;    // RSI recovering down, MUST be falling
+    const rsiOk    = (rsi || 100) <= 55 && (rsi || 100) >= 22 && rsiFalling;    // aligned with Gate 3 bearMomentum range
     const macdOk   = macdHistDecreasing;
     const stochOk  = stochK !== null ? stochK > 35 && stochK < 85 : true;
     return nearLevel && rsiOk && macdOk && stochOk;
@@ -314,8 +316,8 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
   if (bearPB)       { bearScore += 16; bearConf.push("Bounce complete — level rejection + RSI turn"); }
   if (bullBO)       { bullScore += 16; bullConf.push(`Vol breakout ${(currentVolume/averageVolume).toFixed(1)}x | Price>avg ${roundPrice(analysis.averages.averagePrice)}`); }
   if (bearBO)       { bearScore += 16; bearConf.push(`Vol breakdown ${(currentVolume/averageVolume).toFixed(1)}x | Price<avg ${roundPrice(analysis.averages.averagePrice)}`); }
-  if (higherBias === "BULLISH") { bullScore += 15; bullConf.push(`4H bullish macro (ADX ${roundPrice(adx||0)})`); }
-  if (higherBias === "BEARISH") { bearScore += 15; bearConf.push(`4H bearish macro (ADX ${roundPrice(adx||0)})`); }
+  if (higherBias === "BULLISH") { bullScore += 10; bullConf.push(`4H bullish bias (ADX ${roundPrice(adx||0)})`); }
+  if (higherBias === "BEARISH") { bearScore += 10; bearConf.push(`4H bearish bias (ADX ${roundPrice(adx||0)})`); }
 
   // ── Divergence Bonuses (HIGH VALUE) ──────────────────────────────────────
   if (rsiDivBull && bullValid)  { bullScore += 14; bullConf.push("RSI bullish divergence ⚡"); }
@@ -426,15 +428,9 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
   else if (patBear.length && bearValid) { bearScore += 4;  bearConf.push(patBear.slice(0,2).join(", ")); }
 
   // ── HTF bonus ────────────────────────────────────────────────────────────
-  const { daily, twelveH, fourH, oneH } = htf;
-  if (fourH) {
-    const ok = fourH.trend.ema50 > fourH.trend.ema100 ? "BULLISH" : "BEARISH";
-    if (ok === higherBias) {
-      const str = (fourH.trend.adx || 0) >= 25 ? 9 : 6;
-      if (higherBias === "BULLISH") { bullScore += str; bullConf.push(`4H EMA bullish (ADX ${roundPrice(fourH.trend.adx)})`); }
-      else                          { bearScore += str; bearConf.push(`4H EMA bearish (ADX ${roundPrice(fourH.trend.adx)})`); }
-    }
-  }
+  // NOTE: 4H bias is already captured in higherBias score above.
+  // Only 12H, 1D, and 1H are added here as independent confirmations.
+  const { daily, twelveH, oneH } = htf;
   if (twelveH) {
     const ok = twelveH.trend.ema50 > twelveH.trend.ema100 ? "BULLISH" : "BEARISH";
     if (ok === higherBias) {
@@ -512,7 +508,7 @@ async function analyzeCoin(coin) {
   const analyses = {};
   await Promise.all(
     SCAN_TIMEFRAMES.map(async tf => {
-      const candles = await getKlines(coin, tf, 250);
+      const candles = await getKlines(coin, tf, 260);
       analyses[tf] = analyzeCandles(candles);
     })
   );
@@ -545,15 +541,15 @@ async function evaluateActiveSignals() {
     if (!Number.isFinite(price)) return sig;
     const hit = result => { const u = { ...sig, status: SIGNAL_STATUS.CLOSED, result, closePrice: roundPrice(price), closedAt: now, updatedAt: now }; closed.push(u); return u; };
     if (sig.side === "LONG") {
-      if (price >= sig.tp3)                     return hit("TP3_HIT");
-      if (price >= sig.tp2)                     return hit("TP2_HIT");
-      if (price >= sig.tp1)                     return hit("TP1_HIT");
-      if (price <= sig.stopLoss * (1 - 0.0005)) return hit("SL_HIT");
+      if (price >= sig.tp3)   return hit("TP3_HIT");
+      if (price >= sig.tp2)   return hit("TP2_HIT");
+      if (price >= sig.tp1)   return hit("TP1_HIT");
+      if (price <= sig.stopLoss) return hit("SL_HIT");
     } else {
-      if (price <= sig.tp3)                     return hit("TP3_HIT");
-      if (price <= sig.tp2)                     return hit("TP2_HIT");
-      if (price <= sig.tp1)                     return hit("TP1_HIT");
-      if (price >= sig.stopLoss * (1 + 0.0005)) return hit("SL_HIT");
+      if (price <= sig.tp3)   return hit("TP3_HIT");
+      if (price <= sig.tp2)   return hit("TP2_HIT");
+      if (price <= sig.tp1)   return hit("TP1_HIT");
+      if (price >= sig.stopLoss) return hit("SL_HIT");
     }
     return sig;
   }));
