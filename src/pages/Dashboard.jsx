@@ -60,7 +60,6 @@ function formatSubscriptionEndsAt(value) {
     day: "2-digit",
     month: "short",
     year: "numeric",
-    timeZone: "Asia/Kolkata",
   }).format(date);
 }
 
@@ -141,13 +140,16 @@ export default function Dashboard() {
         return;
       }
 
+    async function refreshLivePrices() {
+      if (!activeSignals.length) return;
+
+      // Build coins list from current active signals
+      const coinsParam = getSignalCoins(activeSignals).join(",");
+      if (!coinsParam) return;
+
       try {
-        const response = await apiFetch(`/signals/live-prices?coins=${signalCoinsKey}`);
-
-        if (!active) {
-          return;
-        }
-
+        const response = await apiFetch(`/signals/live-prices?coins=${coinsParam}`);
+        if (!active) return;
         setActiveSignals((current) => mergeSignalLivePrices(current, response.prices || []));
       } catch (error) {
         // Keep the board stable if a lightweight live-price refresh fails.
@@ -155,13 +157,13 @@ export default function Dashboard() {
     }
 
     refreshLivePrices();
-    const intervalId = window.setInterval(refreshLivePrices, 5000);
+    const intervalId = window.setInterval(refreshLivePrices, 3000);
 
     return () => {
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [signalCoinsKey]);
+  }, [activeSignals.length]);
 
   async function loadPublicDashboardData() {
     const results = await Promise.allSettled([
@@ -182,10 +184,7 @@ export default function Dashboard() {
     setHistorySignals(historyResponse.status === "fulfilled" ? historyResponse.value.signals || [] : []);
     setEngine(engineResponse.status === "fulfilled" ? engineResponse.value.engine : null);
 
-    // Ignore 403 access errors — user sees "no signals" empty state instead of error banner
-    const rejected = results.find(
-      (result) => result.status === "rejected" && !result.reason?.message?.toLowerCase().includes("plan")
-    );
+    const rejected = results.find((result) => result.status === "rejected");
     return rejected ? rejected.reason : null;
   }
 
@@ -292,18 +291,14 @@ export default function Dashboard() {
         await refreshDataWithFeedback("Scanner stopped");
       }
 
-      if (action === "reload") {
-        // Stop → Start = fresh engine restart. Clears any stuck scan state
-        // and immediately triggers a new scan so signals reload right away.
-        await apiFetch("/signals/engine/stop", { method: "POST" });
-        await apiFetch("/signals/engine/start", { method: "POST" });
-        await apiFetch("/signals/scan", { method: "POST" });
-        await refreshDataWithFeedback("Engine reloaded — fresh scan complete");
-      }
-
       if (action === "scan") {
         await apiFetch("/signals/scan", { method: "POST" });
         await refreshDataWithFeedback("Manual scan completed");
+      }
+
+      if (action === "seed") {
+        await apiFetch("/signals/demo/seed", { method: "POST" });
+        await refreshDataWithFeedback("Demo signals seeded");
       }
     } catch (actionError) {
       setError(actionError.message);
@@ -472,7 +467,7 @@ export default function Dashboard() {
           <span className="metric-label">Engine</span>
           <strong>{engine?.running ? "Running" : "Stopped"}</strong>
           <span className="metric-meta">
-            {engine?.lastScanAt ? `Last scan ${new Date(engine.lastScanAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false })} IST` : "No scan yet"}
+            {engine?.lastScanAt ? `Last scan ${new Date(engine.lastScanAt).toLocaleTimeString("en-IN")}` : "No scan yet"}
           </span>
         </article>
         <article className="metric-card">
@@ -524,16 +519,16 @@ export default function Dashboard() {
           {isAdmin ? (
             <div className="button-row">
               <button className="button button-primary" disabled={actionBusy === "start"} onClick={() => handleEngineAction("start")} type="button">
-                {actionBusy === "start" ? "Starting..." : "Start engine"}
+                Start engine
               </button>
               <button className="button button-ghost" disabled={actionBusy === "stop"} onClick={() => handleEngineAction("stop")} type="button">
-                {actionBusy === "stop" ? "Stopping..." : "Stop engine"}
-              </button>
-              <button className="button button-secondary" disabled={actionBusy === "reload"} onClick={() => handleEngineAction("reload")} type="button">
-                {actionBusy === "reload" ? "Reloading..." : "Reload engine"}
+                Stop engine
               </button>
               <button className="button button-secondary" disabled={actionBusy === "scan"} onClick={() => handleEngineAction("scan")} type="button">
-                {actionBusy === "scan" ? "Scanning..." : "Run scan now"}
+                Run scan now
+              </button>
+              <button className="button button-secondary" disabled={actionBusy === "seed"} onClick={() => handleEngineAction("seed")} type="button">
+                Seed demo signals
               </button>
             </div>
           ) : (
