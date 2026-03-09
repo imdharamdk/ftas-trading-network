@@ -910,3 +910,185 @@ textarea {
   flex: 1;
   min-height: 0;
 }
+
+/* ─── Mobile Responsive Fixes ─────────────────────────────────────── */
+
+/* Signal table — horizontal scroll on mobile */
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Hide less important columns on small screens */
+@media (max-width: 768px) {
+  /* Shell layout */
+  .shell {
+    padding: 8px;
+    gap: 8px;
+  }
+
+  /* Sidebar becomes top bar */
+  .sidebar {
+    position: static !important;
+    height: auto !important;
+    width: 100% !important;
+    padding: 10px 12px !important;
+    flex-direction: row !important;
+    flex-wrap: wrap;
+    gap: 8px;
+    overflow-x: auto;
+  }
+
+  .nav-link {
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    white-space: nowrap;
+  }
+
+  /* Page padding */
+  .page, .page-inner {
+    padding: 10px 8px;
+  }
+
+  /* Page header */
+  .page-header {
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+  }
+
+  .page-header h1 {
+    font-size: 1.4rem !important;
+  }
+
+  /* Stats grid — 2 columns on mobile */
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 8px;
+  }
+
+  .stat-card {
+    padding: 12px;
+  }
+
+  .stat-value {
+    font-size: 1.2rem;
+  }
+
+  /* Signal table font size */
+  .signal-table {
+    font-size: 0.72rem;
+    min-width: 900px; /* force scroll instead of breaking */
+  }
+
+  .signal-table th,
+  .signal-table td {
+    padding: 6px 8px !important;
+    white-space: nowrap;
+  }
+
+  /* Pill badges smaller */
+  .pill {
+    padding: 2px 6px;
+    font-size: 0.68rem;
+  }
+
+  /* Table card */
+  .table-card {
+    padding: 8px !important;
+    border-radius: 8px;
+  }
+
+  /* Filters row */
+  .filters-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .filter-group {
+    width: 100%;
+  }
+
+  /* Buttons */
+  .btn {
+    padding: 8px 12px;
+    font-size: 0.82rem;
+  }
+
+  /* Panel */
+  .panel {
+    padding: 14px !important;
+  }
+
+  /* TradingView modal — full screen on mobile */
+  .tv-modal-box {
+    width: 100vw !important;
+    height: 100vh !important;
+    border-radius: 0 !important;
+    max-width: 100vw !important;
+  }
+
+  .tv-modal-backdrop {
+    padding: 0 !important;
+  }
+
+  /* Auth page */
+  .auth-card-wide,
+  .auth-card-split {
+    padding: 20px 16px;
+    margin: 8px;
+  }
+
+  /* Section grids */
+  .section-grid,
+  .section-grid-analytics,
+  .spotlight-grid,
+  .news-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Form */
+  .form-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Distribution list */
+  .dist-list-item {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  /* Coin chart button text smaller */
+  .coin-chart-btn strong {
+    font-size: 0.75rem;
+  }
+}
+
+@media (max-width: 480px) {
+  /* Even smaller screens */
+  .stats-grid {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 6px;
+  }
+
+  .signal-table {
+    font-size: 0.68rem;
+  }
+
+  .sidebar {
+    padding: 8px !important;
+  }
+
+  .nav-link span {
+    display: none; /* hide text, show only icon if any */
+  }
+
+  /* Hero metrics single column */
+  .hero-metrics {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  .page-header h1 {
+    font-size: 1.2rem !important;
+  }
+}
