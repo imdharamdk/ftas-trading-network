@@ -436,6 +436,63 @@ export default function CandlestickChart({ coin, timeframe: initialTf = "15m", s
   };
   const handleMouseUp = () => { isDragging.current = false; };
 
+  // ─── Touch events (mobile swipe = pan, pinch = zoom) ───────────────────────
+  const touchStartX    = useRef(0);
+  const touchStartDist = useRef(0);
+  const touchStartZoom = useRef(1);
+
+  const handleTouchStart = (e) => {
+    if (e.touches.length === 1) {
+      isDragging.current = true;
+      dragStart.current  = e.touches[0].clientX;
+      dragOffset.current = offset;
+      touchStartX.current = e.touches[0].clientX;
+    } else if (e.touches.length === 2) {
+      // Pinch — record initial distance between two fingers
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      touchStartDist.current = Math.sqrt(dx * dx + dy * dy);
+      touchStartZoom.current = zoom;
+    }
+  };
+
+  const handleTouchMove = useCallback((e) => {
+    e.preventDefault(); // prevent page scroll while panning chart
+    const canvas = mainRef.current;
+    if (!canvas) return;
+
+    if (e.touches.length === 1 && isDragging.current) {
+      // Single finger pan
+      const PAD     = { left: 70, right: 10 };
+      const chartW  = canvas.width - PAD.left - PAD.right;
+      const visible = Math.max(20, Math.min(Math.floor(80 / zoom), candles.length));
+      const dx      = e.touches[0].clientX - dragStart.current;
+      const candleW = chartW / visible;
+      const newOff  = dragOffset.current + Math.round(dx / candleW);
+      setOffset(Math.max(0, Math.min(candles.length - visible, newOff)));
+
+      // Hover position for tooltip
+      const rect = canvas.getBoundingClientRect();
+      const x    = e.touches[0].clientX - rect.left;
+      const i    = Math.floor((x - PAD.left) / (chartW / visible));
+      setHover(i >= 0 && i < visible ? i : null);
+
+    } else if (e.touches.length === 2) {
+      // Pinch zoom
+      const dx   = e.touches[0].clientX - e.touches[1].clientX;
+      const dy   = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const ratio = dist / (touchStartDist.current || 1);
+      const newZoom = Math.max(0.3, Math.min(3, touchStartZoom.current * ratio));
+      setZoom(newZoom);
+    }
+  }, [candles.length, zoom, offset]);
+
+  const handleTouchEnd = () => {
+    isDragging.current = false;
+    setHover(null);
+  };
+
   const handleWheel = (e) => {
     e.preventDefault();
     setZoom(z => Math.max(0.3, Math.min(3, z + (e.deltaY < 0 ? 0.1 : -0.1))));
@@ -508,14 +565,17 @@ export default function CandlestickChart({ coin, timeframe: initialTf = "15m", s
             <>
               <canvas
                 ref={mainRef}
-                width={900} height={420}
+                width={900} height={380}
                 className="chart-canvas"
-                style={{ cursor: isDragging.current ? "grabbing" : "crosshair" }}
+                style={{ cursor: isDragging.current ? "grabbing" : "crosshair", touchAction: "none" }}
                 onMouseMove={handleMouseMove}
                 onMouseDown={handleMouseDown}
                 onMouseUp={handleMouseUp}
                 onMouseLeave={() => { setHover(null); isDragging.current = false; }}
                 onWheel={handleWheel}
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
               />
               <canvas ref={volRef} width={900} height={60} className="chart-canvas chart-vol" />
               <canvas ref={rsiRef} width={900} height={70} className="chart-canvas chart-rsi" />
