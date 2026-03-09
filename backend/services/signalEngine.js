@@ -13,6 +13,7 @@ const FALLBACK_COINS = [
 
 const SCAN_TIMEFRAMES          = ["5m","15m","1h","4h","12h","1d"];
 const DEFAULT_TRADE_TIMEFRAMES = ["5m","15m"];
+const MAX_COINS_PER_SCAN       = 50; // scan top 50 coins only to avoid rate limits
 
 const SIGNAL_EXPIRY_MS = {
   "5m":  60  * 60 * 1000,
@@ -516,19 +517,28 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
 // ─── Coin Scan ────────────────────────────────────────────────────────────────
 async function analyzeCoin(coin) {
   const analyses = {};
-  await Promise.all(
-    SCAN_TIMEFRAMES.map(async tf => {
-      const candles = await getKlines(coin, tf, 260);
-      analyses[tf] = analyzeCandles(candles);
-    })
-  );
+
+  // Sequential (not parallel) to avoid rate limiting Bybit
+  for (const tf of SCAN_TIMEFRAMES) {
+    const candles = await getKlines(coin, tf, 260);
+    analyses[tf]  = analyzeCandles(candles);
+    await new Promise(r => setTimeout(r, 80)); // 80ms gap between requests
+  }
+
   const higherBias = getHigherTimeframeBias(analyses);
-  const htf = { daily: analyses["1d"]||null, twelveH: analyses["12h"]||null, fourH: analyses["4h"]||null, oneH: analyses["1h"]||null };
+  const htf = {
+    daily:  analyses["1d"]  || null,
+    twelveH: analyses["12h"] || null,
+    fourH:  analyses["4h"]  || null,
+    oneH:   analyses["1h"]  || null,
+  };
+
   const candidates = getTradeTimeframes()
     .map(tf => analyses[tf] ? buildCandidate(coin, tf, analyses[tf], higherBias, htf) : null)
     .filter(Boolean);
+
   if (!candidates.length) return null;
-  return candidates.sort((a,b) => b.confidence - a.confidence)[0];
+  return candidates.sort((a, b) => b.confidence - a.confidence)[0];
 }
 
 // ─── Signal Evaluation ───────────────────────────────────────────────────────
@@ -615,15 +625,19 @@ async function scanNow({ source = "ENGINE" } = {}) {
   const generatedSignals = [], errors = [];
   try {
     const closedSignals = await evaluateActiveSignals();
-    const coins = await getCoinList();
+    const allCoins = await getCoinList();
+    const coins    = allCoins.slice(0, MAX_COINS_PER_SCAN); // top 50 only
     for (const coin of coins) {
       try {
         const candidate = await analyzeCoin(coin);
         if (!candidate) continue;
-        candidate.source = source; candidate.updatedAt = new Date().toISOString();
+        candidate.source = source;
+        candidate.updatedAt = new Date().toISOString();
         if (await signalExists(candidate)) continue;
         generatedSignals.push(await persistSignal(candidate));
       } catch (e) { errors.push({ coin, message: e.message }); }
+      await new Promise(r => setTimeout(r, 200)); // 200ms between coins
+    }
     }
     engineState.lastGenerated = generatedSignals.length;
     engineState.lastScanAt    = new Date().toISOString();
