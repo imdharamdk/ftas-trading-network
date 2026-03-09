@@ -64,17 +64,27 @@ function getHigherTimeframeBias(analyses) {
   const a4h  = analyses["4h"];
   const a12h = analyses["12h"];
   const a1d  = analyses["1d"];
-  if (!a4h) return "NEUTRAL";
+  const a1h  = analyses["1h"];
 
-  const fourHBull = a4h.trend.ema50 > a4h.trend.ema100 && a4h.trend.ema100 > a4h.trend.ema200 && (a4h.trend.adx || 0) >= 15 && (a4h.momentum.rsi || 0) >= 40;
-  const fourHBear = a4h.trend.ema50 < a4h.trend.ema100 && a4h.trend.ema100 < a4h.trend.ema200 && (a4h.trend.adx || 0) >= 15 && (a4h.momentum.rsi || 100) <= 60;
+  // Use 4H as primary, fall back to 1H if 4H analysis failed
+  const primary = a4h || a1h;
+  if (!primary) return "NEUTRAL";
+
+  const ema50  = primary.trend.ema50;
+  const ema100 = primary.trend.ema100;
+  const ema200 = primary.trend.ema200;
+  const adx    = primary.trend.adx || 0;
+  const rsi    = primary.momentum.rsi || 50;
+
+  const fourHBull = ema50 > ema100 && ema100 > ema200 && adx >= 15 && rsi >= 40;
+  const fourHBear = ema50 < ema100 && ema100 < ema200 && adx >= 15 && rsi <= 60;
 
   if (!fourHBull && !fourHBear) return "NEUTRAL";
 
-  // Regime check: if 4H is in RANGING regime and no strong ADX, skip
-  if (a4h.regime === "RANGING" && (a4h.trend.adx || 0) < 20) return "NEUTRAL";
+  // Regime check
+  if (primary.regime === "RANGING" && adx < 20) return "NEUTRAL";
 
-  // 1D veto: daily strongly opposing blocks the trade
+  // 1D veto
   if (a1d) {
     const dStrongBull = a1d.trend.ema50 > a1d.trend.ema100 && (a1d.trend.adx || 0) >= 20;
     const dStrongBear = a1d.trend.ema50 < a1d.trend.ema100 && (a1d.trend.adx || 0) >= 20;
