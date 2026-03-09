@@ -168,34 +168,41 @@ async function getKlines(symbol, interval, limit = 250) {
       return [];
     }
 
-    // Bybit returns newest first — we need to paginate for 250 candles
-    // Bybit max per request = 200; fetch enough pages
-    const perPage  = 200;
-    const pages    = Math.ceil((limit + 1) / perPage);
-    let   allKlines = [];
+    // Bybit returns newest-first, max 200 per request
+    // We fetch in pages going backwards in time using 'end' param
+    const perPage   = 200;
+    const needed    = limit + 1; // +1 to drop open candle later
+    let   allKlines = []; // will be newest-first while collecting
 
-    for (let i = 0; i < pages; i++) {
-      const res = await bybitClient.get("/v5/market/kline", {
-        params: {
-          category: "linear",
-          symbol,
-          interval: bybitInterval,
-          limit:    Math.min(perPage, limit + 1 - allKlines.length),
-          ...(allKlines.length > 0 && { end: allKlines[allKlines.length - 1].openTime - 1 }),
-        },
+    // Page 1: latest candles
+    const res1 = await bybitClient.get("/v5/market/kline", {
+      params: { category: "linear", symbol, interval: bybitInterval, limit: Math.min(perPage, needed) },
+    });
+    const list1 = res1.data?.result?.list;
+    if (!Array.isArray(list1) || list1.length === 0) return [];
+    allKlines.push(...list1); // newest first
+
+    // Page 2+ if we still need more
+    while (allKlines.length < needed) {
+      const oldest  = allKlines[allKlines.length - 1]; // oldest so far (last in newest-first array)
+      const endTime = Number(oldest[0]) - 1;           // go back 1ms before oldest
+      const stillNeed = Math.min(perPage, needed - allKlines.length);
+
+      const resN = await bybitClient.get("/v5/market/kline", {
+        params: { category: "linear", symbol, interval: bybitInterval, limit: stillNeed, end: endTime },
       });
-
-      const list = res.data?.result?.list;
-      if (!Array.isArray(list) || list.length === 0) break;
-      allKlines.push(...list.map(normalizeBybitKline));
-      if (list.length < perPage) break;
+      const listN = resN.data?.result?.list;
+      if (!Array.isArray(listN) || listN.length === 0) break;
+      allKlines.push(...listN);
+      if (listN.length < stillNeed) break;
     }
 
     if (allKlines.length === 0) return [];
 
-    // Bybit returns newest first — reverse to oldest-first, drop last (open candle)
+    // Reverse to oldest-first, normalize, drop last open candle
     allKlines.reverse();
-    return allKlines.slice(0, -1); // drop last open candle
+    const normalized = allKlines.map(normalizeBybitKline);
+    return normalized.slice(0, -1);
 
   } catch (err) {
     console.error(`[dataService] Bybit getKlines(${symbol}, ${interval}) failed:`, err.message);
