@@ -638,7 +638,6 @@ async function scanNow({ source = "ENGINE" } = {}) {
       } catch (e) { errors.push({ coin, message: e.message }); }
       await new Promise(r => setTimeout(r, 200)); // 200ms between coins
     }
-    }
     engineState.lastGenerated = generatedSignals.length;
     engineState.lastScanAt    = new Date().toISOString();
     engineState.lastError     = errors.length ? `${errors.length} coin scans failed` : null;
