@@ -1,5 +1,6 @@
 const express = require("express");
-const { getAllTickerStats } = require("../services/binanceService");
+const { getAllTickerStats, getKlines } = require("../services/binanceService");
+const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -14,6 +15,20 @@ function normalizeTicker(ticker) {
     quoteVolume: Number(ticker.quoteVolume || 0),
   };
 }
+
+// ─── Klines endpoint for frontend chart ───────────────────────────────────────
+router.get("/klines", requireAuth, async (req, res) => {
+  try {
+    const symbol   = String(req.query.symbol || "BTCUSDT").toUpperCase();
+    const interval = String(req.query.interval || "15m");
+    const limit    = Math.min(Number(req.query.limit || 200), 500);
+
+    const candles = await getKlines(symbol, interval, limit);
+    return res.json({ symbol, interval, candles });
+  } catch (error) {
+    return res.status(500).json({ message: error.message, candles: [] });
+  }
+});
 
 router.get("/tickers", async (req, res) => {
   try {
