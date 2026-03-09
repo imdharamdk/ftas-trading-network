@@ -104,7 +104,7 @@ function ExpiryCell({ createdAt, status, timeframe }) {
 function LeverageBadge({ leverage }) {
   const lev = Number(leverage);
   if (!Number.isFinite(lev) || lev <= 0) return <span style={{ opacity: 0.4 }}>—</span>;
-  const cls = lev >= 15 ? "pill-danger" : lev >= 10 ? "pill-warning" : "pill-success";
+  const cls = lev >= 40 ? "pill-danger" : lev >= 25 ? "pill-warning" : "pill-success";
   return (
     <span className={`pill ${cls}`} title={`Suggested leverage: ${lev}×`}>
       {lev}×
