@@ -41,7 +41,6 @@
   color: #888;
 }
 
-
 /*
   App.css — Intentionally cleared.
 
@@ -64,5 +63,7 @@
     - text-align: center was center-aligning all text globally
 
   All FTAS styles are defined in src/index.css.
+  Do NOT add layout or global styles back to this file.
+*/
   Do NOT add layout or global styles back to this file.
 */
