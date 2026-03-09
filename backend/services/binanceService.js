@@ -398,6 +398,9 @@ async function getAllTickerStats() {
       quoteVolume:        t.turnover24h,
       highPrice:          t.highPrice24h,
       lowPrice:           t.lowPrice24h,
+      count:              t.tradeCount24h || t.tradeCount || 0,
+      openInterest:       t.openInterest || 0,
+      openInterestValue:  t.openInterestValue || 0,
     }));
   } catch (err) {
     console.error("[dataService] getAllTickerStats Bybit failed:", err.message);

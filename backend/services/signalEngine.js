@@ -1,6 +1,6 @@
 const { SIGNAL_STATUS, createSignal } = require("../models/Signal");
 const { readCollection, mutateCollection } = require("../storage/fileStore");
-const { getKlines, getPrices, getAllFuturesCoins } = require("./binanceService");
+const { getKlines, getPrices, getAllFuturesCoins, getAllTickerStats } = require("./binanceService");
 const { analyzeCandles } = require("./indicatorEngine");
 
 // Fallback list if Binance exchangeInfo API fails
@@ -14,6 +14,10 @@ const FALLBACK_COINS = [
 const SCAN_TIMEFRAMES          = ["5m","15m","1h","4h","12h","1d"];
 const DEFAULT_TRADE_TIMEFRAMES = ["5m","15m"];
 const DEFAULT_MAX_COINS_PER_SCAN = 50;
+const MAX_COINS_PER_SCAN_CAP = 80;
+const MIN_SCAN_QUOTE_VOLUME_USDT = 12_000_000;
+const MIN_SCAN_TRADE_COUNT_24H = 15_000;
+const MIN_SCAN_OPEN_INTEREST_USDT = 5_000_000;
 
 const SIGNAL_EXPIRY_MS = {
   "5m":  60  * 60 * 1000,
@@ -38,22 +42,100 @@ function roundPrice(v) {
   return Number(v.toFixed(6));
 }
 function clamp(v, mn, mx) { return Math.min(Math.max(v, mn), mx); }
+function toNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+function formatCompact(value) {
+  const numeric = toNumber(value);
+  if (!numeric) return "0";
+  if (numeric >= 1_000_000_000) return `${(numeric / 1_000_000_000).toFixed(1)}B`;
+  if (numeric >= 1_000_000)     return `${(numeric / 1_000_000).toFixed(1)}M`;
+  if (numeric >= 1_000)         return `${(numeric / 1_000).toFixed(1)}K`;
+  return numeric.toFixed(0);
+}
+function buildFallbackMarketActivity(symbol) {
+  return {
+    symbol,
+    quoteVolume: 0,
+    volume: 0,
+    tradeCount: 0,
+    openInterestValue: 0,
+    activityScore: 0,
+    isLiquid: false,
+    isCrowded: false,
+    passesFloor: true,
+    relaxThresholds: false,
+  };
+}
+function buildMarketActivitySnapshot(ticker = {}) {
+  const symbol = String(ticker.symbol || "").toUpperCase();
+  const quoteVolume = toNumber(ticker.quoteVolume);
+  const volume = toNumber(ticker.volume);
+  const tradeCount = toNumber(ticker.count || ticker.tradeCount);
+  const openInterestValue = toNumber(ticker.openInterestValue);
+  const hasParticipationMetric = tradeCount > 0 || openInterestValue > 0;
+  const liquidityScore = Math.log10(quoteVolume + 1) * 16 + Math.log10(volume + 1) * 4;
+  const participationScore = Math.log10(tradeCount + 1) * 8 + Math.log10(openInterestValue + 1) * 10;
+  const isLiquid = quoteVolume >= 35_000_000 || openInterestValue >= 8_000_000;
+  const isCrowded = tradeCount >= 25_000 || openInterestValue >= 12_000_000;
+  const passesFloor =
+    symbol.endsWith("USDT") &&
+    quoteVolume >= MIN_SCAN_QUOTE_VOLUME_USDT &&
+    (!hasParticipationMetric || tradeCount >= MIN_SCAN_TRADE_COUNT_24H || openInterestValue >= MIN_SCAN_OPEN_INTEREST_USDT);
+
+  return {
+    symbol,
+    quoteVolume,
+    volume,
+    tradeCount,
+    openInterestValue,
+    activityScore: liquidityScore + participationScore,
+    isLiquid,
+    isCrowded,
+    passesFloor,
+    relaxThresholds: isLiquid && (isCrowded || quoteVolume >= 75_000_000),
+  };
+}
 function getMaxCoinsPerScan() {
-  return clamp(Number(process.env.SCAN_MAX_COINS || DEFAULT_MAX_COINS_PER_SCAN), 5, DEFAULT_MAX_COINS_PER_SCAN);
+  return clamp(Number(process.env.SCAN_MAX_COINS || DEFAULT_MAX_COINS_PER_SCAN), 5, MAX_COINS_PER_SCAN_CAP);
 }
 // Dynamic coin list — fetches ALL active USDT perpetual pairs from Binance.
 // Falls back to env override (SCAN_COINS) or hardcoded list if API fails.
-async function getCoinList() {
+async function getScanUniverse() {
   const envOverride = String(process.env.SCAN_COINS || "")
     .split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
-  if (envOverride.length) return envOverride;
+  if (envOverride.length) return envOverride.map(buildFallbackMarketActivity);
+
+  try {
+    const ranked = (await getAllTickerStats())
+      .map(buildMarketActivitySnapshot)
+      .filter((market) => market.symbol.endsWith("USDT"))
+      .sort((left, right) =>
+        right.activityScore - left.activityScore ||
+        right.quoteVolume - left.quoteVolume ||
+        right.tradeCount - left.tradeCount ||
+        left.symbol.localeCompare(right.symbol)
+      );
+
+    const filtered = ranked.filter((market) => market.passesFloor);
+    if (filtered.length) return filtered;
+    if (ranked.length) return ranked;
+  } catch {
+    // Fall back to symbol-only coin discovery below.
+  }
 
   try {
     const allCoins = await getAllFuturesCoins();
-    return allCoins.length ? allCoins : FALLBACK_COINS;
+    const coins = allCoins.length ? allCoins : FALLBACK_COINS;
+    return coins.map(buildFallbackMarketActivity);
   } catch {
-    return FALLBACK_COINS;
+    return FALLBACK_COINS.map(buildFallbackMarketActivity);
   }
+}
+async function getCoinList() {
+  const scanUniverse = await getScanUniverse();
+  return scanUniverse.map((market) => market.symbol);
 }
 function getTradeTimeframes() {
   const raw = String(process.env.TRADE_TIMEFRAMES || "").split(",").map(s => s.trim()).filter(Boolean);
@@ -225,10 +307,11 @@ function isVolumeBreakout(side, analysis) {
 //
 //  7. S/R LEVEL PROXIMITY — bonus when price is near detected S/R level
 //
-function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
+function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketActivity = null) {
   const bullConf = [], bearConf = [];
   let bullScore = 0, bearScore = 0;
 
+  const activeMarket = marketActivity || buildFallbackMarketActivity(coin);
   const price = analysis.currentPrice;
   const {
     ema9, ema21, ema50, ema100, ema200,
@@ -254,6 +337,7 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
   const stochK = stochRsi?.k ?? null;
   const kdK    = stochKD?.k  ?? null;
   const kdD    = stochKD?.d  ?? null;
+  const { daily, twelveH, oneH } = htf;
   const psarBull = Number.isFinite(psar) ? psar < price : true;
   const psarBear = Number.isFinite(psar) ? psar > price : true;
 
@@ -303,6 +387,35 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
   const bearBO = isVolumeBreakout("SHORT",   analysis);
   const bullEntry = bullPB || bullBO;
   const bearEntry = bearPB || bearBO;
+  const oneHDirection = oneH?.trend?.direction || "NEUTRAL";
+  const oneHAdx = oneH?.trend?.adx || 0;
+  const oneHRsi = oneH?.momentum?.rsi || 50;
+  const allowIntradayBull =
+    higherBias === "NEUTRAL" &&
+    activeMarket.relaxThresholds &&
+    ["5m","15m"].includes(timeframe) &&
+    oneHDirection === "BULLISH" &&
+    oneHAdx >= 16 &&
+    oneHRsi >= 48 &&
+    (bullBO || volumeStrong || volumeTrending);
+  const allowIntradayBear =
+    higherBias === "NEUTRAL" &&
+    activeMarket.relaxThresholds &&
+    ["5m","15m"].includes(timeframe) &&
+    oneHDirection === "BEARISH" &&
+    oneHAdx >= 16 &&
+    oneHRsi <= 52 &&
+    (bearBO || volumeStrong || volumeTrending);
+  const bullBiasAligned = higherBias === "BULLISH" || allowIntradayBull;
+  const bearBiasAligned = higherBias === "BEARISH" || allowIntradayBear;
+  const effectiveBias =
+    higherBias !== "NEUTRAL"
+      ? higherBias
+      : allowIntradayBull
+        ? "BULLISH"
+        : allowIntradayBear
+          ? "BEARISH"
+          : "NEUTRAL";
 
   // ── Divergence override — can allow entry even without slope gate ─────────
   // Classic divergence is so high probability it overrides the slope gate
@@ -310,10 +423,10 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
   const bearDivOverride = (rsiDivBear || macdDivBear) && bearTrend && bearMomentum && bearEntry;
 
   const bullValid =
-    higherBias === "BULLISH" && bullTrend && bullMomentum && bullEntry &&
+    bullBiasAligned && bullTrend && bullMomentum && bullEntry &&
     (bullSlope || bullDivOverride);
   const bearValid =
-    higherBias === "BEARISH" && bearTrend && bearMomentum && bearEntry &&
+    bearBiasAligned && bearTrend && bearMomentum && bearEntry &&
     (bearSlope || bearDivOverride);
 
   if (!bullValid && !bearValid) return null;
@@ -331,6 +444,8 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
   if (bearBO)       { bearScore += 16; bearConf.push(`Vol breakdown ${(currentVolume/averageVolume).toFixed(1)}x | Price<avg ${roundPrice(analysis.averages.averagePrice)}`); }
   if (higherBias === "BULLISH") { bullScore += 10; bullConf.push(`4H bullish bias (ADX ${roundPrice(adx||0)})`); }
   if (higherBias === "BEARISH") { bearScore += 10; bearConf.push(`4H bearish bias (ADX ${roundPrice(adx||0)})`); }
+  if (allowIntradayBull) { bullScore += 8; bullConf.push("1H intraday bias on crowded market"); }
+  if (allowIntradayBear) { bearScore += 8; bearConf.push("1H intraday bias on crowded market"); }
 
   // ── Divergence Bonuses (HIGH VALUE) ──────────────────────────────────────
   if (rsiDivBull && bullValid)  { bullScore += 14; bullConf.push("RSI bullish divergence ⚡"); }
@@ -417,6 +532,22 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
   if (volumeStrong  && bearValid) { bearScore += 5; bearConf.push("Volume surge 2x+"); }
   if (volumeTrending && bullValid) { bullScore += 3; bullConf.push("Volume increasing"); }
   if (volumeTrending && bearValid) { bearScore += 3; bearConf.push("Volume increasing"); }
+  if (activeMarket.isLiquid && bullValid) { bullScore += 4; bullConf.push(`24h quote vol ${formatCompact(activeMarket.quoteVolume)} USDT`); }
+  if (activeMarket.isLiquid && bearValid) { bearScore += 4; bearConf.push(`24h quote vol ${formatCompact(activeMarket.quoteVolume)} USDT`); }
+  if (activeMarket.isCrowded && bullValid) {
+    const participation = activeMarket.tradeCount > 0
+      ? `${formatCompact(activeMarket.tradeCount)} trades/24h`
+      : `OI ${formatCompact(activeMarket.openInterestValue)} USDT`;
+    bullScore += 4;
+    bullConf.push(`Crowded market ${participation}`);
+  }
+  if (activeMarket.isCrowded && bearValid) {
+    const participation = activeMarket.tradeCount > 0
+      ? `${formatCompact(activeMarket.tradeCount)} trades/24h`
+      : `OI ${formatCompact(activeMarket.openInterestValue)} USDT`;
+    bearScore += 4;
+    bearConf.push(`Crowded market ${participation}`);
+  }
   if (mfi !== null && mfi >= 50 && mfi <= 72 && bullValid) { bullScore += 3; bullConf.push(`MFI ${roundPrice(mfi)}`); }
   if (mfi !== null && mfi <= 50 && mfi >= 28 && bearValid) { bearScore += 3; bearConf.push(`MFI ${roundPrice(mfi)}`); }
   if (forceIndex > 0 && bullValid) bullScore += 2;
@@ -443,29 +574,28 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
   // ── HTF bonus ────────────────────────────────────────────────────────────
   // NOTE: 4H bias is already captured in higherBias score above.
   // Only 12H, 1D, and 1H are added here as independent confirmations.
-  const { daily, twelveH, oneH } = htf;
   if (twelveH) {
     const ok = twelveH.trend.ema50 > twelveH.trend.ema100 ? "BULLISH" : "BEARISH";
-    if (ok === higherBias) {
-      if (higherBias === "BULLISH") { bullScore += 6; bullConf.push("12H trend aligned"); }
-      else                          { bearScore += 6; bearConf.push("12H trend aligned"); }
+    if (ok === effectiveBias) {
+      if (effectiveBias === "BULLISH") { bullScore += 6; bullConf.push("12H trend aligned"); }
+      else                             { bearScore += 6; bearConf.push("12H trend aligned"); }
     }
   }
   if (daily) {
     const ok = daily.trend.ema50 > daily.trend.ema100 ? "BULLISH" : "BEARISH";
-    if (ok === higherBias) {
-      if (higherBias === "BULLISH") { bullScore += 8; bullConf.push("Daily macro aligned"); }
-      else                          { bearScore += 8; bearConf.push("Daily macro aligned"); }
-    } else {
-      if (higherBias === "BULLISH") bullScore -= 5;
-      else                          bearScore -= 5;
+    if (ok === effectiveBias) {
+      if (effectiveBias === "BULLISH") { bullScore += 8; bullConf.push("Daily macro aligned"); }
+      else                             { bearScore += 8; bearConf.push("Daily macro aligned"); }
+    } else if (effectiveBias !== "NEUTRAL") {
+      if (effectiveBias === "BULLISH") bullScore -= 5;
+      else                             bearScore -= 5;
     }
   }
   if (oneH) {
     const oh1 = oneH.trend.ema50 > oneH.trend.ema100 ? "BULLISH" : "BEARISH";
-    if (oh1 === higherBias) {
-      if (higherBias === "BULLISH") { bullScore += 5; bullConf.push("1H confirming"); }
-      else                          { bearScore += 5; bearConf.push("1H confirming"); }
+    if (oh1 === effectiveBias) {
+      if (effectiveBias === "BULLISH") { bullScore += 5; bullConf.push("1H confirming"); }
+      else                             { bearScore += 5; bearConf.push("1H confirming"); }
     }
   }
 
@@ -478,8 +608,8 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
   if ((rsi9||0) < 48 && bearValid) bearScore += 2;
 
   // ── Final ────────────────────────────────────────────────────────────────
-  const MIN_SCORE = 55;
-  const MIN_CONF  = 4;
+  const MIN_SCORE = activeMarket.relaxThresholds ? 51 : 55;
+  const MIN_CONF  = activeMarket.relaxThresholds ? 3 : 4;
 
   const side        = bullValid && !bearValid ? "LONG" : !bullValid && bearValid ? "SHORT" : bullScore >= bearScore ? "LONG" : "SHORT";
   const confidence  = side === "LONG" ? bullScore : bearScore;
@@ -505,19 +635,34 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
       macd: { histogram: roundPrice(macd?.histogram||0), macd: roundPrice(macd?.MACD||0), signal: roundPrice(macd?.signal||0) },
       atr: roundPrice(rawAtr||0), bbPctB: roundPrice(bbPctB||0),
       bollinger: { upper: roundPrice(bollinger?.upper||0), middle: roundPrice(bollinger?.middle||0), lower: roundPrice(bollinger?.lower||0) },
-      regime, volumeSpike, volumeStrong, higherBias, leverage,
+      regime, volumeSpike, volumeStrong, higherBias, effectiveBias, leverage,
       rsiDivBull, rsiDivBear, macdDivBull, macdDivBear,
       riskPerUnit: roundPrice(targets.riskPerUnit),
+      marketActivity: {
+        quoteVolume: roundPrice(activeMarket.quoteVolume),
+        tradeCount: roundPrice(activeMarket.tradeCount),
+        openInterestValue: roundPrice(activeMarket.openInterestValue),
+        activityScore: roundPrice(activeMarket.activityScore),
+      },
     },
     patternSummary: analysis.patterns,
-    scanMeta: { higherBias, modelVersion: "v9_smart", sourceTimeframes: SCAN_TIMEFRAMES },
+    scanMeta: {
+      higherBias,
+      effectiveBias,
+      marketActivityScore: roundPrice(activeMarket.activityScore),
+      marketQuoteVolume: roundPrice(activeMarket.quoteVolume),
+      marketTradeCount: roundPrice(activeMarket.tradeCount),
+      marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
+      modelVersion: "v10_liquidity",
+      sourceTimeframes: SCAN_TIMEFRAMES,
+    },
     source: "ENGINE",
     ...targets,
   });
 }
 
 // ─── Coin Scan ────────────────────────────────────────────────────────────────
-async function analyzeCoin(coin) {
+async function analyzeCoin(coin, marketActivity = null) {
   const analyses = {};
 
   // Sequential (not parallel) to avoid rate limiting Bybit
@@ -536,7 +681,7 @@ async function analyzeCoin(coin) {
   };
 
   const candidates = getTradeTimeframes()
-    .map(tf => analyses[tf] ? buildCandidate(coin, tf, analyses[tf], higherBias, htf) : null)
+    .map(tf => analyses[tf] ? buildCandidate(coin, tf, analyses[tf], higherBias, htf, marketActivity) : null)
     .filter(Boolean);
 
   if (!candidates.length) return null;
@@ -634,17 +779,17 @@ async function scanNow({ source = "ENGINE" } = {}) {
   const generatedSignals = [], errors = [];
   try {
     const closedSignals = await evaluateActiveSignals();
-    const allCoins = await getCoinList();
-    const coins    = allCoins.slice(0, getMaxCoinsPerScan());
-    for (const coin of coins) {
+    const scanUniverse = await getScanUniverse();
+    const coins = scanUniverse.slice(0, getMaxCoinsPerScan());
+    for (const market of coins) {
       try {
-        const candidate = await analyzeCoin(coin);
+        const candidate = await analyzeCoin(market.symbol, market);
         if (!candidate) continue;
         candidate.source = source;
         candidate.updatedAt = new Date().toISOString();
         if (await signalExists(candidate)) continue;
         generatedSignals.push(await persistSignal(candidate));
-      } catch (e) { errors.push({ coin, message: e.message }); }
+      } catch (e) { errors.push({ coin: market.symbol, message: e.message }); }
       await new Promise(r => setTimeout(r, 200)); // 200ms between coins
     }
     engineState.lastGenerated = generatedSignals.length;
