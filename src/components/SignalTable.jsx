@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import TradingViewModal from "./TradingViewModal";
+import CandlestickChart from "./CandlestickChart";
 
 // ─── Expiry map (must match signalEngine.js SIGNAL_EXPIRY_MS) ─────────────────
 const EXPIRY_MS = {
@@ -244,9 +244,10 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
 
       {/* Chart modal — opens on coin click */}
       {chartCoin && (
-        <TradingViewModal
+        <CandlestickChart
           coin={chartCoin}
           timeframe={chartTf}
+          signal={signals.find(s => s.coin === chartCoin && s.timeframe === chartTf) || null}
           onClose={() => setChartCoin(null)}
         />
       )}
