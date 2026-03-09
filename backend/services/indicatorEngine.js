@@ -295,7 +295,7 @@ function detectPatterns(candles) {
 
 // ─── Main Analysis ────────────────────────────────────────────────────────────
 function analyzeCandles(candles) {
-  if (!Array.isArray(candles) || candles.length < 220) return null;
+  if (!Array.isArray(candles) || candles.length < 100) return null;
 
   const opens   = candles.map(c => c.open);
   const highs   = candles.map(c => c.high);
