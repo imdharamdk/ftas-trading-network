@@ -77,18 +77,18 @@ function getHigherTimeframeBias(analyses) {
   const adx    = primary.trend.adx || 0;
   const rsi    = primary.momentum.rsi || 50;
 
-  const fourHBull = ema50 > ema100 && ema100 > ema200 && adx >= 15 && rsi >= 40;
-  const fourHBear = ema50 < ema100 && ema100 < ema200 && adx >= 15 && rsi <= 60;
+  const fourHBull = ema50 > ema100 && ema100 > ema200 && adx >= 10 && rsi >= 38;
+  const fourHBear = ema50 < ema100 && ema100 < ema200 && adx >= 10 && rsi <= 62;
 
   if (!fourHBull && !fourHBear) return "NEUTRAL";
 
   // Regime check
-  if (primary.regime === "RANGING" && adx < 20) return "NEUTRAL";
+  if (primary.regime === "RANGING" && adx < 16) return "NEUTRAL";
 
   // 1D veto
   if (a1d) {
-    const dStrongBull = a1d.trend.ema50 > a1d.trend.ema100 && (a1d.trend.adx || 0) >= 20;
-    const dStrongBear = a1d.trend.ema50 < a1d.trend.ema100 && (a1d.trend.adx || 0) >= 20;
+    const dStrongBull = a1d.trend.ema50 > a1d.trend.ema100 && (a1d.trend.adx || 0) >= 22;
+    const dStrongBear = a1d.trend.ema50 < a1d.trend.ema100 && (a1d.trend.adx || 0) >= 22;
     if (fourHBull && dStrongBear) return "NEUTRAL";
     if (fourHBear && dStrongBull) return "NEUTRAL";
   }
@@ -172,12 +172,12 @@ function isPullbackComplete(side, analysis) {
   const nearLevel = atSupport || nearSR;
 
   if (side === "LONG") {
-    const rsiOk    = (rsi || 0) >= 45 && (rsi || 0) <= 78 && rsiRising;         // aligned with Gate 3 bullMomentum range
+    const rsiOk    = (rsi || 0) >= 40 && (rsi || 0) <= 82 && (rsiRising || (rsi || 0) > 50); // aligned with Gate 3
     const macdOk   = macdHistIncreasing;                                          // MACD turning up
     const stochOk  = stochK !== null ? stochK < 65 && stochK > 15 : true;
     return nearLevel && rsiOk && macdOk && stochOk;
   } else {
-    const rsiOk    = (rsi || 100) <= 55 && (rsi || 100) >= 22 && rsiFalling;    // aligned with Gate 3 bearMomentum range
+    const rsiOk    = (rsi || 100) <= 60 && (rsi || 100) >= 18 && (rsiFalling || (rsi || 100) < 50); // aligned with Gate 3
     const macdOk   = macdHistDecreasing;
     const stochOk  = stochK !== null ? stochK > 35 && stochK < 85 : true;
     return nearLevel && rsiOk && macdOk && stochOk;
@@ -276,23 +276,23 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
   }
 
   // ── GATE 1: EMA Stack ────────────────────────────────────────────────────
-  const bullTrend = ema50 > ema100 && ema100 > ema200 && price > ema50;
-  const bearTrend = ema50 < ema100 && ema100 < ema200 && price < ema50;
+  const bullTrend = ema50 > ema100 && ema100 > ema200 && (price > ema21 || price > ema50);
+  const bearTrend = ema50 < ema100 && ema100 < ema200 && (price < ema21 || price < ema50);
 
   // ── GATE 2: EMA Slope — EMAs must be moving in trade direction ────────────
   // Prevents entering at a flat/turning EMA (whipsaw zone)
-  const bullSlope = ema50Rising && ema21Rising;
-  const bearSlope = ema50Falling && ema21Falling;
+  const bullSlope = ema50Rising || ema21Rising;
+  const bearSlope = ema50Falling || ema21Falling;
 
   // ── GATE 3: Momentum — RSI in range + MACD + RSI direction ───────────────
   const bullMomentum =
-    (rsi || 0) >= 45 && (rsi || 0) <= 78 &&
+    (rsi || 0) >= 40 && (rsi || 0) <= 82 &&
     (macd?.MACD || 0) > (macd?.signal || 0) &&
-    rsiRising;
+    (rsiRising || (rsi || 0) > 50);
   const bearMomentum =
-    (rsi || 0) <= 55 && (rsi || 0) >= 22 &&
+    (rsi || 0) <= 60 && (rsi || 0) >= 18 &&
     (macd?.MACD || 0) < (macd?.signal || 0) &&
-    rsiFalling;
+    (rsiFalling || (rsi || 0) < 50);
 
   // ── GATE 4: Entry ─────────────────────────────────────────────────────────
   const bullPB = isPullbackComplete("LONG",  analysis);
@@ -476,8 +476,8 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
   if ((rsi9||0) < 48 && bearValid) bearScore += 2;
 
   // ── Final ────────────────────────────────────────────────────────────────
-  const MIN_SCORE = 65;
-  const MIN_CONF  = 5;
+  const MIN_SCORE = 55;
+  const MIN_CONF  = 4;
 
   const side        = bullValid && !bearValid ? "LONG" : !bullValid && bearValid ? "SHORT" : bullScore >= bearScore ? "LONG" : "SHORT";
   const confidence  = side === "LONG" ? bullScore : bearScore;
