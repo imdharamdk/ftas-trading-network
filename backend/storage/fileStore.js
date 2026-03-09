@@ -63,13 +63,18 @@ async function mongoWrite(name, records) {
   if (!db) return false;
   try {
     const col = db.collection(name);
-    const ids = records.map(r => r.id ?? r._id).filter(Boolean);
-    await col.deleteMany({ _id: { $nin: ids } });
+    const ids = records.map(r => r.id).filter(Boolean);
+    // Delete records that are no longer in the list
+    if (ids.length > 0) {
+      await col.deleteMany({ _id: { $nin: ids } });
+    } else {
+      await col.deleteMany({});
+    }
     if (records.length > 0) {
       const ops = records.map(r => ({
         replaceOne: {
-          filter:      { _id: r.id ?? r._id },
-          replacement: { _id: r.id ?? r._id, data: r },
+          filter:      { _id: r.id },
+          replacement: { _id: r.id, data: r },
           upsert:      true,
         },
       }));
