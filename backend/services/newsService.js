@@ -86,6 +86,27 @@ function normalizeLimit(limit) {
   return Math.min(Math.max(Number(limit) || 9, 3), 20);
 }
 
+const CRYPTO_RELEVANCE_PATTERNS = [
+  /\bcrypto(?:currency|currencies)?\b/i,
+  /\bblockchain\b/i,
+  /\bbitcoin\b/i,
+  /\bbtc\b/i,
+  /\beth(?:ereum)?\b/i,
+  /\bsol(?:ana)?\b/i,
+  /\bxrp\b/i,
+  /\bdoge(?:coin)?\b/i,
+  /\bstablecoin(?:s)?\b/i,
+  /\btoken(?:s)?\b/i,
+  /\bdigital asset(?:s)?\b/i,
+  /\bdefi\b/i,
+  /\bweb3\b/i,
+  /\bbinance\b/i,
+  /\bcoinbase\b/i,
+  /\bokx\b/i,
+  /\bkraken\b/i,
+  /\bcrypto\.com\b/i,
+];
+
 function normalizeArticle(article) {
   return {
     bannerImage: article.banner_image || "",
@@ -95,6 +116,45 @@ function normalizeArticle(article) {
     timePublished: article.time_published || "",
     url: article.url || "#",
   };
+}
+
+function getCryptoRelevanceScore(article) {
+  const haystack = [
+    article?.title || "",
+    article?.summary || "",
+    article?.source || "",
+    article?.url || "",
+  ].join(" ");
+
+  let score = 0;
+
+  for (const pattern of CRYPTO_RELEVANCE_PATTERNS) {
+    if (pattern.test(haystack)) {
+      score += 1;
+    }
+  }
+
+  return score;
+}
+
+function selectArticles(feed, kind, limit) {
+  const normalized = (Array.isArray(feed) ? feed : []).map((article, index) => ({
+    article,
+    index,
+    normalized: normalizeArticle(article),
+    cryptoScore: getCryptoRelevanceScore(article),
+  }));
+
+  if (kind === "crypto") {
+    const relevant = normalized.filter((item) => item.cryptoScore > 0);
+    const fallback = normalized.filter((item) => item.cryptoScore === 0);
+    relevant.sort((left, right) => right.cryptoScore - left.cryptoScore || left.index - right.index);
+    return [...relevant, ...fallback]
+      .slice(0, limit)
+      .map((item) => item.normalized);
+  }
+
+  return normalized.slice(0, limit).map((item) => item.normalized);
 }
 
 function buildFallbackPayload(kind, limit, message = "") {
@@ -148,7 +208,7 @@ async function fetchNews({ kind = "mixed", limit = 9 } = {}) {
     });
 
     const feed = Array.isArray(response.data?.feed) ? response.data.feed : [];
-    const articles = feed.map(normalizeArticle);
+    const articles = selectArticles(feed, normalizedKind, normalizedLimit);
     const payload = articles.length
       ? {
           articles,
