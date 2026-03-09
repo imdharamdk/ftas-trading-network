@@ -141,9 +141,9 @@ function calculateLeverage(analysis, confidence) {
   const price  = analysis.currentPrice;
   const atr    = analysis.volatility.atr || analysis.averages.averageRange || price * 0.003;
   const atrPct = (atr / price) * 100;
-  const base   = clamp(2 / atrPct, 3, 15);
-  const bonus  = confidence >= 90 ? 2 : confidence >= 80 ? 1 : 0;
-  return Math.round(clamp(base + bonus, 3, 20));
+  const base   = clamp(20 / atrPct, 10, 40);
+  const bonus  = confidence >= 90 ? 10 : confidence >= 85 ? 7 : confidence >= 80 ? 5 : confidence >= 75 ? 3 : 0;
+  return Math.round(clamp(base + bonus, 10, 50));
 }
 
 // ─── Pullback Completion ──────────────────────────────────────────────────────
