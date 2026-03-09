@@ -32,6 +32,10 @@ export default function Market() {
   const [tickerPrices, setTickerPrices] = useState({}); // live price overlay for ticker table
   const searchRef = useRef(null);
   const signalCoinsKey = getSignalCoins(activeSignals).join(",");
+  const tickerCoinsKey = useMemo(
+    () => tickers.slice(0, 200).map((ticker) => ticker.symbol).join(","),
+    [tickers]
+  );
 
   // Load all data
   useEffect(() => {
@@ -86,7 +90,9 @@ export default function Market() {
         const response = await apiFetch(`/signals/live-prices?coins=${signalCoinsKey}`);
         if (!active) return;
         setActiveSignals((current) => mergeSignalLivePrices(current, response.prices || []));
-      } catch {}
+      } catch {
+        // Keep stale live prices visible if this lightweight refresh fails.
+      }
     }
     refreshLivePrices();
     const intervalId = window.setInterval(refreshLivePrices, 5000);
@@ -97,23 +103,23 @@ export default function Market() {
   useEffect(() => {
     let active = true;
     async function refreshTickerPrices() {
-      if (!tickers.length) return;
+      if (!tickerCoinsKey) return;
       try {
-        // Fetch only the visible/filtered coins to keep requests lean
-        const coins = tickers.slice(0, 200).map((t) => t.symbol).join(",");
-        const response = await apiFetch(`/signals/live-prices?coins=${coins}`);
+        const response = await apiFetch(`/signals/live-prices?coins=${tickerCoinsKey}`);
         if (!active) return;
         const priceMap = {};
         for (const item of response.prices || []) {
           if (item.livePrice) priceMap[item.coin] = item.livePrice;
         }
         setTickerPrices(priceMap);
-      } catch {}
+      } catch {
+        // Preserve the last successful price snapshot when polling fails.
+      }
     }
     refreshTickerPrices();
     const intervalId = window.setInterval(refreshTickerPrices, 5000);
     return () => { active = false; window.clearInterval(intervalId); };
-  }, [tickers.length]);
+  }, [tickerCoinsKey]);
 
   // Close suggestions on outside click
   useEffect(() => {

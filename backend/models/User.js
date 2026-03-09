@@ -104,7 +104,7 @@ function sanitizeUser(user) {
     return null;
   }
 
-  const { passwordHash, ...safeUser } = user;
+  const { passwordHash: _passwordHash, ...safeUser } = user;
   return {
     ...safeUser,
     hasSignalAccess: hasSignalAccess(safeUser),

@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { SessionProvider, useSession } from "./context/SessionContext";
+import { SessionProvider } from "./context/SessionContext";
+import { useSession } from "./context/useSession";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import Market from "./pages/Market";
@@ -13,7 +14,7 @@ function SessionGate({ children, guestOnly = false }) {
     return (
       <div className="loading-screen">
         <div className="loading-card">
-          <span className="eyebrow">FTAS Booting</span>
+          <span className="eyebrow">Fintech Automated Solutions</span>
           <h1>Loading signal desk</h1>
         </div>
       </div>

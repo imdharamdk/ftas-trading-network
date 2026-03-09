@@ -1,7 +1,6 @@
-import { createContext, startTransition, useContext, useEffect, useState } from "react";
+import { startTransition, useEffect, useState } from "react";
+import { SessionContext } from "./sessionContext";
 import { apiFetch, clearSession, getStoredToken, getStoredUser, storeSession } from "../lib/api";
-
-const SessionContext = createContext(null);
 
 export function SessionProvider({ children }) {
   const [token, setToken] = useState(() => getStoredToken());
@@ -10,7 +9,6 @@ export function SessionProvider({ children }) {
 
   useEffect(() => {
     if (!token) {
-      setLoading(false);
       return undefined;
     }
 
@@ -124,14 +122,4 @@ export function SessionProvider({ children }) {
       {children}
     </SessionContext.Provider>
   );
-}
-
-export function useSession() {
-  const context = useContext(SessionContext);
-
-  if (!context) {
-    throw new Error("useSession must be used inside SessionProvider");
-  }
-
-  return context;
 }

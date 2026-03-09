@@ -38,7 +38,7 @@ async function requireAuth(req, res, next) {
     req.userId  = user.id;
     req.rawUser = user;
     return next();
-  } catch (error) {
+  } catch {
     return res.status(401).json({ message: "Invalid token" });
   }
 }

@@ -922,6 +922,39 @@ h1, h2, h3 { letter-spacing: -0.03em; line-height: 1.2; }
   .public-header { flex-direction: row; align-items: center; }
 }
 
+@media (max-width: 639px) {
+  .button-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .button-row .button,
+  .page-actions .button {
+    width: 100%;
+  }
+
+  .page-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .panel-header > .pill {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .profile-row {
+    flex-wrap: wrap;
+    gap: var(--s2);
+  }
+
+  .hero-metrics {
+    grid-template-columns: 1fr;
+  }
+}
+
 
 /* ─── 768px — tablet portrait ───────────────────────────────────────────────── */
 @media (min-width: 768px) {

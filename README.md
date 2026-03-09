@@ -45,6 +45,8 @@ cp .env.example .env
 Set:
 
 - `VITE_API_BASE_URL=/api`
+- For a frontend-only deploy on Vercel or any static host, set `VITE_API_BASE_URL` to your hosted backend URL instead of `/api`
+- For a Vercel frontend with a Render backend, use `VITE_API_BASE_URL=https://your-render-service.onrender.com/api`
 
 Backend:
 
@@ -60,10 +62,15 @@ Important backend vars:
 - `ADMIN_SETUP_KEY=make_first_admin_secure`
 - `AUTO_START_ENGINE=false`
 - `SCAN_INTERVAL_MS=60000`
+- `SCAN_MAX_COINS=50`
+- `EXCHANGE_TIMEOUT_MS=15000`
+- `EXCHANGE_RETRIES=1`
 - `ADMIN_BOOTSTRAP_EMAIL=admin@example.com`
 - `ADMIN_BOOTSTRAP_PASSWORD=change_this_password`
+- `NEWS_PROVIDER=ALPHA_VANTAGE`
 - `ALPHA_VANTAGE_API_KEY=replace_with_free_news_key`
 - `NEWS_CACHE_MS=900000`
+- `FRONTEND_URL=http://localhost:5173,http://127.0.0.1:5173`
 
 ## Install
 
@@ -120,6 +127,16 @@ npm run dev
 Frontend: `http://localhost:5173`
 
 Backend API: `http://localhost:5000`
+
+## Deployment Notes
+
+- Vercel is suitable for the React frontend build.
+- Deploy the Node backend separately on a Node host such as Render, Railway, or VPS.
+- In hosted environments, point `VITE_API_BASE_URL` at the backend origin, for example `https://your-backend.example.com/api`.
+- Set `FRONTEND_URL` in `backend/.env` to your frontend origin so CORS stays restricted in production.
+- The included `render.yaml` omits the Render `plan` field so an existing service can keep its current tier instead of being forced to a new one on sync.
+- If you do not want live Alpha Vantage news yet, set `NEWS_PROVIDER=FALLBACK` and the API will return built-in FTAS fallback articles with HTTP `200`.
+- If you are using Vercel + Render, set Vercel `VITE_API_BASE_URL` to your Render API URL and set Render `FRONTEND_URL` to your Vercel domain.
 
 ## Useful Scripts
 

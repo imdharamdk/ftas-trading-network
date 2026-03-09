@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useSession } from "../context/SessionContext";
+import { useSession } from "../context/useSession";
 
 export default function Signup() {
   const navigate = useNavigate();
@@ -82,7 +82,7 @@ export default function Signup() {
         </div>
 
         <div className="auth-copy auth-copy-compact">
-          <span className="eyebrow">Why FTAS</span>
+          <span className="eyebrow">Why Fintech Automated Solutions</span>
           <h1>Scanner, signals, payments and admin approvals in one website.</h1>
           <p>
             No Telegram dependency. Users see active trades, closed trades, confidence score and

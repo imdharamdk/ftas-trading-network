@@ -10,6 +10,9 @@ const COLLECTION_FILES = {
   signals:         "signals.json",
   users:           "users.json",
 };
+const LEGACY_COLLECTION_FILES = {
+  users: ["user.json"],
+};
 
 const DATA_DIR = path.join(__dirname, "..", "data");
 
@@ -93,7 +96,22 @@ async function localEnsure(name) {
   await fs.mkdir(DATA_DIR, { recursive: true });
   const filePath = path.join(DATA_DIR, file);
   try { await fs.access(filePath); }
-  catch { await fs.writeFile(filePath, "[]\n", "utf8"); }
+  catch {
+    const legacyFiles = LEGACY_COLLECTION_FILES[name] || [];
+
+    for (const legacyFile of legacyFiles) {
+      const legacyPath = path.join(DATA_DIR, legacyFile);
+
+      try {
+        await fs.access(legacyPath);
+        return legacyPath;
+      } catch {
+        // Keep checking for the next known legacy filename.
+      }
+    }
+
+    await fs.writeFile(filePath, "[]\n", "utf8");
+  }
   return filePath;
 }
 

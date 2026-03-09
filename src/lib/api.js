@@ -15,7 +15,7 @@ export function getStoredUser() {
 
   try {
     return JSON.parse(raw);
-  } catch (error) {
+  } catch {
     return null;
   }
 }
@@ -54,7 +54,7 @@ export async function apiFetch(path, options = {}) {
 
   try {
     payload = text ? JSON.parse(text) : {};
-  } catch (error) {
+  } catch {
     payload = {};
   }
 

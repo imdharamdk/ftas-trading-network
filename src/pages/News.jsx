@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import AppShell from "../components/AppShell";
-import { useSession } from "../context/SessionContext";
+import { useSession } from "../context/useSession";
 import { apiFetch } from "../lib/api";
 
 const fallbackNews = [
@@ -119,12 +119,12 @@ export default function News() {
 
         if (Array.isArray(response.articles) && response.articles.length) {
           setNews(response.articles);
-          setError("");
+          setError(response.degraded ? response.message || "Live news feed unavailable, fallback FTAS updates shown." : "");
         } else {
           setNews(fallbackNews);
           setError("Live news API se data nahi mila, fallback FTAS updates shown.");
         }
-      } catch (loadError) {
+      } catch {
         if (!active) {
           return;
         }
@@ -166,7 +166,7 @@ export default function News() {
     <div className="public-page">
       <header className="public-header">
         <div>
-          <span className="eyebrow">FTAS News</span>
+          <span className="eyebrow">Fintech Automated Solutions News</span>
           <h1>Market context before login</h1>
         </div>
         <nav className="public-links">

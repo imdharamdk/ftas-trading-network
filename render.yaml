@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: ftas-trading-network-api
+    env: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: FRONTEND_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: ADMIN_SETUP_KEY
+        sync: false
+      - key: ADMIN_BOOTSTRAP_EMAIL
+        sync: false
+      - key: ADMIN_BOOTSTRAP_PASSWORD
+        sync: false
+      - key: NEWS_PROVIDER
+        value: ALPHA_VANTAGE
+      - key: ALPHA_VANTAGE_API_KEY
+        sync: false
+      - key: AUTO_START_ENGINE
+        value: true
+      - key: SCAN_INTERVAL_MS
+        value: 30000
+      - key: SCAN_MAX_COINS
+        value: 20
+      - key: EXCHANGE_TIMEOUT_MS
+        value: 15000
+      - key: EXCHANGE_RETRIES
+        value: 1

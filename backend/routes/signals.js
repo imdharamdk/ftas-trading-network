@@ -2,7 +2,7 @@ const express = require("express");
 const { requireAdmin, requireAuth, requireSignalAccess } = require("../middleware/auth");
 const { SIGNAL_STATUS } = require("../models/Signal");
 const { mutateCollection, readCollection } = require("../storage/fileStore");
-const { getPrices, getAllFuturesCoins } = require("../services/binanceService");
+const { getPrices } = require("../services/binanceService");
 const { createManualSignal, getStatus, scanNow, seedDemoSignals, start, stop } = require("../services/signalEngine");
 
 const router = express.Router();
@@ -251,7 +251,7 @@ async function attachLivePrices(signals) {
   try {
     const prices = await getPrices([...new Set(signals.map((signal) => signal.coin))]);
     return enrichSignalsWithPrices(signals, prices);
-  } catch (error) {
+  } catch {
     return signals;
   }
 }

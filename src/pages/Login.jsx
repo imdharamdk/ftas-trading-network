@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useSession } from "../context/SessionContext";
+import { useSession } from "../context/useSession";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -31,7 +31,7 @@ export default function Login() {
     <div className="auth-page">
       <div className="auth-card auth-card-wide">
         <div className="auth-copy">
-          <span className="eyebrow">FTAS Trading Network</span>
+          <span className="eyebrow">Fintech Automated Solutions</span>
           <h1>Website-only crypto signal engine for real futures flow.</h1>
           <p>
             Login to monitor live signals, payment approvals, confidence analytics, and scanner control

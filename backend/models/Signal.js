@@ -5,10 +5,17 @@ const SIGNAL_STATUS = {
   CANCELLED: "CANCELLED",
   CLOSED: "CLOSED",
 };
+const MIN_LEVERAGE = 10;
+const MAX_LEVERAGE = 50;
 
 function toNumber(value, fallback = null) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function normalizeLeverage(value) {
+  const leverage = toNumber(value, MIN_LEVERAGE);
+  return Math.min(Math.max(leverage, MIN_LEVERAGE), MAX_LEVERAGE);
 }
 
 function createSignal({
@@ -43,7 +50,7 @@ function createSignal({
     tp2: toNumber(tp2, 0),
     tp3: toNumber(tp3, 0),
     confidence: toNumber(confidence, 0),
-    leverage: toNumber(leverage, 10),
+    leverage: normalizeLeverage(leverage),
     timeframe: String(timeframe || "5m").trim(),
     strength: String(strength || "MEDIUM").trim().toUpperCase(),
     source: String(source || "ENGINE").trim().toUpperCase(),
@@ -60,6 +67,8 @@ function createSignal({
 }
 
 module.exports = {
+  MAX_LEVERAGE,
+  MIN_LEVERAGE,
   SIGNAL_STATUS,
   createSignal,
 };

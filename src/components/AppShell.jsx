@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink } from "react-router-dom";
-import { useSession } from "../context/SessionContext";
+import { useSession } from "../context/useSession";
 
 function navCls({ isActive }) {
   return `nav-link${isActive ? " nav-link-active" : ""}`;
@@ -32,7 +32,7 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
           <div className="sidebar-brand-row">
             <div className="brand-block">
               <span className="brand-mark">FTAS</span>
-              <p className="brand-copy">Adaptive futures signal desk — website only delivery.</p>
+              <p className="brand-copy">Fintech automated solutions for futures signals, payments, and scanner control.</p>
             </div>
             {/* Close button inside sidebar (mobile) */}
             <button
@@ -68,7 +68,7 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
                 {user?.role || "USER"}
               </span>
             </div>
-            <strong>{user?.name || "FTAS User"}</strong>
+            <strong>{user?.name || "FTAS Member"}</strong>
             <span>{user?.email}</span>
             <span className="profile-muted">
               {user?.plan || "FREE"} &bull; {user?.subscriptionStatus || "INACTIVE"}
@@ -114,7 +114,7 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
         {/* Page header */}
         <header className="page-header">
           <div>
-            <span className="eyebrow">FTAS Control Surface</span>
+            <span className="eyebrow">Fintech Automated Solutions</span>
             <h1>{title}</h1>
             {subtitle ? <p>{subtitle}</p> : null}
           </div>

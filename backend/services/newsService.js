@@ -7,6 +7,64 @@ const client = axios.create({
 
 const cache = new Map();
 const NEWS_CACHE_MS = Number(process.env.NEWS_CACHE_MS || 15 * 60 * 1000);
+const FALLBACK_ARTICLES = {
+  crypto: [
+    {
+      bannerImage: "",
+      headline: "Crypto watchlist stays available even without a third-party news key",
+      source: "FTAS Fallback",
+      summary: "Configure ALPHA_VANTAGE_API_KEY for live headlines, or keep fallback mode enabled for a stable feed.",
+      timePublished: "",
+      url: "/news",
+    },
+    {
+      bannerImage: "",
+      headline: "Signal board continues to work independently of the news provider",
+      source: "FTAS Fallback",
+      summary: "Scanner, active signals, and payment flow keep running even if the external news API is disabled.",
+      timePublished: "",
+      url: "/dashboard",
+    },
+    {
+      bannerImage: "",
+      headline: "Use market view for live pair discovery while news runs in fallback mode",
+      source: "FTAS Fallback",
+      summary: "The market page still loads futures pairs and chart data separately from the news provider.",
+      timePublished: "",
+      url: "/market",
+    },
+  ],
+  finance: [
+    {
+      bannerImage: "",
+      headline: "Payment review and subscription updates remain available during news degradation",
+      source: "FTAS Fallback",
+      summary: "Admin plan approvals and account state changes do not depend on Alpha Vantage availability.",
+      timePublished: "",
+      url: "/dashboard",
+    },
+    {
+      bannerImage: "",
+      headline: "Deploy backend with a real news API key for production finance headlines",
+      source: "FTAS Fallback",
+      summary: "Set ALPHA_VANTAGE_API_KEY in backend environment settings to replace fallback articles with live feed data.",
+      timePublished: "",
+      url: "/news",
+    },
+    {
+      bannerImage: "",
+      headline: "Static frontend and Node backend should be deployed separately",
+      source: "FTAS Fallback",
+      summary: "Keep Vercel for the React app and a Node host such as Render for the API and scheduled scanner.",
+      timePublished: "",
+      url: "/news",
+    },
+  ],
+};
+FALLBACK_ARTICLES.mixed = [
+  ...FALLBACK_ARTICLES.finance,
+  ...FALLBACK_ARTICLES.crypto,
+];
 
 function getTopicFilter(kind) {
   if (kind === "crypto") {
@@ -20,6 +78,14 @@ function getTopicFilter(kind) {
   return "financial_markets,blockchain,economy_macro";
 }
 
+function normalizeKind(kind) {
+  return ["crypto", "finance", "mixed"].includes(kind) ? kind : "mixed";
+}
+
+function normalizeLimit(limit) {
+  return Math.min(Math.max(Number(limit) || 9, 3), 20);
+}
+
 function normalizeArticle(article) {
   return {
     bannerImage: article.banner_image || "",
@@ -31,40 +97,81 @@ function normalizeArticle(article) {
   };
 }
 
+function buildFallbackPayload(kind, limit, message = "") {
+  return {
+    articles: (FALLBACK_ARTICLES[kind] || FALLBACK_ARTICLES.mixed).slice(0, limit),
+    degraded: true,
+    message,
+    provider: "FTAS_FALLBACK",
+  };
+}
+
 async function fetchNews({ kind = "mixed", limit = 9 } = {}) {
+  const normalizedKind = normalizeKind(kind);
+  const normalizedLimit = normalizeLimit(limit);
+  const provider = String(process.env.NEWS_PROVIDER || "ALPHA_VANTAGE").trim().toUpperCase();
   const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
-
-  if (!apiKey) {
-    throw new Error("ALPHA_VANTAGE_API_KEY is not configured");
-  }
-
-  const normalizedKind = ["crypto", "finance", "mixed"].includes(kind) ? kind : "mixed";
-  const cacheKey = `${normalizedKind}:${limit}`;
+  const cacheKey = `${provider}:${normalizedKind}:${normalizedLimit}`;
   const cached = cache.get(cacheKey);
 
   if (cached && Date.now() - cached.createdAt < NEWS_CACHE_MS) {
-    return cached.articles;
+    return cached.payload;
   }
 
-  const response = await client.get("", {
-    params: {
-      apikey: apiKey,
-      function: "NEWS_SENTIMENT",
-      limit: Math.min(Math.max(Number(limit) || 9, 3), 20),
-      sort: "LATEST",
-      topics: getTopicFilter(normalizedKind),
-    },
-  });
+  if (provider === "FALLBACK") {
+    const payload = buildFallbackPayload(normalizedKind, normalizedLimit, "NEWS_PROVIDER is set to FALLBACK.");
+    cache.set(cacheKey, {
+      createdAt: Date.now(),
+      payload,
+    });
+    return payload;
+  }
 
-  const feed = Array.isArray(response.data?.feed) ? response.data.feed : [];
-  const articles = feed.map(normalizeArticle);
+  if (!apiKey) {
+    const payload = buildFallbackPayload(normalizedKind, normalizedLimit, "ALPHA_VANTAGE_API_KEY is not configured.");
+    cache.set(cacheKey, {
+      createdAt: Date.now(),
+      payload,
+    });
+    return payload;
+  }
 
-  cache.set(cacheKey, {
-    articles,
-    createdAt: Date.now(),
-  });
+  try {
+    const response = await client.get("", {
+      params: {
+        apikey: apiKey,
+        function: "NEWS_SENTIMENT",
+        limit: normalizedLimit,
+        sort: "LATEST",
+        topics: getTopicFilter(normalizedKind),
+      },
+    });
 
-  return articles;
+    const feed = Array.isArray(response.data?.feed) ? response.data.feed : [];
+    const articles = feed.map(normalizeArticle);
+    const payload = articles.length
+      ? {
+          articles,
+          degraded: false,
+          message: "",
+          provider: "ALPHA_VANTAGE",
+        }
+      : buildFallbackPayload(normalizedKind, normalizedLimit, "Alpha Vantage returned no articles for this filter.");
+
+    cache.set(cacheKey, {
+      createdAt: Date.now(),
+      payload,
+    });
+
+    return payload;
+  } catch (error) {
+    const payload = buildFallbackPayload(normalizedKind, normalizedLimit, `Live news unavailable: ${error.message}`);
+    cache.set(cacheKey, {
+      createdAt: Date.now(),
+      payload,
+    });
+    return payload;
+  }
 }
 
 module.exports = {

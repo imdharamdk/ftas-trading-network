@@ -312,7 +312,7 @@ export default function CandlestickChart({ coin, timeframe: initialTf = "15m", s
       ctx.fillText(label, toX(i), H - 8);
     });
 
-  }, [candles, hover, offset, zoom, signal]);
+  }, [candles, hover, offset, signal, tf, zoom]);
 
   // ─── Volume Chart ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -486,7 +486,7 @@ export default function CandlestickChart({ coin, timeframe: initialTf = "15m", s
       const newZoom = Math.max(0.3, Math.min(3, touchStartZoom.current * ratio));
       setZoom(newZoom);
     }
-  }, [candles.length, zoom, offset]);
+  }, [candles.length, zoom]);
 
   const handleTouchEnd = () => {
     isDragging.current = false;

@@ -13,7 +13,7 @@ const FALLBACK_COINS = [
 
 const SCAN_TIMEFRAMES          = ["5m","15m","1h","4h","12h","1d"];
 const DEFAULT_TRADE_TIMEFRAMES = ["5m","15m"];
-const MAX_COINS_PER_SCAN       = 50; // scan top 50 coins only to avoid rate limits
+const DEFAULT_MAX_COINS_PER_SCAN = 50;
 
 const SIGNAL_EXPIRY_MS = {
   "5m":  60  * 60 * 1000,
@@ -38,6 +38,9 @@ function roundPrice(v) {
   return Number(v.toFixed(6));
 }
 function clamp(v, mn, mx) { return Math.min(Math.max(v, mn), mx); }
+function getMaxCoinsPerScan() {
+  return clamp(Number(process.env.SCAN_MAX_COINS || DEFAULT_MAX_COINS_PER_SCAN), 5, DEFAULT_MAX_COINS_PER_SCAN);
+}
 // Dynamic coin list — fetches ALL active USDT perpetual pairs from Binance.
 // Falls back to env override (SCAN_COINS) or hardcoded list if API fails.
 async function getCoinList() {
@@ -63,7 +66,6 @@ function getTradeTimeframes() {
 // 12H = optional strengthener.
 function getHigherTimeframeBias(analyses) {
   const a4h  = analyses["4h"];
-  const a12h = analyses["12h"];
   const a1d  = analyses["1d"];
   const a1h  = analyses["1h"];
 
@@ -152,7 +154,7 @@ function calculateLeverage(analysis, confidence) {
 // is increasing — these confirm the TURN, not just the level.
 function isPullbackComplete(side, analysis) {
   const { ema21, ema50, vwap }                           = analysis.trend;
-  const { rsi, rsiRising, rsiFalling, macd, macdHistIncreasing, macdHistDecreasing, stochRsi } = analysis.momentum;
+  const { rsi, rsiRising, rsiFalling, macdHistIncreasing, macdHistDecreasing, stochRsi } = analysis.momentum;
   const price = analysis.currentPrice;
   const atr   = analysis.volatility.atr || price * 0.003;
   const stochK = stochRsi?.k ?? null;
@@ -244,7 +246,7 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}) {
   const {
     volumeSpike, volumeStrong, volumeTrending,
     obvChange, obvTrending, mfi, forceIndex,
-    adlChange, currentVolume, averageVolume,
+    currentVolume, averageVolume,
   } = analysis.volume;
   const { bollinger, atr: rawAtr, bbWidth, bbPctB } = analysis.volatility;
   const atr    = rawAtr || analysis.averages.averageRange || price * 0.003;
@@ -585,15 +587,18 @@ async function signalExists(candidate) {
   return signals.some(s => s.status === SIGNAL_STATUS.ACTIVE && s.coin === candidate.coin && s.side === candidate.side && s.timeframe === candidate.timeframe);
 }
 async function createManualSignal(payload, actor) {
+  const confidence = Number(payload.confidence || 75);
+  const leverage = clamp(Number(payload.leverage || 10), 10, 50);
   const signal = createSignal({
     coin: payload.coin, side: payload.side, timeframe: payload.timeframe || "5m",
     entry: payload.entry, stopLoss: payload.stopLoss, tp1: payload.tp1, tp2: payload.tp2, tp3: payload.tp3,
-    confidence: Number(payload.confidence || 75),
+    confidence,
+    leverage,
     confirmations: Array.isArray(payload.confirmations) ? payload.confirmations : ["Admin signal"],
     indicatorSnapshot: payload.indicatorSnapshot || {}, patternSummary: payload.patternSummary || {},
     scanMeta: { createdBy: actor?.email || "admin", manual: true, ...(payload.scanMeta || {}) },
     source: payload.source || "MANUAL",
-    strength: Number(payload.confidence || 75) >= 70 ? "STRONG" : "MEDIUM",
+    strength: confidence >= 70 ? "STRONG" : "MEDIUM",
   });
   await persistSignal(signal);
   return signal;
@@ -601,7 +606,11 @@ async function createManualSignal(payload, actor) {
 async function seedDemoSignals(actor) {
   const fallback = { BTCUSDT: 65000, ETHUSDT: 3500, SOLUSDT: 150 };
   let live = {};
-  try { live = await getPrices(Object.keys(fallback)); } catch {}
+  try {
+    live = await getPrices(Object.keys(fallback));
+  } catch {
+    // Demo seed should still work with static fallback prices.
+  }
   const prices = { ...fallback, ...live };
   const templates = [
     { coin:"BTCUSDT", confidence:78, side:"LONG",  timeframe:"5m" },
@@ -626,7 +635,7 @@ async function scanNow({ source = "ENGINE" } = {}) {
   try {
     const closedSignals = await evaluateActiveSignals();
     const allCoins = await getCoinList();
-    const coins    = allCoins.slice(0, MAX_COINS_PER_SCAN); // top 50 only
+    const coins    = allCoins.slice(0, getMaxCoinsPerScan());
     for (const coin of coins) {
       try {
         const candidate = await analyzeCoin(coin);

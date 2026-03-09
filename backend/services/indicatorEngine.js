@@ -288,7 +288,9 @@ function detectPatterns(candles) {
   const neutral = [];
   try {
     if (ti.doji?.hasPattern?.(input)) neutral.push("Doji");
-  } catch {}
+  } catch {
+    return { bullish, bearish, neutral };
+  }
 
   return { bullish, bearish, neutral };
 }

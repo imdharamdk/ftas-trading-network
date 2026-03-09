@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import AppShell from "../components/AppShell";
 import DistributionList from "../components/DistributionList";
 import SignalTable from "../components/SignalTable";
-import { useSession } from "../context/SessionContext";
+import { useSession } from "../context/useSession";
 import { apiFetch } from "../lib/api";
 import { getSignalCoins, mergeSignalLivePrices } from "../lib/liveSignalPrices";
 
@@ -19,6 +19,7 @@ const defaultManualForm = {
   coin: "BTCUSDT",
   confidence: 80,
   entry: "",
+  leverage: 10,
   side: "LONG",
   stopLoss: "",
   timeframe: "5m",
@@ -87,9 +88,14 @@ function buildPlanUpdate(plan) {
   };
 }
 
+function hasActivePaidPlan(user) {
+  return user?.subscriptionStatus === "ACTIVE" && ["PRO", "PREMIUM"].includes(user?.plan);
+}
+
 export default function Dashboard() {
   const { refreshUser, user } = useSession();
   const isAdmin = user?.role === "ADMIN";
+  const paidPlanActive = hasActivePaidPlan(user);
   const [overview, setOverview] = useState(null);
   const [analytics, setAnalytics] = useState(null);
   const [engine, setEngine] = useState(null);
@@ -108,9 +114,23 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState("");
-  const availablePaymentSettings = paymentSettings || fallbackPaymentSettings;
-  const availablePaymentMethods = availablePaymentSettings.paymentMethods || [];
-  const availablePlans = availablePaymentSettings.plans || [];
+  const availablePaymentSettings = useMemo(
+    () => paymentSettings || fallbackPaymentSettings,
+    [paymentSettings]
+  );
+  const availablePaymentMethods = useMemo(
+    () => availablePaymentSettings.paymentMethods || [],
+    [availablePaymentSettings]
+  );
+  const availablePlans = useMemo(
+    () => availablePaymentSettings.plans || [],
+    [availablePaymentSettings]
+  );
+  const hasPendingPayment = useMemo(
+    () => myPayments.some((payment) => payment.status === "PENDING"),
+    [myPayments]
+  );
+  const shouldShowPaymentForm = !paidPlanActive && !hasPendingPayment;
 
   useEffect(() => {
     if (!availablePaymentSettings) {
@@ -147,7 +167,7 @@ export default function Dashboard() {
         const response = await apiFetch(`/signals/live-prices?coins=${activeCoinsParam}`);
         if (!active) return;
         setActiveSignals((current) => mergeSignalLivePrices(current, response.prices || []));
-      } catch (error) {
+      } catch {
         // Keep the board stable if a lightweight live-price refresh fails.
       }
     }
@@ -161,7 +181,7 @@ export default function Dashboard() {
     };
   }, [activeCoinsParam]);
 
-  async function loadPublicDashboardData() {
+  const loadPublicDashboardData = useCallback(async () => {
     const results = await Promise.allSettled([
       apiFetch("/signals/stats/overview"),
       apiFetch("/signals/stats/analytics"),
@@ -182,9 +202,9 @@ export default function Dashboard() {
 
     const rejected = results.find((result) => result.status === "rejected");
     return rejected ? rejected.reason : null;
-  }
+  }, []);
 
-  async function loadPrivateDashboardData() {
+  const loadPrivateDashboardData = useCallback(async () => {
     const privateRequests = [apiFetch("/payments/my"), apiFetch("/payments/settings")];
 
     if (isAdmin) {
@@ -226,7 +246,7 @@ export default function Dashboard() {
 
     const rejected = results.find((result) => result.status === "rejected");
     return rejected ? rejected.reason : null;
-  }
+  }, [isAdmin]);
 
   useEffect(() => {
     let active = true;
@@ -262,7 +282,7 @@ export default function Dashboard() {
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [isAdmin]);
+  }, [loadPrivateDashboardData, loadPublicDashboardData]);
 
   async function refreshDataWithFeedback(message) {
     setFeedback(message);
@@ -354,6 +374,7 @@ export default function Dashboard() {
           ...manualForm,
           confidence: Number(manualForm.confidence),
           entry: Number(manualForm.entry),
+          leverage: Number(manualForm.leverage),
           stopLoss: Number(manualForm.stopLoss),
           tp1: Number(manualForm.tp1),
           tp2: Number(manualForm.tp2),
@@ -536,10 +557,20 @@ export default function Dashboard() {
           <div className="panel-header">
             <div>
               <span className="eyebrow">Payments</span>
-              <h2>Submit subscription proof</h2>
+              <h2>{shouldShowPaymentForm ? "Submit subscription proof" : "Plan status"}</h2>
             </div>
             <span className="pill pill-neutral">{myPayments.length} submitted</span>
           </div>
+          {paidPlanActive ? (
+            <div className="banner banner-success">
+              Your {user.plan} plan is active. Purchase popup hide kar diya gaya hai because access already enabled hai.
+            </div>
+          ) : null}
+          {!paidPlanActive && hasPendingPayment ? (
+            <div className="banner banner-warning">
+              Payment already submit ho chuka hai aur admin approval ka wait kar raha hai. Isliye purchase form abhi hidden hai.
+            </div>
+          ) : null}
           <p className="panel-note">Har new account ko 7 days free trial milta hai. Uske baad paid plan approve hoga to signal access continue rahega.</p>
           <p className="panel-note">Contact for payment confirmation: {availablePaymentSettings.contactPerson}</p>
 
@@ -555,81 +586,83 @@ export default function Dashboard() {
             ))}
           </div>
 
-          <form className="form-grid" onSubmit={handlePaymentSubmit}>
-            <label>
-              <span>Amount</span>
-              <input
-                onChange={(event) => setPaymentForm((current) => ({ ...current, amount: event.target.value }))}
-                placeholder="999"
-                type="number"
-                value={paymentForm.amount}
-              />
-            </label>
-            <label>
-              <span>Method</span>
-              <select
-                onChange={(event) => setPaymentForm((current) => ({ ...current, method: event.target.value }))}
-                value={paymentForm.method}
-              >
-                {availablePaymentMethods.map((method) => (
-                  <option key={method.value} value={method.value}>
-                    {method.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Plan</span>
-              <select
-                onChange={(event) =>
-                  setPaymentForm((current) => {
-                    const selectedPlan = availablePlans.find((plan) => plan.code === event.target.value);
+          {shouldShowPaymentForm ? (
+            <form className="form-grid" onSubmit={handlePaymentSubmit}>
+              <label>
+                <span>Amount</span>
+                <input
+                  onChange={(event) => setPaymentForm((current) => ({ ...current, amount: event.target.value }))}
+                  placeholder="999"
+                  type="number"
+                  value={paymentForm.amount}
+                />
+              </label>
+              <label>
+                <span>Method</span>
+                <select
+                  onChange={(event) => setPaymentForm((current) => ({ ...current, method: event.target.value }))}
+                  value={paymentForm.method}
+                >
+                  {availablePaymentMethods.map((method) => (
+                    <option key={method.value} value={method.value}>
+                      {method.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Plan</span>
+                <select
+                  onChange={(event) =>
+                    setPaymentForm((current) => {
+                      const selectedPlan = availablePlans.find((plan) => plan.code === event.target.value);
 
-                    return {
-                      ...current,
-                      amount: selectedPlan ? String(selectedPlan.amountUsd) : current.amount,
-                      plan: event.target.value,
-                    };
-                  })
-                }
-                value={paymentForm.plan}
-              >
-                {availablePlans.map((plan) => (
-                  <option key={plan.code} value={plan.code}>
-                    {plan.code} • {plan.priceLabel}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Reference</span>
-              <input
-                onChange={(event) => setPaymentForm((current) => ({ ...current, reference: event.target.value }))}
-                placeholder="UPI ref / txn id"
-                value={paymentForm.reference}
-              />
-            </label>
-            <label className="form-span-2">
-              <span>Screenshot URL</span>
-              <input
-                onChange={(event) => setPaymentForm((current) => ({ ...current, screenshotUrl: event.target.value }))}
-                placeholder="Optional proof URL"
-                value={paymentForm.screenshotUrl}
-              />
-            </label>
-            <label className="form-span-2">
-              <span>Notes</span>
-              <textarea
-                onChange={(event) => setPaymentForm((current) => ({ ...current, notes: event.target.value }))}
-                placeholder="Mention package or special note"
-                rows="3"
-                value={paymentForm.notes}
-              />
-            </label>
-            <button className="button button-primary" disabled={actionBusy === "payment"} type="submit">
-              {actionBusy === "payment" ? "Submitting..." : "Submit payment"}
-            </button>
-          </form>
+                      return {
+                        ...current,
+                        amount: selectedPlan ? String(selectedPlan.amountUsd) : current.amount,
+                        plan: event.target.value,
+                      };
+                    })
+                  }
+                  value={paymentForm.plan}
+                >
+                  {availablePlans.map((plan) => (
+                    <option key={plan.code} value={plan.code}>
+                      {plan.code} • {plan.priceLabel}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Reference</span>
+                <input
+                  onChange={(event) => setPaymentForm((current) => ({ ...current, reference: event.target.value }))}
+                  placeholder="UPI ref / txn id"
+                  value={paymentForm.reference}
+                />
+              </label>
+              <label className="form-span-2">
+                <span>Screenshot URL</span>
+                <input
+                  onChange={(event) => setPaymentForm((current) => ({ ...current, screenshotUrl: event.target.value }))}
+                  placeholder="Optional proof URL"
+                  value={paymentForm.screenshotUrl}
+                />
+              </label>
+              <label className="form-span-2">
+                <span>Notes</span>
+                <textarea
+                  onChange={(event) => setPaymentForm((current) => ({ ...current, notes: event.target.value }))}
+                  placeholder="Mention package or special note"
+                  rows="3"
+                  value={paymentForm.notes}
+                />
+              </label>
+              <button className="button button-primary" disabled={actionBusy === "payment"} type="submit">
+                {actionBusy === "payment" ? "Submitting..." : "Submit payment"}
+              </button>
+            </form>
+          ) : null}
 
           <div className="list-stack">
             {myPayments.slice(0, 4).map((payment) => (
@@ -954,6 +987,16 @@ export default function Dashboard() {
                   onChange={(event) => setManualForm((current) => ({ ...current, entry: event.target.value }))}
                   type="number"
                   value={manualForm.entry}
+                />
+              </label>
+              <label>
+                <span>Leverage</span>
+                <input
+                  max="50"
+                  min="10"
+                  onChange={(event) => setManualForm((current) => ({ ...current, leverage: event.target.value }))}
+                  type="number"
+                  value={manualForm.leverage}
                 />
               </label>
               <label>

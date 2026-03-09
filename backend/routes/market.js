@@ -1,8 +1,9 @@
 const express = require("express");
-const { getAllTickerStats, getKlines } = require("../services/binanceService");
+const { getAllFuturesCoins, getAllTickerStats, getKlines } = require("../services/binanceService");
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
+const SORTABLE_TICKER_FIELDS = new Set(["changePercent", "highPrice", "lowPrice", "price", "quoteVolume", "volume"]);
 
 function normalizeTicker(ticker) {
   return {
@@ -32,8 +33,9 @@ router.get("/klines", requireAuth, async (req, res) => {
 
 router.get("/tickers", async (req, res) => {
   try {
-    const limit = Math.min(Math.max(Number(req.query.limit || 20), 5), 50);
-    const sortBy = String(req.query.sort || "quoteVolume");
+    const limit = Math.min(Math.max(Number(req.query.limit || 20), 5), 500);
+    const requestedSort = String(req.query.sort || "quoteVolume");
+    const sortBy = SORTABLE_TICKER_FIELDS.has(requestedSort) ? requestedSort : "quoteVolume";
     const tickers = await getAllTickerStats();
 
     const normalized = tickers
@@ -55,6 +57,24 @@ router.get("/tickers", async (req, res) => {
       message: error.message,
       source: "BINANCE_FUTURES",
       tickers: [],
+    });
+  }
+});
+
+router.get("/coins", async (req, res) => {
+  try {
+    const requestedLimit = Number(req.query.limit || 0);
+    const coins = await getAllFuturesCoins();
+
+    return res.json({
+      coins: requestedLimit > 0 ? coins.slice(0, requestedLimit) : coins,
+      source: "BINANCE_FUTURES",
+    });
+  } catch (error) {
+    return res.status(503).json({
+      coins: [],
+      message: error.message,
+      source: "BINANCE_FUTURES",
     });
   }
 });
