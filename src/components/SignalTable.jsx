@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import CandlestickChart from "./CandlestickChart";
 
-// ─── Expiry map (must match signalEngine.js SIGNAL_EXPIRY_MS) ─────────────────
+/* ─── Expiry timings ───────────────────────────────────────────────────────── */
 const EXPIRY_MS = {
   "1m":  30  * 60 * 1000,
   "5m":  60  * 60 * 1000,
@@ -12,56 +12,44 @@ const EXPIRY_MS = {
   "1d":  21  * 24 * 60 * 60 * 1000,
 };
 
-function getExpiryMs(timeframe) {
-  return EXPIRY_MS[timeframe] || EXPIRY_MS["15m"];
+function getExpiryMs(tf) {
+  return EXPIRY_MS[tf] || EXPIRY_MS["15m"];
 }
 
 function formatCountdown(createdAt, timeframe) {
   if (!createdAt) return null;
-  const expiryMs   = getExpiryMs(timeframe);
-  const created    = new Date(createdAt).getTime();
-  const expiresAt  = created + expiryMs;
-  const remaining  = expiresAt - Date.now();
-
-  if (remaining <= 0) return { label: "Expired", urgent: true, expiresAt };
-
-  const totalSec = Math.floor(remaining / 1000);
-  const d = Math.floor(totalSec / 86400);
-  const h = Math.floor((totalSec % 86400) / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-
-  let label;
-  if (d > 0)      label = `${d}d ${h}h`;
-  else if (h > 0) label = `${h}h ${m}m`;
-  else if (m > 0) label = `${m}m ${s}s`;
-  else            label = `${s}s`;
-
-  const urgent = remaining < 30 * 60 * 1000; // red if <30 min left
-  return { label, urgent, expiresAt };
+  const remaining = (new Date(createdAt).getTime() + getExpiryMs(timeframe)) - Date.now();
+  if (remaining <= 0) return { label: "Expired", urgent: true };
+  const ts = Math.floor(remaining / 1000);
+  const d = Math.floor(ts / 86400);
+  const h = Math.floor((ts % 86400) / 3600);
+  const m = Math.floor((ts % 3600) / 60);
+  const s = ts % 60;
+  const label = d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`;
+  return { label, urgent: remaining < 30 * 60 * 1000 };
 }
 
 function formatPrice(value) {
-  const amount = Number(value);
-  if (!Number.isFinite(amount)) return "-";
-  if (Math.abs(amount) >= 10000)  return amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (Math.abs(amount) >= 1000)   return amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
-  if (Math.abs(amount) >= 1)      return amount.toFixed(4);
-  if (Math.abs(amount) >= 0.0001) return amount.toFixed(6);
-  return amount.toFixed(8);
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  if (Math.abs(n) >= 10000) return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (Math.abs(n) >= 1000)  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  if (Math.abs(n) >= 1)     return n.toFixed(4);
+  if (Math.abs(n) >= 0.0001) return n.toFixed(6);
+  return n.toFixed(8);
 }
 
 function formatDate(value) {
   if (!value) return "-";
   return new Intl.DateTimeFormat("en-IN", {
-    day: "2-digit", hour: "2-digit", minute: "2-digit", month: "short",
+    day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
   }).format(new Date(value));
 }
 
-function formatSignedPercent(value) {
-  const amount = Number(value);
-  if (!Number.isFinite(amount)) return "";
-  return `${amount > 0 ? "+" : ""}${amount.toFixed(2)}%`;
+function formatSignedPct(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "";
+  return `${n > 0 ? "+" : ""}${n.toFixed(2)}%`;
 }
 
 function sideClass(side) {
@@ -69,18 +57,18 @@ function sideClass(side) {
 }
 
 function statusClass(status, result) {
-  if (status === "ACTIVE") return "pill-warning";
-  if (result === "SL_HIT") return "pill-danger";
+  if (status === "ACTIVE")   return "pill-warning";
+  if (result === "SL_HIT")   return "pill-danger";
   return "pill-success";
 }
 
-// ─── Live countdown — ticks every second while signal is ACTIVE ───────────────
+/* ─── Live countdown ticker ────────────────────────────────────────────────── */
 function ExpiryCell({ createdAt, status, timeframe }) {
-  const [, setTick] = useState(0);
+  const [, tick] = useState(0);
 
   useEffect(() => {
     if (status !== "ACTIVE") return;
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    const id = setInterval(() => tick(t => t + 1), 1000);
     return () => clearInterval(id);
   }, [status]);
 
@@ -92,7 +80,6 @@ function ExpiryCell({ createdAt, status, timeframe }) {
   return (
     <span
       className={`pill ${info.urgent ? "pill-danger" : "pill-neutral"}`}
-      title={`Expires at ${new Date(info.expiresAt).toLocaleString("en-IN")}`}
       style={{ fontVariantNumeric: "tabular-nums", minWidth: "60px", display: "inline-block", textAlign: "center" }}
     >
       ⏱ {info.label}
@@ -100,18 +87,201 @@ function ExpiryCell({ createdAt, status, timeframe }) {
   );
 }
 
-// ─── Leverage badge — colour coded by risk ───────────────────────────────────
+/* ─── Leverage badge ───────────────────────────────────────────────────────── */
 function LeverageBadge({ leverage }) {
   const lev = Number(leverage);
   if (!Number.isFinite(lev) || lev <= 0) return <span style={{ opacity: 0.4 }}>—</span>;
   const cls = lev >= 40 ? "pill-danger" : lev >= 25 ? "pill-warning" : "pill-success";
+  return <span className={`pill ${cls}`}>{lev}×</span>;
+}
+
+/* ─── Confidence badge ─────────────────────────────────────────────────────── */
+function ConfBadge({ confidence }) {
+  const cls = confidence >= 85 ? "pill-success" : confidence >= 70 ? "pill-warning" : "pill-neutral";
+  return <span className={`pill ${cls}`}>{confidence}%</span>;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   MOBILE SIGNAL CARD — shown when screen width < 640px
+   Uses CSS class .signal-card defined in index.css
+══════════════════════════════════════════════════════════════════════════════ */
+function SignalCard({ signal, onChartOpen }) {
+  const move = Number(signal.signalMovePercent);
+  const hasMove = Number.isFinite(move);
+  const livePrice = formatPrice(signal.livePrice ?? signal.closePrice);
+  const confirmations = Array.isArray(signal.confirmations)
+    ? signal.confirmations.slice(0, 4).join(" · ")
+    : "";
+
   return (
-    <span className={`pill ${cls}`} title={`Suggested leverage: ${lev}×`}>
-      {lev}×
-    </span>
+    <article className="signal-card">
+      {/* Top row: coin + side + status */}
+      <div className="signal-card-header">
+        <button
+          className="signal-card-coin"
+          onClick={() => onChartOpen(signal.coin, signal.timeframe)}
+          type="button"
+        >
+          {signal.coin.replace("USDT", "")}
+          <span style={{ opacity: 0.5, fontSize: "0.8em" }}>/USDT</span>
+          <span style={{ fontSize: "0.75em", opacity: 0.55 }}>📈</span>
+        </button>
+        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+          <span className={`pill ${sideClass(signal.side)}`}>{signal.side}</span>
+          <span className={`pill ${statusClass(signal.status, signal.result)}`}>
+            {signal.result || signal.status}
+          </span>
+        </div>
+      </div>
+
+      {/* Price grid */}
+      <div className="signal-card-grid">
+        <div className="signal-card-row">
+          <span className="signal-card-label">Entry</span>
+          <span className="signal-card-value">{formatPrice(signal.entry)}</span>
+        </div>
+
+        <div className="signal-card-row">
+          <span className="signal-card-label">Live Price</span>
+          <span className="signal-card-value">
+            {livePrice}
+            {hasMove && (
+              <span
+                className={`pill ${move >= 0 ? "pill-success" : "pill-danger"}`}
+                style={{ marginLeft: "5px", fontSize: "0.65rem" }}
+              >
+                {formatSignedPct(move)}
+              </span>
+            )}
+          </span>
+        </div>
+
+        <div className="signal-card-row">
+          <span className="signal-card-label">Stop Loss</span>
+          <span className="signal-card-value" style={{ color: "#ffd2d8" }}>{formatPrice(signal.stopLoss)}</span>
+        </div>
+
+        <div className="signal-card-row">
+          <span className="signal-card-label">TP1</span>
+          <span className="signal-card-value" style={{ color: "#c9ffe5" }}>{formatPrice(signal.tp1)}</span>
+        </div>
+
+        <div className="signal-card-row">
+          <span className="signal-card-label">TP2</span>
+          <span className="signal-card-value" style={{ color: "#c9ffe5" }}>{formatPrice(signal.tp2)}</span>
+        </div>
+
+        <div className="signal-card-row">
+          <span className="signal-card-label">TP3</span>
+          <span className="signal-card-value" style={{ color: "#c9ffe5" }}>{formatPrice(signal.tp3)}</span>
+        </div>
+
+        <div className="signal-card-row">
+          <span className="signal-card-label">Confidence</span>
+          <span className="signal-card-value"><ConfBadge confidence={signal.confidence} /></span>
+        </div>
+
+        <div className="signal-card-row">
+          <span className="signal-card-label">Leverage</span>
+          <span className="signal-card-value">
+            <LeverageBadge leverage={signal.leverage ?? signal.indicatorSnapshot?.leverage} />
+          </span>
+        </div>
+
+        <div className="signal-card-row">
+          <span className="signal-card-label">Timeframe</span>
+          <span className="signal-card-value">{signal.timeframe}</span>
+        </div>
+
+        <div className="signal-card-row">
+          <span className="signal-card-label">Expires</span>
+          <span className="signal-card-value">
+            <ExpiryCell createdAt={signal.createdAt} status={signal.status} timeframe={signal.timeframe} />
+          </span>
+        </div>
+      </div>
+
+      {/* Confirmations */}
+      {confirmations ? (
+        <p className="signal-card-confirmations">{confirmations}</p>
+      ) : null}
+
+      {/* Created */}
+      <div style={{ color: "var(--c-muted)", fontSize: "0.72rem", marginTop: "2px" }}>
+        Created {formatDate(signal.createdAt)}
+      </div>
+    </article>
   );
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+   DESKTOP TABLE ROW
+══════════════════════════════════════════════════════════════════════════════ */
+function TableRow({ signal, compact, onChartOpen }) {
+  return (
+    <tr>
+      <td>
+        <button
+          className="coin-chart-btn"
+          onClick={() => onChartOpen(signal.coin, signal.timeframe)}
+          title={`View ${signal.coin} chart`}
+          type="button"
+        >
+          <strong>{signal.coin}</strong>
+          <span className="coin-chart-icon">📈</span>
+        </button>
+      </td>
+
+      <td><span className={`pill ${sideClass(signal.side)}`}>{signal.side}</span></td>
+
+      <td>{signal.timeframe}</td>
+
+      <td>{formatPrice(signal.entry)}</td>
+
+      <td>
+        <strong>{formatPrice(signal.livePrice ?? signal.closePrice)}</strong>
+        {Number.isFinite(Number(signal.signalMovePercent)) && (
+          <div>
+            <span className={`pill ${Number(signal.signalMovePercent) >= 0 ? "pill-success" : "pill-danger"}`}>
+              {formatSignedPct(signal.signalMovePercent)}
+            </span>
+          </div>
+        )}
+      </td>
+
+      <td>{formatPrice(signal.stopLoss)}</td>
+      <td>{formatPrice(signal.tp1)}</td>
+      <td>{formatPrice(signal.tp2)}</td>
+      <td>{formatPrice(signal.tp3)}</td>
+
+      <td><ConfBadge confidence={signal.confidence} /></td>
+
+      <td><LeverageBadge leverage={signal.leverage ?? signal.indicatorSnapshot?.leverage} /></td>
+
+      {!compact && (
+        <td>
+          <ExpiryCell createdAt={signal.createdAt} status={signal.status} timeframe={signal.timeframe} />
+        </td>
+      )}
+
+      <td>
+        <span className={`pill ${statusClass(signal.status, signal.result)}`}>
+          {signal.result || signal.status}
+        </span>
+      </td>
+
+      <td>{formatDate(signal.createdAt)}</td>
+    </tr>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   MAIN EXPORT
+   - Mobile (< 640px): renders SignalCard components
+   - Desktop (≥ 640px): renders scrollable table
+   Switching is done via CSS — both are rendered, one is hidden via CSS
+   This avoids any JS screen-size detection which can cause flickers.
+══════════════════════════════════════════════════════════════════════════════ */
 export default function SignalTable({ compact = false, emptyLabel, signals }) {
   const [chartCoin, setChartCoin] = useState(null);
   const [chartTf, setChartTf]     = useState("15m");
@@ -125,124 +295,64 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
 
   return (
     <>
-      <div className="table-card">
-        <div className="table-wrap">
-          <table className={`signal-table${compact ? " signal-table-compact" : ""}`}>
-            <thead>
-              <tr>
-                <th>Coin</th>
-                <th>Side</th>
-                <th>TF</th>
-                <th>Entry</th>
-                <th>Live Price</th>
-                <th>SL</th>
-                <th>TP1</th>
-                <th>TP2</th>
-                <th>TP3</th>
-                <th>Confidence</th>
-                <th>Leverage</th>
-                {!compact && <th>Expires In</th>}
-                <th>Status</th>
-                <th>Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {signals.length ? (
-                signals.map((signal) => (
-                  <tr key={signal.id}>
-                    {/* Coin — click to open TradingView chart */}
-                    <td>
-                      <button
-                        className="coin-chart-btn"
-                        onClick={() => openChart(signal.coin, signal.timeframe)}
-                        title={`View ${signal.coin} chart`}
-                        type="button"
-                      >
-                        <strong>{signal.coin}</strong>
-                        <span className="coin-chart-icon">📈</span>
-                      </button>
-                    </td>
+      {/* ── MOBILE CARD VIEW (hidden at 640px+ via CSS) ── */}
+      <div className="signal-view-mobile">
+        {signals.length ? (
+          <div className="signal-cards">
+            {signals.map(signal => (
+              <SignalCard key={signal.id} signal={signal} onChartOpen={openChart} />
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state" style={{ padding: "16px 0" }}>{emptyLabel}</div>
+        )}
+      </div>
 
-                    {/* Side */}
-                    <td>
-                      <span className={`pill ${sideClass(signal.side)}`}>{signal.side}</span>
-                    </td>
-
-                    {/* Timeframe */}
-                    <td>{signal.timeframe}</td>
-
-                    {/* Entry price */}
-                    <td>{formatPrice(signal.entry)}</td>
-
-                    {/* Live price with move % */}
-                    <td>
-                      <strong>{formatPrice(signal.livePrice ?? signal.closePrice)}</strong>
-                      {Number.isFinite(Number(signal.signalMovePercent)) && (
-                        <div>
-                          <span className={`pill ${Number(signal.signalMovePercent) >= 0 ? "pill-success" : "pill-danger"}`}>
-                            {formatSignedPercent(signal.signalMovePercent)}
-                          </span>
-                        </div>
-                      )}
-                    </td>
-
-                    {/* SL / TPs */}
-                    <td>{formatPrice(signal.stopLoss)}</td>
-                    <td>{formatPrice(signal.tp1)}</td>
-                    <td>{formatPrice(signal.tp2)}</td>
-                    <td>{formatPrice(signal.tp3)}</td>
-
-                    {/* Confidence — colour coded */}
-                    <td>
-                      <span className={`pill ${
-                        signal.confidence >= 85 ? "pill-success"
-                        : signal.confidence >= 70 ? "pill-warning"
-                        : "pill-neutral"
-                      }`}>
-                        {signal.confidence}%
-                      </span>
-                    </td>
-
-                    {/* Suggested leverage */}
-                    <td>
-                      <LeverageBadge leverage={signal.leverage ?? signal.indicatorSnapshot?.leverage} />
-                    </td>
-
-                    {/* Expiry countdown — full mode only */}
-                    {!compact && (
-                      <td>
-                        <ExpiryCell
-                          createdAt={signal.createdAt}
-                          status={signal.status}
-                          timeframe={signal.timeframe}
-                        />
-                      </td>
-                    )}
-
-                    {/* Status / result */}
-                    <td>
-                      <span className={`pill ${statusClass(signal.status, signal.result)}`}>
-                        {signal.result || signal.status}
-                      </span>
-                    </td>
-
-                    {/* Created at */}
-                    <td>{formatDate(signal.createdAt)}</td>
-                  </tr>
-                ))
-              ) : (
+      {/* ── DESKTOP TABLE VIEW (hidden below 640px via CSS) ── */}
+      <div className="signal-view-desktop">
+        <div className="table-card">
+          <div className="table-wrap">
+            <table className={`signal-table${compact ? " signal-table-compact" : ""}`}>
+              <thead>
                 <tr>
-                  <td className="empty-row" colSpan={colCount}>
-                    {emptyLabel}
-                  </td>
+                  <th>Coin</th>
+                  <th>Side</th>
+                  <th>TF</th>
+                  <th>Entry</th>
+                  <th>Live Price</th>
+                  <th>SL</th>
+                  <th>TP1</th>
+                  <th>TP2</th>
+                  <th>TP3</th>
+                  <th>Confidence</th>
+                  <th>Leverage</th>
+                  {!compact && <th>Expires In</th>}
+                  <th>Status</th>
+                  <th>Created</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {signals.length ? (
+                  signals.map(signal => (
+                    <TableRow
+                      key={signal.id}
+                      signal={signal}
+                      compact={compact}
+                      onChartOpen={openChart}
+                    />
+                  ))
+                ) : (
+                  <tr>
+                    <td className="empty-row" colSpan={colCount}>{emptyLabel}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
-      {/* Chart modal — opens on coin click */}
+      {/* Chart modal */}
       {chartCoin && (
         <CandlestickChart
           coin={chartCoin}
