@@ -46,24 +46,6 @@ function addDaysToIso(days) {
   return date.toISOString();
 }
 
-function formatSubscriptionEndsAt(value) {
-  if (!value) {
-    return "No expiry";
-  }
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return "No expiry";
-  }
-
-  return new Intl.DateTimeFormat("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  }).format(date);
-}
-
 function buildPlanUpdate(plan) {
   if (plan === "FREE_TRIAL") {
     return {
@@ -1139,7 +1121,6 @@ export default function Dashboard() {
                   <span>
                     {account.role} • {account.plan} • {account.subscriptionStatus}
                   </span>
-                  <span>Access till {formatSubscriptionEndsAt(account.subscriptionEndsAt)}</span>
                 </div>
 
                 <div className="button-row">
