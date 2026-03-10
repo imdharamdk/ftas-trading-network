@@ -208,18 +208,10 @@ async function getCandles({ exchange, symbolToken, interval, from, to }) {
 
   const data = await postSecure("/rest/secure/angelbroking/historical/v1/getCandleData", payload);
   
-  // Full response log — taaki exact structure pata chale
-  console.log('[smartApi] Candle raw response:', JSON.stringify(data).slice(0, 500));
-  
-  // Angel One ke alag possible response structures handle karo
-  const candles =
-    data?.data?.candles ||   // { data: { candles: [...] } }
-    data?.data ||            // { data: [...] }  
-    data?.candles ||         // { candles: [...] }
-    (Array.isArray(data) ? data : null) || // direct array
-    [];
-    
-  console.log('[smartApi] Parsed candles count:', candles.length);
+  // Official Angel One response: { status: true, data: [ [...], [...] ] }
+  // data.data is a direct array of candles — NO .candles property
+  const candles = Array.isArray(data?.data) ? data.data : [];
+  console.log('[smartApi] Candles received:', candles.length, 'for', exchange, symbolToken, interval);
   return candles;
 }
 
