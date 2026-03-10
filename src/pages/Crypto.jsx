@@ -15,7 +15,7 @@ function formatPrice(value) {
   return amount.toFixed(8);
 }
 
-export default function Market() {
+export default function Crypto() {
   const [engine, setEngine] = useState(null);
   const [overview, setOverview] = useState(null);
   const [activeSignals, setActiveSignals] = useState([]);
@@ -349,7 +349,7 @@ export default function Market() {
         </article>
       </section>
 
-      {/* Full market table — all Binance Futures USDT coins */}
+      {/* Full market — mobile cards + desktop table */}
       <section className="panel">
         <div className="panel-header">
           <div>
@@ -358,78 +358,83 @@ export default function Market() {
           </div>
           <span className="pill pill-neutral">{filteredTickers.length} pairs</span>
         </div>
-        <div className="table-wrap">
-          <table className="signal-table signal-table-compact">
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Price</th>
-                <th>24h %</th>
-                <th>High</th>
-                <th>Low</th>
-                <th>Quote Volume</th>
-                <th>Chart</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredTickers.length ? (
-                filteredTickers.map((ticker) => {
-                  const livePrice = tickerPrices[ticker.symbol];
-                  const displayPrice = livePrice ?? ticker.price;
-                  const isLive = Boolean(livePrice);
-                  return (
-                    <tr key={ticker.symbol} className="ticker-row">
-                      <td>
-                        <button
-                          className="coin-chart-btn"
-                          onClick={() => setChartCoin(ticker.symbol)}
-                          title={`View ${ticker.symbol} chart`}
-                          type="button"
-                        >
-                          <strong>{ticker.symbol}</strong>
-                        </button>
-                      </td>
-                      <td>
-                        <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                          {isLive && (
-                            <span
-                              style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#22c55e", display: "inline-block", flexShrink: 0 }}
-                              title="Live price"
-                            />
-                          )}
-                          <strong>{formatPrice(displayPrice)}</strong>
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`pill ${ticker.changePercent >= 0 ? "pill-success" : "pill-danger"}`}>
-                          {Number(ticker.changePercent || 0).toFixed(2)}%
-                        </span>
-                      </td>
-                      <td>{formatPrice(ticker.highPrice)}</td>
-                      <td>{formatPrice(ticker.lowPrice)}</td>
-                      <td>{Number(ticker.quoteVolume || 0).toLocaleString("en-US", { maximumFractionDigits: 0 })}</td>
-                      <td>
-                        <button
-                          className="button button-ghost"
-                          onClick={() => setChartCoin(ticker.symbol)}
-                          style={{ padding: "2px 8px", fontSize: "0.75em" }}
-                          type="button"
-                        >
-                          📈
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              ) : (
+
+        {/* ── MOBILE: stacked cards (hidden ≥640px) ── */}
+        <div className="signal-view-mobile">
+          {filteredTickers.length ? (
+            <div className="ticker-cards">
+              {filteredTickers.map((ticker) => {
+                const livePrice = tickerPrices[ticker.symbol];
+                const displayPrice = livePrice ?? ticker.price;
+                const isUp = Number(ticker.changePercent || 0) >= 0;
+                return (
+                  <div
+                    className="ticker-card"
+                    key={ticker.symbol}
+                    onClick={() => setChartCoin(ticker.symbol)}
+                  >
+                    <div className="ticker-card-top">
+                      <strong className="ticker-card-symbol">{ticker.symbol.replace("USDT","")}<span style={{opacity:0.4,fontSize:"0.7em"}}>/USDT</span></strong>
+                      <span className={`pill ${isUp ? "pill-success" : "pill-danger"}`}>
+                        {Number(ticker.changePercent || 0).toFixed(2)}%
+                      </span>
+                    </div>
+                    <div className="ticker-card-price">
+                      {livePrice && <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#22c55e",display:"inline-block",marginRight:"5px",flexShrink:0}} />}
+                      <strong>{formatPrice(displayPrice)}</strong>
+                    </div>
+                    <div className="ticker-card-meta">
+                      <span>H {formatPrice(ticker.highPrice)}</span>
+                      <span>L {formatPrice(ticker.lowPrice)}</span>
+                      <span>Vol {Number(ticker.quoteVolume||0).toLocaleString("en-US",{notation:"compact",maximumFractionDigits:1})}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="empty-state">{loading ? "Loading Binance data..." : coinSearch ? `No coins matching "${coinSearch}"` : "Binance data unavailable."}</div>
+          )}
+        </div>
+
+        {/* ── DESKTOP: scrollable table (hidden <640px) ── */}
+        <div className="signal-view-desktop">
+          <div className="table-wrap">
+            <table className="signal-table signal-table-compact">
+              <thead>
                 <tr>
-                  <td className="empty-row" colSpan="7">
-                    {loading ? "Loading Binance data..." : coinSearch ? `No coins found matching "${coinSearch}"` : "Binance data unavailable."}
-                  </td>
+                  <th>Symbol</th><th>Price</th><th>24h %</th><th>High</th><th>Low</th><th>Volume</th><th>Chart</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {filteredTickers.length ? (
+                  filteredTickers.map((ticker) => {
+                    const livePrice = tickerPrices[ticker.symbol];
+                    const displayPrice = livePrice ?? ticker.price;
+                    const isLive = Boolean(livePrice);
+                    return (
+                      <tr key={ticker.symbol} className="ticker-row">
+                        <td><button className="coin-chart-btn" onClick={() => setChartCoin(ticker.symbol)} type="button"><strong>{ticker.symbol}</strong></button></td>
+                        <td>
+                          <span style={{display:"flex",alignItems:"center",gap:"4px"}}>
+                            {isLive && <span style={{width:"6px",height:"6px",borderRadius:"50%",background:"#22c55e",display:"inline-block",flexShrink:0}} />}
+                            <strong>{formatPrice(displayPrice)}</strong>
+                          </span>
+                        </td>
+                        <td><span className={`pill ${ticker.changePercent >= 0 ? "pill-success" : "pill-danger"}`}>{Number(ticker.changePercent||0).toFixed(2)}%</span></td>
+                        <td>{formatPrice(ticker.highPrice)}</td>
+                        <td>{formatPrice(ticker.lowPrice)}</td>
+                        <td>{Number(ticker.quoteVolume||0).toLocaleString("en-US",{maximumFractionDigits:0})}</td>
+                        <td><button className="button button-ghost" onClick={() => setChartCoin(ticker.symbol)} style={{padding:"2px 8px",fontSize:"0.75em"}} type="button">📈</button></td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr><td className="empty-row" colSpan="7">{loading ? "Loading..." : coinSearch ? `No coins matching "${coinSearch}"` : "Binance data unavailable."}</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
