@@ -105,7 +105,6 @@ function summarizePerformanceGroup(signals, labelAccessor) {
   signals.forEach((signal) => {
     const label = labelAccessor(signal);
     const current = groups.get(label) || {
-      expiries: 0,
       label,
       losses: 0,
       total: 0,
@@ -118,8 +117,6 @@ function summarizePerformanceGroup(signals, labelAccessor) {
       current.losses += 1;
     } else if (isWinningResult(signal.result)) {
       current.wins += 1;
-    } else if (signal.result === "EXPIRED") {
-      current.expiries += 1;
     }
 
     groups.set(label, current);
@@ -169,7 +166,6 @@ function buildPerformance(signals) {
     avgConfidence: completedSignals.length
       ? Number((completedSignals.reduce((sum, signal) => sum + Number(signal.confidence || 0), 0) / completedSignals.length).toFixed(1))
       : 0,
-    expiries: closedSignals.filter((signal) => signal.result === "EXPIRED").length,
     losses: closedSignals.filter((signal) => signal.result === "SL_HIT").length,
     totalClosed: closedSignals.length,
     wins: closedSignals.filter((signal) => isWinningResult(signal.result)).length,

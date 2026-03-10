@@ -784,7 +784,7 @@ export default function Dashboard() {
                 <div>
                   <strong>{item.label}</strong>
                   <span>
-                    Win {item.winRate}% • W {item.wins} • SL {item.losses} • Exp {item.expiries}
+                    Win {item.winRate}% • W {item.wins} • SL {item.losses}
                   </span>
                 </div>
                 <span className={`pill ${item.winRate >= 50 ? "pill-success" : "pill-danger"}`}>{item.total} trades</span>

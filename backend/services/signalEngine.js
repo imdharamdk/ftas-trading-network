@@ -19,15 +19,6 @@ const MIN_SCAN_QUOTE_VOLUME_USDT = 12_000_000;
 const MIN_SCAN_TRADE_COUNT_24H = 15_000;
 const MIN_SCAN_OPEN_INTEREST_USDT = 5_000_000;
 
-const SIGNAL_EXPIRY_MS = {
-  "5m":  30  * 60 * 1000,
-  "15m": 4   * 60 * 60 * 1000,
-  "1h":  16  * 60 * 60 * 1000,
-  "4h":  72  * 60 * 60 * 1000,
-  "12h": 7   * 24 * 60 * 60 * 1000,   // 7 days
-  "1d":  21  * 24 * 60 * 60 * 1000,   // 21 days
-};
-
 const RULE_VERSION = "v11_timeframe_filters";
 const DEFAULT_PUBLISH_FLOOR = 85;
 const STRENGTH_THRESHOLDS = { STRONG: 92, MEDIUM: 85 };
@@ -766,12 +757,6 @@ async function evaluateActiveSignals() {
   const closed = [];
   await mutateCollection("signals", records => records.map(sig => {
     if (sig.status !== SIGNAL_STATUS.ACTIVE) return sig;
-    const age    = Date.now() - new Date(sig.createdAt).getTime();
-    const expiry = SIGNAL_EXPIRY_MS[sig.timeframe] || SIGNAL_EXPIRY_MS["15m"];
-    if (age > expiry) {
-      const u = { ...sig, status: SIGNAL_STATUS.CANCELLED, result: "EXPIRED", closedAt: now, updatedAt: now };
-      closed.push(u); return u;
-    }
     const price = prices[sig.coin];
     if (!Number.isFinite(price)) return sig;
     const hit = result => { const u = { ...sig, status: SIGNAL_STATUS.CLOSED, result, closePrice: roundPrice(price), closedAt: now, updatedAt: now }; closed.push(u); return u; };
