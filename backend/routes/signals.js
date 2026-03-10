@@ -3,6 +3,8 @@ const { requireAdmin, requireAuth, requireSignalAccess } = require("../middlewar
 const { SIGNAL_STATUS } = require("../models/Signal");
 const { mutateCollection, readCollection, writeCollection } = require("../storage/fileStore");
 const { getPrices } = require("../services/binanceService");
+const { getLtp } = require("../services/smartApiService");
+const { getInstrumentUniverse } = require("../services/smartInstrumentService");
 const { createManualSignal, getStatus, scanNow, start, stop } = require("../services/signalEngine");
 
 const router = express.Router();
@@ -251,13 +253,70 @@ function enrichSignalsWithPrices(signals, prices = {}) {
 }
 
 async function attachLivePrices(signals) {
-  if (!signals.length) {
-    return signals;
-  }
+  if (!signals.length) return signals;
 
   try {
-    const prices = await getPrices([...new Set(signals.map((signal) => signal.coin))]);
-    return enrichSignalsWithPrices(signals, prices);
+    const allCoins = [...new Set(signals.map((s) => s.coin).filter(Boolean))];
+    const isIndianStock = (c) => /-(EQ|BE|N1|BL|IL|SM|GR|ST)$/i.test(c);
+    const stockCoins  = allCoins.filter(isIndianStock);
+    const cryptoCoins = allCoins.filter((c) => !isIndianStock(c));
+
+    const cryptoPrices = cryptoCoins.length ? await getPrices(cryptoCoins) : {};
+    const stockPriceMap = {};
+
+    if (stockCoins.length) {
+      try {
+        const universe = getInstrumentUniverse();
+        const tokenMap = {};
+        for (const inst of universe) {
+          const key = (inst.symbol || inst.tradingSymbol || "").toUpperCase();
+          if (key) tokenMap[key] = { exchange: inst.exchange, token: String(inst.token) };
+        }
+        const byExchange = {};
+        for (const coin of stockCoins) {
+          const info = tokenMap[coin];
+          if (!info) continue;
+          if (!byExchange[info.exchange]) byExchange[info.exchange] = [];
+          byExchange[info.exchange].push(info.token);
+        }
+        if (Object.keys(byExchange).length) {
+          const { ensureSession } = require("../services/smartApiService");
+          const axios = require("axios");
+          const token = await ensureSession();
+          const baseUrl = process.env.SMART_API_BASE_URL || "https://apiconnect.angelone.in";
+          const resp = await axios.post(
+            `${baseUrl}/rest/secure/angelbroking/market/v1/quote/`,
+            { mode: "LTP", exchangeTokens: byExchange },
+            {
+              headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+                "X-PrivateKey": process.env.SMART_API_KEY,
+                "X-UserType": "USER",
+                "X-SourceID": "WEB",
+                Authorization: `Bearer ${token}`,
+              },
+              timeout: 8000,
+            }
+          );
+          const tokenToCoin = {};
+          for (const coin of stockCoins) {
+            const info = tokenMap[coin];
+            if (info) tokenToCoin[info.token] = coin;
+          }
+          for (const item of resp.data?.data?.fetched || []) {
+            const coinName = tokenToCoin[String(item.symbolToken)];
+            if (coinName && Number.isFinite(Number(item.ltp))) {
+              stockPriceMap[coinName] = Number(item.ltp);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[attachLivePrices] Stock LTP failed:", e.message);
+      }
+    }
+
+    return enrichSignalsWithPrices(signals, { ...cryptoPrices, ...stockPriceMap });
   } catch {
     return signals;
   }
@@ -327,22 +386,102 @@ router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) =>
       .filter(Boolean);
 
     if (!coins.length) {
-      return res.json({
-        prices: [],
-      });
+      return res.json({ prices: [] });
     }
 
-    const prices = await getPrices([...new Set(coins)]);
+    const uniqueCoins = [...new Set(coins)];
+
+    // Split coins: Indian stocks end with -EQ, -BE, or have NSE/BSE prefix pattern
+    const isIndianStock = (coin) => /-(EQ|BE|N1|BL|IL|SM|GR|ST)$/i.test(coin) || coin.includes("NSE:") || coin.includes("BSE:");
+    const stockCoins  = uniqueCoins.filter(isIndianStock);
+    const cryptoCoins = uniqueCoins.filter((c) => !isIndianStock(c));
+
+    // Fetch crypto prices from Binance/Bybit
+    const cryptoPrices = cryptoCoins.length ? await getPrices(cryptoCoins) : {};
+
+    // Fetch Indian stock prices from SmartAPI in batches of 50
+    const stockPriceMap = {};
+    if (stockCoins.length) {
+      try {
+        // Build token map: coin -> { exchange, token }
+        const universe = getInstrumentUniverse();
+        const tokenMap = {};
+        for (const inst of universe) {
+          const key = (inst.symbol || inst.tradingSymbol || "").toUpperCase();
+          if (key) tokenMap[key] = { exchange: inst.exchange, token: String(inst.token) };
+        }
+
+        // Batch into groups of 50 (Angel One quote API limit)
+        const BATCH = 50;
+        for (let i = 0; i < stockCoins.length; i += BATCH) {
+          const batch = stockCoins.slice(i, i + BATCH);
+
+          // Group by exchange
+          const byExchange = {};
+          for (const coin of batch) {
+            const info = tokenMap[coin];
+            if (!info) continue;
+            if (!byExchange[info.exchange]) byExchange[info.exchange] = [];
+            byExchange[info.exchange].push(info.token);
+          }
+
+          if (!Object.keys(byExchange).length) continue;
+
+          try {
+            const { ensureSession } = require("../services/smartApiService");
+            const axios = require("axios");
+            const token = await ensureSession();
+            const apiKey = process.env.SMART_API_KEY;
+            const baseUrl = process.env.SMART_API_BASE_URL || "https://apiconnect.angelone.in";
+
+            const resp = await axios.post(
+              `${baseUrl}/rest/secure/angelbroking/market/v1/quote/`,
+              { mode: "LTP", exchangeTokens: byExchange },
+              {
+                headers: {
+                  "Content-Type": "application/json",
+                  Accept: "application/json",
+                  "X-PrivateKey": apiKey,
+                  "X-UserType": "USER",
+                  "X-SourceID": "WEB",
+                  Authorization: `Bearer ${token}`,
+                },
+                timeout: 8000,
+              }
+            );
+
+            // Build reverse map: token -> coin name
+            const tokenToCoin = {};
+            for (const coin of batch) {
+              const info = tokenMap[coin];
+              if (info) tokenToCoin[info.token] = coin;
+            }
+
+            const fetched = resp.data?.data?.fetched || [];
+            for (const item of fetched) {
+              const coinName = tokenToCoin[String(item.symbolToken)];
+              if (coinName && Number.isFinite(Number(item.ltp))) {
+                stockPriceMap[coinName] = Number(item.ltp);
+              }
+            }
+          } catch (batchErr) {
+            console.warn("[live-prices] SmartAPI batch failed:", batchErr.message);
+          }
+        }
+      } catch (stockErr) {
+        console.warn("[live-prices] Stock price fetch failed:", stockErr.message);
+      }
+    }
+
+    const allPrices = { ...cryptoPrices, ...stockPriceMap };
     const liveUpdatedAt = new Date().toISOString();
-    const priceRows = coins.map((coin) => ({
+    const priceRows = uniqueCoins.map((coin) => ({
       coin,
-      livePrice: Number.isFinite(prices[coin]) ? prices[coin] : null,
+      livePrice: Number.isFinite(allPrices[coin]) ? allPrices[coin] : null,
       liveUpdatedAt,
     }));
 
-    return res.json({
-      prices: priceRows,
-    });
+    return res.json({ prices: priceRows });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }
