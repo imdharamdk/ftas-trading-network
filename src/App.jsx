@@ -4,6 +4,7 @@ import { useSession } from "./context/useSession";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import Market from "./pages/Market";
+import Crypto from "./pages/Crypto";
 import News from "./pages/News";
 import Signup from "./pages/Signup";
 import Stocks from "./pages/Stocks";
@@ -65,10 +66,18 @@ export default function App() {
           <Route
             element={
               <SessionGate>
-                <Market />
+                <Crypto />
               </SessionGate>
             }
             path="/market"
+          />
+          <Route
+            element={
+              <SessionGate>
+                <Crypto />
+              </SessionGate>
+            }
+            path="/crypto"
           />
           <Route
             element={
