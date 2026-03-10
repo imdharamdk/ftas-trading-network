@@ -286,7 +286,7 @@ async function attachLivePrices(signals) {
           const baseUrl = process.env.SMART_API_BASE_URL || "https://apiconnect.angelone.in";
           const resp = await axios.post(
             `${baseUrl}/rest/secure/angelbroking/market/v1/quote/`,
-            { mode: "LTP", exchangeTokens: byExchange },
+            { mode: "OHLC", exchangeTokens: byExchange },
             {
               headers: {
                 "Content-Type": "application/json",
@@ -306,8 +306,10 @@ async function attachLivePrices(signals) {
           }
           for (const item of resp.data?.data?.fetched || []) {
             const coinName = tokenToCoin[String(item.symbolToken)];
-            if (coinName && Number.isFinite(Number(item.ltp))) {
-              stockPriceMap[coinName] = Number(item.ltp);
+            // Market open: use ltp. Market closed: fallback to close (last closing price)
+            const price = Number(item.ltp) || Number(item.close);
+            if (coinName && Number.isFinite(price) && price > 0) {
+              stockPriceMap[coinName] = price;
             }
           }
         }
@@ -436,7 +438,7 @@ router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) =>
 
             const resp = await axios.post(
               `${baseUrl}/rest/secure/angelbroking/market/v1/quote/`,
-              { mode: "LTP", exchangeTokens: byExchange },
+              { mode: "OHLC", exchangeTokens: byExchange },
               {
                 headers: {
                   "Content-Type": "application/json",
@@ -460,8 +462,10 @@ router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) =>
             const fetched = resp.data?.data?.fetched || [];
             for (const item of fetched) {
               const coinName = tokenToCoin[String(item.symbolToken)];
-              if (coinName && Number.isFinite(Number(item.ltp))) {
-                stockPriceMap[coinName] = Number(item.ltp);
+              // Use ltp if market open, fallback to close (prev closing price) if market closed
+              const price = Number(item.ltp) || Number(item.close);
+              if (coinName && Number.isFinite(price) && price > 0) {
+                stockPriceMap[coinName] = price;
               }
             }
           } catch (batchErr) {
