@@ -1055,3 +1055,69 @@ h1, h2, h3 { letter-spacing: -0.03em; line-height: 1.2; }
   .signal-view-desktop { display: block; }
   .signal-view-mobile  { display: none; }
 }
+
+
+/* ─── TICKER CARDS (mobile market view) ─────────────────────────────────────── */
+.ticker-cards {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.ticker-card {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: var(--r-lg);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.ticker-card:hover,
+.ticker-card:active {
+  background: rgba(255,255,255,0.06);
+  border-color: rgba(255,138,61,0.35);
+}
+
+.ticker-card-top {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  justify-content: space-between;
+}
+
+.ticker-card-symbol {
+  font-size: 0.88rem;
+  line-height: 1.2;
+}
+
+.ticker-card-price {
+  align-items: center;
+  display: flex;
+  font-size: 0.82rem;
+}
+
+.ticker-card-meta {
+  color: var(--c-muted);
+  display: flex;
+  font-size: 0.72rem;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (min-width: 480px) {
+  .ticker-cards { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* filters-row mobile: stack to single column */
+@media (max-width: 479px) {
+  .filters-row {
+    grid-template-columns: 1fr !important;
+  }
+  .spotlight-grid {
+    grid-template-columns: 1fr;
+  }
+}
