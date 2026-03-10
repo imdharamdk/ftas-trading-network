@@ -183,10 +183,15 @@ async function getQuote({ exchange, symbolToken, tradingSymbol, symbolName }) {
 
 async function getLtp({ exchange, symbolToken }) {
   if (!exchange || !symbolToken) throw new Error("getLtp requires exchange and symbolToken");
-  const data = await postSecure("/rest/secure/angelbroking/market/v1/ltp/", {
-    exchange, symboltoken: symbolToken,
+  // Correct format per docs: { mode, exchangeTokens: { EXCHANGE: [token] } }
+  const data = await postSecure("/rest/secure/angelbroking/market/v1/quote/", {
+    mode: "LTP",
+    exchangeTokens: { [exchange]: [String(symbolToken)] },
   });
-  return data?.data || null;
+  // Response: { data: { fetched: [{ ltp, tradingSymbol, ... }] } }
+  const fetched = data?.data?.fetched;
+  if (!Array.isArray(fetched) || fetched.length === 0) return null;
+  return fetched[0];
 }
 
 async function getCandles({ exchange, symbolToken, interval, from, to }) {
