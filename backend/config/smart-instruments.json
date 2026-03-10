@@ -1,6 +1,6 @@
 [
   {
-    "symbol": "NSE:RELIANCE",
+    "symbol": "NSE:RELIANCE-EQ",
     "tradingSymbol": "RELIANCE-EQ",
     "exchange": "NSE",
     "segment": "EQUITY",
@@ -8,21 +8,379 @@
     "lotSize": 1
   },
   {
-    "symbol": "NFO:NIFTY24APR23000CE",
-    "tradingSymbol": "NIFTY24APR23000CE",
-    "exchange": "NFO",
-    "segment": "FNO",
-    "token": "123456",
-    "lotSize": 50,
-    "expiry": "2026-04-30"
+    "symbol": "NSE:TCS-EQ",
+    "tradingSymbol": "TCS-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "11536",
+    "lotSize": 1
   },
   {
-    "symbol": "MCX:CRUDEOIL24MAYFUT",
-    "tradingSymbol": "CRUDEOIL-24MAYFUT",
-    "exchange": "MCX",
-    "segment": "COMMODITY",
-    "token": "98765",
-    "lotSize": 10,
-    "expiry": "2026-05-19"
+    "symbol": "NSE:HDFCBANK-EQ",
+    "tradingSymbol": "HDFCBANK-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "1333",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:ICICIBANK-EQ",
+    "tradingSymbol": "ICICIBANK-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "4963",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:INFY-EQ",
+    "tradingSymbol": "INFY-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "1594",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:KOTAKBANK-EQ",
+    "tradingSymbol": "KOTAKBANK-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "1922",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:LT-EQ",
+    "tradingSymbol": "LT-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "11483",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:SBIN-EQ",
+    "tradingSymbol": "SBIN-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "3045",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:BAJFINANCE-EQ",
+    "tradingSymbol": "BAJFINANCE-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "317",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:BHARTIARTL-EQ",
+    "tradingSymbol": "BHARTIARTL-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "10604",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:ASIANPAINT-EQ",
+    "tradingSymbol": "ASIANPAINT-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "236",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:MARUTI-EQ",
+    "tradingSymbol": "MARUTI-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "10999",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:AXISBANK-EQ",
+    "tradingSymbol": "AXISBANK-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "5900",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:TITAN-EQ",
+    "tradingSymbol": "TITAN-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "3506",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:NESTLEIND-EQ",
+    "tradingSymbol": "NESTLEIND-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "17963",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:POWERGRID-EQ",
+    "tradingSymbol": "POWERGRID-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "14977",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:ULTRACEMCO-EQ",
+    "tradingSymbol": "ULTRACEMCO-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "11532",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:SUNPHARMA-EQ",
+    "tradingSymbol": "SUNPHARMA-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "3351",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:TECHM-EQ",
+    "tradingSymbol": "TECHM-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "13538",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:HINDUNILVR-EQ",
+    "tradingSymbol": "HINDUNILVR-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "1394",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:BAJAJFINSV-EQ",
+    "tradingSymbol": "BAJAJFINSV-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "16675",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:JSWSTEEL-EQ",
+    "tradingSymbol": "JSWSTEEL-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "11723",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:TATACONSUM-EQ",
+    "tradingSymbol": "TATACONSUM-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "3432",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:TATASTEEL-EQ",
+    "tradingSymbol": "TATASTEEL-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "3499",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:ADANIENT-EQ",
+    "tradingSymbol": "ADANIENT-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "25",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:ADANIPORTS-EQ",
+    "tradingSymbol": "ADANIPORTS-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "15083",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:COALINDIA-EQ",
+    "tradingSymbol": "COALINDIA-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "20374",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:DIVISLAB-EQ",
+    "tradingSymbol": "DIVISLAB-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "10940",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:DRREDDY-EQ",
+    "tradingSymbol": "DRREDDY-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "881",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:EICHERMOT-EQ",
+    "tradingSymbol": "EICHERMOT-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "910",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:GRASIM-EQ",
+    "tradingSymbol": "GRASIM-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "1232",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:HCLTECH-EQ",
+    "tradingSymbol": "HCLTECH-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "7229",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:HDFCLIFE-EQ",
+    "tradingSymbol": "HDFCLIFE-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "467",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:HEROMOTOCO-EQ",
+    "tradingSymbol": "HEROMOTOCO-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "1348",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:INDUSINDBK-EQ",
+    "tradingSymbol": "INDUSINDBK-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "5258",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:ITC-EQ",
+    "tradingSymbol": "ITC-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "1660",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:M&M-EQ",
+    "tradingSymbol": "M&M-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "2031",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:NTPC-EQ",
+    "tradingSymbol": "NTPC-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "11630",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:ONGC-EQ",
+    "tradingSymbol": "ONGC-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "2475",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:SBILIFE-EQ",
+    "tradingSymbol": "SBILIFE-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "21808",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:SHREECEM-EQ",
+    "tradingSymbol": "SHREECEM-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "3103",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:WIPRO-EQ",
+    "tradingSymbol": "WIPRO-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "3787",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:CIPLA-EQ",
+    "tradingSymbol": "CIPLA-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "694",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:BPCL-EQ",
+    "tradingSymbol": "BPCL-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "526",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:APOLLOHOSP-EQ",
+    "tradingSymbol": "APOLLOHOSP-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "157",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:HINDALCO-EQ",
+    "tradingSymbol": "HINDALCO-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "1363",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:BRITANNIA-EQ",
+    "tradingSymbol": "BRITANNIA-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "547",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NSE:BAJAJ-AUTO-EQ",
+    "tradingSymbol": "BAJAJ-AUTO-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "16669",
+    "lotSize": 1
   }
 ]
