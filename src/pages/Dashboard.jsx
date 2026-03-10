@@ -565,38 +565,6 @@ export default function Dashboard() {
           )}
         </article>
 
-        {isAdmin ? (
-          <article className="panel">
-            <div className="panel-header">
-              <div>
-                <span className="eyebrow">Maintenance</span>
-                <h2>Closed-signal archive</h2>
-              </div>
-            </div>
-            <p className="panel-note">
-              Move every CLOSED trade out of the live dataset or wipe the archive to keep storage lean.
-            </p>
-            <div className="button-row">
-              <button
-                className="button button-secondary"
-                disabled={actionBusy === "ARCHIVE_CLOSED"}
-                onClick={() => handleArchiveAction("ARCHIVE_CLOSED")}
-                type="button"
-              >
-                Archive closed signals
-              </button>
-              <button
-                className="button button-ghost"
-                disabled={actionBusy === "CLEAR_ARCHIVE"}
-                onClick={() => handleArchiveAction("CLEAR_ARCHIVE")}
-                type="button"
-              >
-                Clear archive
-              </button>
-            </div>
-          </article>
-        ) : null}
-
         <article className="panel">
           <div className="panel-header">
             <div>
@@ -919,7 +887,7 @@ export default function Dashboard() {
             loading
               ? "Loading active signals..."
               : isAdmin
-                ? "No active signals yet. Use Run scan now, Seed demo signals, or Post manual signal."
+                ? "No active signals yet. Use Run scan now or post a manual signal."
                 : "No active signals yet. Admin ko scan ya manual signal create karna hoga."
           }
           signals={activeSignals}
@@ -934,6 +902,31 @@ export default function Dashboard() {
           </div>
           <span className="pill pill-neutral">{historySignals.length} recent closes</span>
         </div>
+        {isAdmin ? (
+          <>
+            <p className="panel-note">
+              Move CLOSED trades out of the live dataset or wipe the archive to keep the board snappy.
+            </p>
+            <div className="button-row">
+              <button
+                className="button button-secondary"
+                disabled={actionBusy === "ARCHIVE_CLOSED"}
+                onClick={() => handleArchiveAction("ARCHIVE_CLOSED")}
+                type="button"
+              >
+                Archive closed signals
+              </button>
+              <button
+                className="button button-ghost"
+                disabled={actionBusy === "CLEAR_ARCHIVE"}
+                onClick={() => handleArchiveAction("CLEAR_ARCHIVE")}
+                type="button"
+              >
+                Clear archive
+              </button>
+            </div>
+          </>
+        ) : null}
         <SignalTable emptyLabel={loading ? "Loading history..." : "No closed signals yet."} signals={historySignals} />
       </section>
 
