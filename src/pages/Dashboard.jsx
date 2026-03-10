@@ -130,6 +130,7 @@ export default function Dashboard() {
   });
   const [showExpiryPrompt, setShowExpiryPrompt] = useState(false);
   const paidPlanActive = hasActivePaidPlan(user);
+  const [engine, setEngine] = useState(null);
   const [overview, setOverview] = useState(null);
   const [analytics, setAnalytics] = useState(null);
   const [performance, setPerformance] = useState(null);
@@ -175,11 +176,13 @@ export default function Dashboard() {
       apiFetch("/signals/stats/overview"),
       apiFetch("/signals/stats/analytics"),
       apiFetch("/signals/stats/performance"),
+      apiFetch("/signals/engine/status"),
     ]);
-    const [overviewRes, analyticsRes, performanceRes] = results;
+    const [overviewRes, analyticsRes, performanceRes, engineRes] = results;
     setOverview(overviewRes.status === "fulfilled" ? overviewRes.value.stats : null);
     setAnalytics(analyticsRes.status === "fulfilled" ? analyticsRes.value.analytics : null);
     setPerformance(performanceRes.status === "fulfilled" ? performanceRes.value.performance : null);
+    setEngine(engineRes.status === "fulfilled" ? engineRes.value.engine : null);
     const rejected = results.find((r) => r.status === "rejected");
     return rejected ? rejected.reason : null;
   }, []);
@@ -348,6 +351,18 @@ export default function Dashboard() {
     } catch (e) { setError(e.message); } finally { setActionBusy(""); }
   }
 
+  async function handleEngineAction(action) {
+    setActionBusy(action);
+    setError("");
+    try {
+      if (action === "start") await apiFetch("/signals/engine/start", { method: "POST" });
+      if (action === "stop")  await apiFetch("/signals/engine/stop",  { method: "POST" });
+      if (action === "scan")  await apiFetch("/signals/scan",          { method: "POST" });
+      await refreshWithFeedback(action === "start" ? "Scanner started" : action === "stop" ? "Scanner stopped" : "Scan completed");
+    } catch (e) { setError(e.message); }
+    finally { setActionBusy(""); }
+  }
+
   const actions = (
     <button className="button button-ghost" onClick={() => refreshWithFeedback("Refreshed")} type="button">
       Refresh
@@ -427,6 +442,36 @@ export default function Dashboard() {
           ))}
         </div>
       </section>
+
+      {/* ── ENGINE STATUS ── */}
+      {isAdmin ? (
+        <section className="panel">
+          <div className="panel-header">
+            <div><span className="eyebrow">Scanner</span><h2>Engine status</h2></div>
+            <span className={`pill ${engine?.running ? "pill-success" : "pill-danger"}`}>
+              {engine?.running ? "LIVE" : "OFF"}
+            </span>
+          </div>
+          <div className="detail-grid">
+            <div><span className="detail-label">Interval</span><strong>{Math.round((engine?.intervalMs || 60000) / 1000)} sec</strong></div>
+            <div><span className="detail-label">Scans</span><strong>{engine?.scanCount || 0}</strong></div>
+            <div><span className="detail-label">Last output</span><strong>{engine?.lastGenerated || 0} signals</strong></div>
+            <div><span className="detail-label">Last scan</span><strong>{engine?.lastScanAt ? new Date(engine.lastScanAt).toLocaleTimeString("en-IN") : "—"}</strong></div>
+          </div>
+          <div className="button-row">
+            <button className="button button-primary" disabled={actionBusy === "start"} onClick={() => handleEngineAction("start")} type="button">
+              {actionBusy === "start" ? "Starting..." : "Start engine"}
+            </button>
+            <button className="button button-ghost" disabled={actionBusy === "stop"} onClick={() => handleEngineAction("stop")} type="button">
+              {actionBusy === "stop" ? "Stopping..." : "Stop engine"}
+            </button>
+            <button className="button button-secondary" disabled={actionBusy === "scan"} onClick={() => handleEngineAction("scan")} type="button">
+              {actionBusy === "scan" ? "Scanning..." : "Run scan now"}
+            </button>
+          </div>
+          {engine?.lastError ? <div className="banner banner-error" style={{marginTop:"12px"}}>{engine.lastError}</div> : null}
+        </section>
+      ) : null}
 
       {/* ── HOW IT WORKS ── */}
       <section className="panel">
