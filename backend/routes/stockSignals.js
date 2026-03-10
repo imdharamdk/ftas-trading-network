@@ -1,0 +1,211 @@
+const express = require("express");
+const { requireAdmin, requireAuth, requireSignalAccess } = require("../middleware/auth");
+const { SIGNAL_STATUS } = require("../models/Signal");
+const { readCollection } = require("../storage/fileStore");
+const stockEngine = require("../services/stockSignalEngine");
+
+const router = express.Router();
+
+function isWinningResult(result) {
+  return ["TP1_HIT", "TP2_HIT", "TP3_HIT"].includes(result);
+}
+
+function sortByCreatedAtDesc(records) {
+  return [...records].sort((left, right) => {
+    return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+  });
+}
+
+function buildOverview(signals) {
+  const activeSignals = signals.filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE);
+  const closedSignals = signals.filter((signal) => signal.status === SIGNAL_STATUS.CLOSED);
+  const wins = closedSignals.filter((signal) => isWinningResult(signal.result));
+  const longs = signals.filter((signal) => signal.side === "LONG");
+  const shorts = signals.filter((signal) => signal.side === "SHORT");
+  const avgConfidence = signals.length
+    ? signals.reduce((sum, signal) => sum + Number(signal.confidence || 0), 0) / signals.length
+    : 0;
+
+  return {
+    activeSignals: activeSignals.length,
+    closedSignals: closedSignals.length,
+    totalSignals: signals.length,
+    strongSignals: signals.filter((signal) => signal.confidence >= 70).length,
+    longSignals: longs.length,
+    shortSignals: shorts.length,
+    averageConfidence: Number(avgConfidence.toFixed(1)),
+    winRate: closedSignals.length ? Number(((wins.length / closedSignals.length) * 100).toFixed(1)) : 0,
+  };
+}
+
+function buildAnalytics(signals) {
+  const recent = sortByCreatedAtDesc(signals).slice(0, 12).reverse();
+  const timeframeCounts = {};
+  const statusCounts = {};
+  const directionCounts = { LONG: 0, SHORT: 0 };
+  const confidenceBands = { low: 0, medium: 0, strong: 0 };
+
+  signals.forEach((signal) => {
+    timeframeCounts[signal.timeframe] = (timeframeCounts[signal.timeframe] || 0) + 1;
+    statusCounts[signal.status] = (statusCounts[signal.status] || 0) + 1;
+    directionCounts[signal.side] = (directionCounts[signal.side] || 0) + 1;
+
+    if (signal.confidence >= 80) confidenceBands.strong += 1;
+    else if (signal.confidence >= 65) confidenceBands.medium += 1;
+    else confidenceBands.low += 1;
+  });
+
+  return {
+    recentConfidence: recent.map((signal) => ({
+      coin: signal.coin,
+      confidence: signal.confidence,
+      createdAt: signal.createdAt,
+      side: signal.side,
+      timeframe: signal.timeframe,
+    })),
+    timeframeMix: Object.entries(timeframeCounts).map(([label, value]) => ({ label, value })),
+    statusMix: Object.entries(statusCounts).map(([label, value]) => ({ label, value })),
+    directionMix: Object.entries(directionCounts).map(([label, value]) => ({ label, value })),
+    confidenceBands: Object.entries(confidenceBands).map(([label, value]) => ({ label, value })),
+  };
+}
+
+function buildBucketLabel(confidence) {
+  if (confidence >= 85) return "85+";
+  if (confidence >= 75) return "75-84";
+  if (confidence >= 65) return "65-74";
+  return "55-64";
+}
+
+function summarizePerformanceGroup(signals, labelAccessor) {
+  const groups = new Map();
+
+  signals.forEach((signal) => {
+    const label = labelAccessor(signal);
+    const current = groups.get(label) || {
+      label,
+      losses: 0,
+      total: 0,
+      wins: 0,
+    };
+
+    current.total += 1;
+
+    if (signal.result === "SL_HIT") {
+      current.losses += 1;
+    } else if (isWinningResult(signal.result)) {
+      current.wins += 1;
+    }
+
+    groups.set(label, current);
+  });
+
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      winRate: group.total ? Number(((group.wins / group.total) * 100).toFixed(1)) : 0,
+    }))
+    .sort((left, right) => right.total - left.total);
+}
+
+function buildPerformance(signals) {
+  const closedSignals = sortByCreatedAtDesc(signals).filter((signal) => signal.status !== SIGNAL_STATUS.ACTIVE);
+  const completedSignals = closedSignals;
+  const summary = {
+    avgConfidence: completedSignals.length
+      ? Number((completedSignals.reduce((sum, signal) => sum + Number(signal.confidence || 0), 0) / completedSignals.length).toFixed(1))
+      : 0,
+    losses: closedSignals.filter((signal) => signal.result === "SL_HIT").length,
+    totalClosed: closedSignals.length,
+    wins: closedSignals.filter((signal) => isWinningResult(signal.result)).length,
+  };
+
+  summary.winRate = completedSignals.length ? Number(((summary.wins / completedSignals.length) * 100).toFixed(1)) : 0;
+
+  const timeframeBreakdown = summarizePerformanceGroup(closedSignals, (signal) => signal.timeframe || "unknown");
+  const sideBreakdown = summarizePerformanceGroup(closedSignals, (signal) => signal.side || "unknown");
+  const confidenceBreakdown = summarizePerformanceGroup(closedSignals, (signal) => buildBucketLabel(Number(signal.confidence || 0)));
+  const sourceBreakdown = summarizePerformanceGroup(closedSignals, (signal) => signal.source || "unknown");
+
+  return {
+    summary,
+    timeframeBreakdown,
+    sideBreakdown,
+    confidenceBreakdown,
+    sourceBreakdown,
+    troubleCoins: [],
+    recommendations: [],
+  };
+}
+
+router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
+  const signals = await readCollection("stockSignals");
+  const filtered = sortByCreatedAtDesc(signals)
+    .filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE)
+    .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
+
+  return res.json({
+    signals: filtered.slice(0, Number(req.query.limit || 50)),
+  });
+});
+
+router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
+  const signals = await readCollection("stockSignals");
+  const filtered = sortByCreatedAtDesc(signals)
+    .filter((signal) => signal.status !== SIGNAL_STATUS.ACTIVE)
+    .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
+
+  return res.json({
+    signals: filtered.slice(0, Number(req.query.limit || 100)),
+  });
+});
+
+router.get("/stats/overview", requireAuth, requireSignalAccess, async (req, res) => {
+  const signals = await readCollection("stockSignals");
+  return res.json({
+    stats: buildOverview(signals),
+  });
+});
+
+router.get("/stats/analytics", requireAuth, requireSignalAccess, async (req, res) => {
+  const signals = await readCollection("stockSignals");
+  return res.json({
+    analytics: buildAnalytics(signals),
+  });
+});
+
+router.get("/stats/performance", requireAuth, requireSignalAccess, async (req, res) => {
+  const signals = await readCollection("stockSignals");
+  return res.json({
+    performance: buildPerformance(signals),
+  });
+});
+
+router.get("/engine/status", requireAuth, requireSignalAccess, (_req, res) => {
+  return res.json({
+    engine: stockEngine.getStatus(),
+  });
+});
+
+router.post("/engine/start", requireAuth, requireAdmin, (_req, res) => {
+  return res.json({
+    engine: stockEngine.start(),
+  });
+});
+
+router.post("/engine/stop", requireAuth, requireAdmin, (_req, res) => {
+  return res.json({
+    engine: stockEngine.stop(),
+  });
+});
+
+router.post("/scan", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const result = await stockEngine.scanNow();
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+module.exports = router;

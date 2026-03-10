@@ -34,6 +34,25 @@ function statusClass(status, result) {
   return "pill-success";
 }
 
+function formatDisplaySymbol(signal) {
+  const instrument = signal.scanMeta?.instrument;
+  if (instrument?.tradingSymbol) {
+    const detailParts = [];
+    if (instrument.exchange) detailParts.push(instrument.exchange);
+    if (instrument.segment && instrument.segment !== instrument.exchange) detailParts.push(instrument.segment);
+    return {
+      label: instrument.tradingSymbol,
+      detail: detailParts.join(" • "),
+    };
+  }
+  const coin = String(signal.coin || "").toUpperCase();
+  if (!coin) return { label: "-", detail: "" };
+  if (coin.endsWith("USDT")) {
+    return { label: coin.replace("USDT", ""), detail: "/USDT" };
+  }
+  return { label: coin, detail: "" };
+}
+
 /* ─── Leverage badge ───────────────────────────────────────────────────────── */
 function LeverageBadge({ leverage }) {
   const lev = Number(leverage);
@@ -59,6 +78,7 @@ function SignalCard({ signal, onChartOpen }) {
   const confirmations = Array.isArray(signal.confirmations)
     ? signal.confirmations.slice(0, 4).join(" · ")
     : "";
+  const symbolDisplay = formatDisplaySymbol(signal);
 
   return (
     <article className="signal-card">
@@ -69,9 +89,11 @@ function SignalCard({ signal, onChartOpen }) {
           onClick={() => onChartOpen(signal.coin, signal.timeframe)}
           type="button"
         >
-          {signal.coin.replace("USDT", "")}
-          <span style={{ opacity: 0.5, fontSize: "0.8em" }}>/USDT</span>
-          <span style={{ fontSize: "0.75em", opacity: 0.55 }}>📈</span>
+          <span style={{ fontWeight: 600 }}>{symbolDisplay.label}</span>
+          {symbolDisplay.detail ? (
+            <span style={{ opacity: 0.55, fontSize: "0.75em" }}>{symbolDisplay.detail}</span>
+          ) : null}
+          <span style={{ fontSize: "0.75em", opacity: 0.55, marginLeft: "4px" }}>📈</span>
         </button>
         <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
           <span className={`pill ${sideClass(signal.side)}`}>{signal.side}</span>
@@ -159,6 +181,7 @@ function SignalCard({ signal, onChartOpen }) {
    DESKTOP TABLE ROW
 ══════════════════════════════════════════════════════════════════════════════ */
 function TableRow({ signal, onChartOpen }) {
+  const symbolDisplay = formatDisplaySymbol(signal);
   return (
     <tr>
       <td>
@@ -168,7 +191,10 @@ function TableRow({ signal, onChartOpen }) {
           title={`View ${signal.coin} chart`}
           type="button"
         >
-          <strong>{signal.coin}</strong>
+          <strong>{symbolDisplay.label}</strong>
+          {symbolDisplay.detail ? (
+            <span style={{ opacity: 0.6, fontSize: "0.75em", marginLeft: "6px" }}>{symbolDisplay.detail}</span>
+          ) : null}
           <span className="coin-chart-icon">📈</span>
         </button>
       </td>

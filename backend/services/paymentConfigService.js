@@ -139,6 +139,50 @@ async function removePaymentMethod(methodValue) {
   });
 }
 
+async function updatePaymentMethod(methodValue, updates = {}) {
+  return updatePaymentConfig((current) => {
+    const target = String(methodValue || "").trim().toUpperCase();
+    const index = current.paymentMethods.findIndex(
+      (method) => method.value === target || method.id === target,
+    );
+
+    if (index === -1) {
+      throw new Error("Payment method not found");
+    }
+
+    const method = current.paymentMethods[index];
+    const nextLabel = String(updates.label || method.label || "").trim();
+    const requestedValue = String(updates.value || "").trim();
+    const nextValue = requestedValue
+      ? requestedValue.toUpperCase().replace(/[^A-Z0-9]+/g, "_")
+      : method.value;
+
+    if (!nextLabel) {
+      throw new Error("Method label is required");
+    }
+
+    if (
+      current.paymentMethods.some(
+        (item, itemIndex) => itemIndex !== index && item.value === nextValue,
+      )
+    ) {
+      throw new Error("Another method already uses that value");
+    }
+
+    const nextMethods = [...current.paymentMethods];
+    nextMethods[index] = {
+      ...method,
+      label: nextLabel,
+      value: nextValue,
+    };
+
+    return {
+      ...current,
+      paymentMethods: nextMethods,
+    };
+  });
+}
+
 function getPlanConfig(planCode, config = createDefaultPaymentConfig()) {
   return (config.plans || DEFAULT_PLANS).find((plan) => plan.code === String(planCode || "").trim().toUpperCase()) || null;
 }
@@ -150,5 +194,6 @@ module.exports = {
   getPaymentConfig,
   getPlanConfig,
   removePaymentMethod,
+  updatePaymentMethod,
   updatePaymentConfig,
 };

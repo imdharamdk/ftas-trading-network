@@ -25,10 +25,12 @@ services:
         sync: false
       - key: AUTO_START_ENGINE
         value: true
+      - key: AUTO_START_STOCK_ENGINE
+        value: false
       - key: SCAN_INTERVAL_MS
         value: 30000
       - key: SCAN_MAX_COINS
-        value: 20
+        value: 60
       - key: EXCHANGE_TIMEOUT_MS
         value: 15000
       - key: EXCHANGE_RETRIES

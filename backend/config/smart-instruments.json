@@ -1,0 +1,28 @@
+[
+  {
+    "symbol": "NSE:RELIANCE",
+    "tradingSymbol": "RELIANCE-EQ",
+    "exchange": "NSE",
+    "segment": "EQUITY",
+    "token": "2885",
+    "lotSize": 1
+  },
+  {
+    "symbol": "NFO:NIFTY24APR23000CE",
+    "tradingSymbol": "NIFTY24APR23000CE",
+    "exchange": "NFO",
+    "segment": "FNO",
+    "token": "123456",
+    "lotSize": 50,
+    "expiry": "2026-04-30"
+  },
+  {
+    "symbol": "MCX:CRUDEOIL24MAYFUT",
+    "tradingSymbol": "CRUDEOIL-24MAYFUT",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "token": "98765",
+    "lotSize": 10,
+    "expiry": "2026-05-19"
+  }
+]

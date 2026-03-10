@@ -9,6 +9,7 @@ const COLLECTION_FILES = {
   paymentSettings: "payment-settings.json",
   signals:         "signals.json",
   signalsArchive:  "signals-archive.json",
+  stockSignals:    "stock-signals.json",
   users:           "users.json",
 };
 const LEGACY_COLLECTION_FILES = {

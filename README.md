@@ -62,7 +62,7 @@ Important backend vars:
 - `ADMIN_SETUP_KEY=make_first_admin_secure`
 - `AUTO_START_ENGINE=false`
 - `SCAN_INTERVAL_MS=60000`
-- `SCAN_MAX_COINS=50`
+- `SCAN_MAX_COINS=60`
 - `EXCHANGE_TIMEOUT_MS=15000`
 - `EXCHANGE_RETRIES=1`
 - `ADMIN_BOOTSTRAP_EMAIL=admin@example.com`
@@ -71,6 +71,18 @@ Important backend vars:
 - `ALPHA_VANTAGE_API_KEY=replace_with_free_news_key`
 - `NEWS_CACHE_MS=900000`
 - `FRONTEND_URL=http://localhost:5173,http://127.0.0.1:5173`
+- `SMART_API_KEY=from_Angel_One_portal`
+- `SMART_API_CLIENT_CODE=your_angel_broking_id`
+- `SMART_API_PASSWORD=angel_portal_password`
+- `SMART_API_TOTP_SECRET=base32_seed_for_totp`
+- `SMART_MAX_INSTRUMENTS=40`
+- `SMART_SCAN_INTERVAL_MS=120000`
+- `SMART_TRADE_TIMEFRAMES=15m,1h,4h`
+- `SMART_ALLOWED_SEGMENTS=EQUITY,FNO,COMMODITY`
+- `AUTO_START_STOCK_ENGINE=false`
+- Optional helpers: `SMART_API_CLIENT_LOCAL_IP`, `SMART_API_CLIENT_PUBLIC_IP`, `SMART_API_CLIENT_MAC`, `SMART_API_SOURCE_ID`, `SMART_API_BASE_URL`, `SMART_API_TIMEOUT_MS`
+
+SmartAPI instruments live in `backend/config/smart-instruments.json`. Populate that JSON with the Angel/SmartAPI tokens you want scanned (NSE, BSE, MCX, F&O). Each entry needs `symbol`, `tradingSymbol`, `exchange`, `segment`, and `token`; optional fields such as `lotSize` or `expiry` are picked up by the stock engine.
 
 ## Install
 

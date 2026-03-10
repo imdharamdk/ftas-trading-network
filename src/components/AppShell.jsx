@@ -53,6 +53,9 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
             <NavLink className={navCls} onClick={close} to="/market">
               🔍 Scanner
             </NavLink>
+            <NavLink className={navCls} onClick={close} to="/stocks">
+              🇮🇳 Stocks
+            </NavLink>
             <NavLink className={navCls} onClick={close} to="/news">
               📰 News
             </NavLink>

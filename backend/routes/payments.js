@@ -6,6 +6,7 @@ const {
   getPaymentConfig,
   getPlanConfig,
   removePaymentMethod,
+  updatePaymentMethod,
   updatePaymentConfig,
 } = require("../services/paymentConfigService");
 const { mutateCollection, readCollection } = require("../storage/fileStore");
@@ -115,6 +116,23 @@ router.delete("/methods/:method", requireAuth, requireAdmin, async (req, res) =>
     return res.json({ settings });
   } catch (error) {
     return res.status(500).json({ message: error.message });
+  }
+});
+
+router.patch("/methods/:method", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const label = String(req.body?.label || "").trim();
+    const value = String(req.body?.value || "").trim();
+
+    if (!label && !value) {
+      return res.status(400).json({ message: "Provide a new label and/or value" });
+    }
+
+    const settings = await updatePaymentMethod(req.params.method, { label, value });
+    return res.json({ settings });
+  } catch (error) {
+    const status = error.message === "Payment method not found" ? 404 : 400;
+    return res.status(status).json({ message: error.message });
   }
 });
 

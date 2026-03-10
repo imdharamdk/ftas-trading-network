@@ -124,6 +124,9 @@ export default function Dashboard() {
   const [paymentForm, setPaymentForm] = useState(defaultPaymentForm);
   const [manualForm, setManualForm] = useState(defaultManualForm);
   const [paymentMethodDraft, setPaymentMethodDraft] = useState("");
+  const [editingMethod, setEditingMethod] = useState(null);
+  const [editingMethodLabel, setEditingMethodLabel] = useState("");
+  const [editingMethodValue, setEditingMethodValue] = useState("");
   const [contactDraft, setContactDraft] = useState("");
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
@@ -513,6 +516,41 @@ export default function Dashboard() {
         method: "DELETE",
       });
       await refreshDataWithFeedback("Payment method removed");
+    } catch (actionError) {
+      setError(actionError.message);
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  const startPaymentMethodEdit = useCallback((method) => {
+    setEditingMethod(method);
+    setEditingMethodLabel(method.label);
+    setEditingMethodValue(method.value);
+  }, []);
+
+  const cancelPaymentMethodEdit = useCallback(() => {
+    setEditingMethod(null);
+    setEditingMethodLabel("");
+    setEditingMethodValue("");
+  }, []);
+
+  async function handlePaymentMethodEdit(event) {
+    event.preventDefault();
+    if (!editingMethod) return;
+    setActionBusy("payment-method-edit");
+    setError("");
+
+    try {
+      await apiFetch(`/payments/methods/${editingMethod.value}`, {
+        method: "PATCH",
+        body: {
+          label: editingMethodLabel,
+          value: editingMethodValue,
+        },
+      });
+      cancelPaymentMethodEdit();
+      await refreshDataWithFeedback("Payment method updated");
     } catch (actionError) {
       setError(actionError.message);
     } finally {
@@ -1211,6 +1249,34 @@ export default function Dashboard() {
                 {actionBusy === "payment-method-add" ? "Adding..." : "Add method"}
               </button>
             </form>
+            {editingMethod ? (
+              <form className="form-grid" onSubmit={handlePaymentMethodEdit}>
+                <label>
+                  <span>Edit method label</span>
+                  <input
+                    onChange={(event) => setEditingMethodLabel(event.target.value)}
+                    placeholder="Readable label"
+                    value={editingMethodLabel}
+                  />
+                </label>
+                <label>
+                  <span>Edit method value</span>
+                  <input
+                    onChange={(event) => setEditingMethodValue(event.target.value)}
+                    placeholder="VALUE_TOKEN"
+                    value={editingMethodValue}
+                  />
+                </label>
+                <div className="button-row form-span-2">
+                  <button className="button button-primary" disabled={actionBusy === "payment-method-edit"} type="submit">
+                    {actionBusy === "payment-method-edit" ? "Saving..." : "Save method"}
+                  </button>
+                  <button className="button button-ghost" onClick={cancelPaymentMethodEdit} type="button">
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : null}
 
             <div className="list-stack">
               {availablePaymentMethods.map((method) => (
@@ -1219,14 +1285,24 @@ export default function Dashboard() {
                     <strong>{method.label}</strong>
                     <span>{method.value}</span>
                   </div>
-                  <button
-                    className="button button-ghost"
-                    disabled={actionBusy === `remove-${method.value}`}
-                    onClick={() => handlePaymentMethodRemove(method.value)}
-                    type="button"
-                  >
-                    Remove
-                  </button>
+                  <div className="button-row">
+                    <button
+                      className="button button-secondary"
+                      disabled={actionBusy === "payment-method-edit" && editingMethod?.value === method.value}
+                      onClick={() => startPaymentMethodEdit(method)}
+                      type="button"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="button button-ghost"
+                      disabled={actionBusy === `remove-${method.value}`}
+                      onClick={() => handlePaymentMethodRemove(method.value)}
+                      type="button"
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

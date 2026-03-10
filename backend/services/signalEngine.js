@@ -11,23 +11,23 @@ const FALLBACK_COINS = [
   "NEARUSDT","ARBUSDT","OPUSDT","SUIUSDT","INJUSDT",
 ];
 
-const SCAN_TIMEFRAMES          = ["5m","15m","1h","4h","12h","1d"];
-const DEFAULT_TRADE_TIMEFRAMES = ["5m","15m"];
-const DEFAULT_MAX_COINS_PER_SCAN = 50;
-const MAX_COINS_PER_SCAN_CAP = 80;
-const MIN_SCAN_QUOTE_VOLUME_USDT = 12_000_000;
-const MIN_SCAN_TRADE_COUNT_24H = 15_000;
-const MIN_SCAN_OPEN_INTEREST_USDT = 5_000_000;
+const SCAN_TIMEFRAMES            = ["5m","15m","1h","4h","12h","1d"];
+const DEFAULT_TRADE_TIMEFRAMES   = ["5m","15m","1h"];
+const DEFAULT_MAX_COINS_PER_SCAN = 70;
+const MAX_COINS_PER_SCAN_CAP     = 100;
+const MIN_SCAN_QUOTE_VOLUME_USDT = 8_000_000;
+const MIN_SCAN_TRADE_COUNT_24H   = 10_000;
+const MIN_SCAN_OPEN_INTEREST_USDT = 3_500_000;
 
 const RULE_VERSION = "v11_timeframe_filters";
-const DEFAULT_PUBLISH_FLOOR = 85;
-const STRENGTH_THRESHOLDS = { STRONG: 92, MEDIUM: 85 };
+const DEFAULT_PUBLISH_FLOOR = 82;
+const STRENGTH_THRESHOLDS = { STRONG: 90, MEDIUM: 82 };
 const TIMEFRAME_RULES = {
   "5m": {
-    minScore: 63,
-    minConfirmations: 6,
-    publishFloor: 90,
-    requireHigherBias: true,
+    minScore: 58,
+    minConfirmations: 5,
+    publishFloor: 86,
+    requireHigherBias: false,
     minAdx: 22,
     minRsi: 45,
     minDiDelta: 3,
@@ -38,8 +38,19 @@ const TIMEFRAME_RULES = {
     maxLeverage: 25,
   },
   "15m": {
-    publishFloor: 87,
+    minScore: 55,
+    minConfirmations: 4,
+    publishFloor: 84,
+    requireHigherBias: true,
     maxLeverage: 35,
+  },
+  "1h": {
+    minScore: 52,
+    minConfirmations: 3,
+    publishFloor: 82,
+    requireHigherBias: true,
+    entryDriftMultiplier: 0.8,
+    maxLeverage: 20,
   },
 };
 const WIN_RESULTS = new Set(["TP1_HIT","TP2_HIT","TP3_HIT"]);

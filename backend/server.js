@@ -5,12 +5,14 @@ const cors    = require("cors");
 const fs      = require("fs");
 const path    = require("path");
 
-const authRoutes    = require("./routes/auth");
-const marketRoutes  = require("./routes/market");
-const newsRoutes    = require("./routes/news");
-const paymentRoutes = require("./routes/payments");
-const signalRoutes  = require("./routes/signals");
+const authRoutes        = require("./routes/auth");
+const marketRoutes      = require("./routes/market");
+const newsRoutes        = require("./routes/news");
+const paymentRoutes     = require("./routes/payments");
+const signalRoutes      = require("./routes/signals");
+const stockSignalRoutes = require("./routes/stockSignals");
 const { getStatus, start } = require("./services/signalEngine");
+const stockSignalEngine = require("./services/stockSignalEngine");
 
 const PORT     = Number(process.env.PORT || 5000);
 const distPath = path.join(__dirname, "..", "dist");
@@ -146,6 +148,7 @@ function createApp() {
   app.use("/api/market",   marketRoutes);
   app.use("/api/payments", paymentRoutes);
   app.use("/api/signals",  signalRoutes);
+  app.use("/api/stocks",   stockSignalRoutes);
 
   if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
@@ -171,6 +174,10 @@ async function startServer(port = PORT) {
     if (String(process.env.AUTO_START_ENGINE || "").toLowerCase() === "true") {
       start();
       console.log("Signal scanner started");
+    }
+    if (String(process.env.AUTO_START_STOCK_ENGINE || "").toLowerCase() === "true") {
+      stockSignalEngine.start();
+      console.log("Stock/FO scanner started");
     }
   });
 }

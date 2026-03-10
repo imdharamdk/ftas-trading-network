@@ -6,6 +6,7 @@ import Login from "./pages/Login";
 import Market from "./pages/Market";
 import News from "./pages/News";
 import Signup from "./pages/Signup";
+import Stocks from "./pages/Stocks";
 
 function SessionGate({ children, guestOnly = false }) {
   const { loading, user } = useSession();
@@ -68,6 +69,14 @@ export default function App() {
               </SessionGate>
             }
             path="/market"
+          />
+          <Route
+            element={
+              <SessionGate>
+                <Stocks />
+              </SessionGate>
+            }
+            path="/stocks"
           />
           <Route element={<News />} path="/news" />
           <Route element={<Navigate replace to="/" />} path="*" />
