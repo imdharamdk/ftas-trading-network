@@ -20,13 +20,40 @@ const MIN_SCAN_TRADE_COUNT_24H = 15_000;
 const MIN_SCAN_OPEN_INTEREST_USDT = 5_000_000;
 
 const SIGNAL_EXPIRY_MS = {
-  "5m":  60  * 60 * 1000,
+  "5m":  30  * 60 * 1000,
   "15m": 4   * 60 * 60 * 1000,
   "1h":  16  * 60 * 60 * 1000,
   "4h":  72  * 60 * 60 * 1000,
   "12h": 7   * 24 * 60 * 60 * 1000,   // 7 days
   "1d":  21  * 24 * 60 * 60 * 1000,   // 21 days
 };
+
+const RULE_VERSION = "v11_timeframe_filters";
+const DEFAULT_PUBLISH_FLOOR = 85;
+const STRENGTH_THRESHOLDS = { STRONG: 92, MEDIUM: 85 };
+const TIMEFRAME_RULES = {
+  "5m": {
+    minScore: 63,
+    minConfirmations: 6,
+    publishFloor: 90,
+    requireHigherBias: true,
+    minAdx: 22,
+    minRsi: 45,
+    minDiDelta: 3,
+    requireVwapSupport: true,
+    blockDailyBear: true,
+    intradayOverride: false,
+    entryDriftMultiplier: 0.5,
+    maxLeverage: 25,
+  },
+  "15m": {
+    publishFloor: 87,
+    maxLeverage: 35,
+  },
+};
+const WIN_RESULTS = new Set(["TP1_HIT","TP2_HIT","TP3_HIT"]);
+const LOSS_RESULTS = new Set(["SL_HIT"]);
+const buildTally = () => ({ wins: 0, losses: 0 });
 
 const engineState = {
   intervalMs: Number(process.env.SCAN_INTERVAL_MS || 60000),
@@ -197,7 +224,7 @@ function calculateTargets(side, analysis) {
     const anchors = [low20, previousLow20, srSup].filter(v => Number.isFinite(v) && v < entry);
     const anchor  = anchors.length ? Math.max(...anchors) : entry - atr * 2;
     const raw     = (entry - anchor) + atr * 0.3;
-    const risk    = clamp(raw, atr * 1.8, atr * 4.5);
+    const risk    = clamp(raw, atr * 1.5, atr * 3.5);
     return {
       entry: roundPrice(entry), riskPerUnit: roundPrice(risk),
       stopLoss: roundPrice(entry - risk),
@@ -209,7 +236,7 @@ function calculateTargets(side, analysis) {
     const anchors = [high20, previousHigh20, srRes].filter(v => Number.isFinite(v) && v > entry);
     const anchor  = anchors.length ? Math.min(...anchors) : entry + atr * 2;
     const raw     = (anchor - entry) + atr * 0.3;
-    const risk    = clamp(raw, atr * 1.8, atr * 4.5);
+    const risk    = clamp(raw, atr * 1.5, atr * 3.5);
     return {
       entry: roundPrice(entry), riskPerUnit: roundPrice(risk),
       stopLoss: roundPrice(entry + risk),
@@ -221,13 +248,16 @@ function calculateTargets(side, analysis) {
 }
 
 // ─── Leverage ─────────────────────────────────────────────────────────────────
-function calculateLeverage(analysis, confidence) {
+function calculateLeverage(analysis, confidence, timeframe) {
   const price  = analysis.currentPrice;
   const atr    = analysis.volatility.atr || analysis.averages.averageRange || price * 0.003;
   const atrPct = (atr / price) * 100;
   const base   = clamp(20 / atrPct, 10, 40);
   const bonus  = confidence >= 90 ? 10 : confidence >= 85 ? 7 : confidence >= 80 ? 5 : confidence >= 75 ? 3 : 0;
-  return Math.round(clamp(base + bonus, 10, 50));
+  const tfRule = TIMEFRAME_RULES[timeframe] || {};
+  const leveraged = base + bonus;
+  const cap = Number.isFinite(tfRule.maxLeverage) ? tfRule.maxLeverage : 50;
+  return Math.round(clamp(leveraged, 10, cap));
 }
 
 // ─── Pullback Completion ──────────────────────────────────────────────────────
@@ -307,10 +337,11 @@ function isVolumeBreakout(side, analysis) {
 //
 //  7. S/R LEVEL PROXIMITY — bonus when price is near detected S/R level
 //
-function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketActivity = null) {
+function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketActivity = null, performanceSnapshot = null) {
   const bullConf = [], bearConf = [];
   let bullScore = 0, bearScore = 0;
 
+  const tfRule = TIMEFRAME_RULES[timeframe] || {};
   const activeMarket = marketActivity || buildFallbackMarketActivity(coin);
   const price = analysis.currentPrice;
   const {
@@ -338,6 +369,13 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const kdK    = stochKD?.k  ?? null;
   const kdD    = stochKD?.d  ?? null;
   const { daily, twelveH, oneH } = htf;
+  const bullRsiFloor = tfRule.minRsi ?? 40;
+  const bullRsiCeil = tfRule.maxRsi ?? 82;
+  const requireVwapSupport = tfRule.requireVwapSupport || false;
+  const minAdx = tfRule.minAdx ?? 0;
+  const minDiDelta = tfRule.minDiDelta ?? 0;
+  const dailyTrend = daily?.trend || {};
+  const dailyBearStack = (dailyTrend.ema50 || 0) < (dailyTrend.ema100 || 0) && (dailyTrend.adx || 0) >= 18;
   const psarBull = Number.isFinite(psar) ? psar < price : true;
   const psarBear = Number.isFinite(psar) ? psar > price : true;
 
@@ -372,9 +410,13 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
 
   // ── GATE 3: Momentum — RSI in range + MACD + RSI direction ───────────────
   const bullMomentum =
-    (rsi || 0) >= 40 && (rsi || 0) <= 82 &&
+    (rsi || 0) >= bullRsiFloor &&
+    (rsi || 0) <= bullRsiCeil &&
     (macd?.MACD || 0) > (macd?.signal || 0) &&
-    (rsiRising || (rsi || 0) > 50);
+    (rsiRising || (rsi || 0) > Math.max(bullRsiFloor, 50)) &&
+    (!requireVwapSupport || (Number.isFinite(vwap) && price >= vwap)) &&
+    (!minAdx || (adx || 0) >= minAdx) &&
+    (!minDiDelta || ((pdi || 0) - (mdi || 0)) >= minDiDelta);
   const bearMomentum =
     (rsi || 0) <= 60 && (rsi || 0) >= 18 &&
     (macd?.MACD || 0) < (macd?.signal || 0) &&
@@ -390,24 +432,29 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const oneHDirection = oneH?.trend?.direction || "NEUTRAL";
   const oneHAdx = oneH?.trend?.adx || 0;
   const oneHRsi = oneH?.momentum?.rsi || 50;
+  const intradayOverrideEnabled = tfRule.intradayOverride !== false;
   const allowIntradayBull =
+    intradayOverrideEnabled &&
     higherBias === "NEUTRAL" &&
     activeMarket.relaxThresholds &&
     ["5m","15m"].includes(timeframe) &&
     oneHDirection === "BULLISH" &&
-    oneHAdx >= 16 &&
-    oneHRsi >= 48 &&
+    oneHAdx >= (tfRule.minAdxIntraday ?? 16) &&
+    oneHRsi >= (tfRule.minIntradayRsi ?? 48) &&
+    !dailyBearStack &&
     (bullBO || volumeStrong || volumeTrending);
   const allowIntradayBear =
+    intradayOverrideEnabled &&
     higherBias === "NEUTRAL" &&
     activeMarket.relaxThresholds &&
     ["5m","15m"].includes(timeframe) &&
     oneHDirection === "BEARISH" &&
-    oneHAdx >= 16 &&
-    oneHRsi <= 52 &&
+    oneHAdx >= (tfRule.minAdxIntraday ?? 16) &&
+    oneHRsi <= (tfRule.maxIntradayRsi ?? 52) &&
     (bearBO || volumeStrong || volumeTrending);
-  const bullBiasAligned = higherBias === "BULLISH" || allowIntradayBull;
-  const bearBiasAligned = higherBias === "BEARISH" || allowIntradayBear;
+  const requiresHigherBias = tfRule.requireHigherBias === true;
+  const bullBiasAligned = (!tfRule.blockDailyBear || !dailyBearStack) && (higherBias === "BULLISH" || (!requiresHigherBias && allowIntradayBull));
+  const bearBiasAligned = higherBias === "BEARISH" || (!requiresHigherBias && allowIntradayBear);
   const effectiveBias =
     higherBias !== "NEUTRAL"
       ? higherBias
@@ -608,22 +655,34 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   if ((rsi9||0) < 48 && bearValid) bearScore += 2;
 
   // ── Final ────────────────────────────────────────────────────────────────
-  const MIN_SCORE = activeMarket.relaxThresholds ? 51 : 55;
-  const MIN_CONF  = activeMarket.relaxThresholds ? 3 : 4;
+  const BASE_MIN_SCORE = activeMarket.relaxThresholds ? 51 : 55;
+  const BASE_MIN_CONF  = activeMarket.relaxThresholds ? 3 : 4;
+  const minScore = Math.max(BASE_MIN_SCORE, tfRule.minScore || 0);
+  const minConfirmations = Math.max(BASE_MIN_CONF, tfRule.minConfirmations || 0);
 
   const side        = bullValid && !bearValid ? "LONG" : !bullValid && bearValid ? "SHORT" : bullScore >= bearScore ? "LONG" : "SHORT";
   const confidence  = side === "LONG" ? bullScore : bearScore;
   const confirmations = side === "LONG" ? bullConf : bearConf;
 
-  if (confidence < MIN_SCORE || confirmations.length < MIN_CONF) return null;
+  if (confidence < minScore || confirmations.length < minConfirmations) return null;
+  if (tfRule.requireHigherBias) {
+    if (side === "LONG" && higherBias !== "BULLISH") return null;
+    if (side === "SHORT" && higherBias !== "BEARISH") return null;
+  }
 
   const targets  = calculateTargets(side, analysis);
-  const leverage = calculateLeverage(analysis, confidence);
+  const leverage = calculateLeverage(analysis, confidence, timeframe);
   if (!Number.isFinite(targets.riskPerUnit) || targets.riskPerUnit <= 0) return null;
+  const driftMultiplier = tfRule.entryDriftMultiplier ?? 0.6;
+  const entryDriftLimit = Math.max(atr * driftMultiplier, atr * 0.25);
+  if (Math.abs(price - targets.entry) > entryDriftLimit) return null;
+  const publishFloor = tfRule.publishFloor ?? DEFAULT_PUBLISH_FLOOR;
+  if (confidence < publishFloor) return null;
+  const strength = confidence >= STRENGTH_THRESHOLDS.STRONG ? "STRONG" : "MEDIUM";
 
   return createSignal({
     coin, side, timeframe, confidence, leverage,
-    strength: confidence >= 90 ? "STRONG" : confidence >= 75 ? "MEDIUM" : "WEAK",
+    strength,
     confirmations,
     indicatorSnapshot: {
       ema9: roundPrice(ema9), ema21: roundPrice(ema21), ema50: roundPrice(ema50),
@@ -649,12 +708,21 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
     scanMeta: {
       higherBias,
       effectiveBias,
+      ruleVersion: RULE_VERSION,
+      publishFloor,
       marketActivityScore: roundPrice(activeMarket.activityScore),
       marketQuoteVolume: roundPrice(activeMarket.quoteVolume),
       marketTradeCount: roundPrice(activeMarket.tradeCount),
       marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
       modelVersion: "v10_liquidity",
       sourceTimeframes: SCAN_TIMEFRAMES,
+      performanceSnapshot: performanceSnapshot ? {
+        sampleSize: performanceSnapshot.sampleSize,
+        long: performanceSnapshot.LONG,
+        short: performanceSnapshot.SHORT,
+        tf5m: performanceSnapshot["5m"],
+      } : null,
+      timeframeRule: tfRule,
     },
     source: "ENGINE",
     ...targets,
@@ -662,7 +730,7 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
 }
 
 // ─── Coin Scan ────────────────────────────────────────────────────────────────
-async function analyzeCoin(coin, marketActivity = null) {
+async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = null) {
   const analyses = {};
 
   // Sequential (not parallel) to avoid rate limiting Bybit
@@ -681,7 +749,7 @@ async function analyzeCoin(coin, marketActivity = null) {
   };
 
   const candidates = getTradeTimeframes()
-    .map(tf => analyses[tf] ? buildCandidate(coin, tf, analyses[tf], higherBias, htf, marketActivity) : null)
+    .map(tf => analyses[tf] ? buildCandidate(coin, tf, analyses[tf], higherBias, htf, marketActivity, performanceSnapshot) : null)
     .filter(Boolean);
 
   if (!candidates.length) return null;
@@ -721,6 +789,38 @@ async function evaluateActiveSignals() {
     return sig;
   }));
   return closed;
+}
+
+async function getPerformanceSnapshot() {
+  try {
+    const signals = await readCollection("signals");
+    const stats = {
+      overall: buildTally(),
+      LONG: buildTally(),
+      SHORT: buildTally(),
+      "5m": buildTally(),
+    };
+    for (const sig of signals) {
+      const isWin = WIN_RESULTS.has(sig.result);
+      const isLoss = LOSS_RESULTS.has(sig.result);
+      if (!isWin && !isLoss) continue;
+      const key = isWin ? "wins" : "losses";
+      stats.overall[key] += 1;
+      if (stats[sig.side]) stats[sig.side][key] += 1;
+      if (!stats[sig.timeframe]) stats[sig.timeframe] = buildTally();
+      stats[sig.timeframe][key] += 1;
+    }
+    stats.sampleSize = stats.overall.wins + stats.overall.losses;
+    return stats;
+  } catch {
+    return {
+      overall: buildTally(),
+      LONG: buildTally(),
+      SHORT: buildTally(),
+      "5m": buildTally(),
+      sampleSize: 0,
+    };
+  }
 }
 
 // ─── Persist / Manual / Demo ─────────────────────────────────────────────────
@@ -779,11 +879,12 @@ async function scanNow({ source = "ENGINE" } = {}) {
   const generatedSignals = [], errors = [];
   try {
     const closedSignals = await evaluateActiveSignals();
+    const performanceSnapshot = await getPerformanceSnapshot();
     const scanUniverse = await getScanUniverse();
     const coins = scanUniverse.slice(0, getMaxCoinsPerScan());
     for (const market of coins) {
       try {
-        const candidate = await analyzeCoin(market.symbol, market);
+        const candidate = await analyzeCoin(market.symbol, market, performanceSnapshot);
         if (!candidate) continue;
         candidate.source = source;
         candidate.updatedAt = new Date().toISOString();
