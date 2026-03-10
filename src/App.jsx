@@ -66,7 +66,7 @@ export default function App() {
           <Route
             element={
               <SessionGate>
-                <Crypto />
+                <Market />
               </SessionGate>
             }
             path="/market"
