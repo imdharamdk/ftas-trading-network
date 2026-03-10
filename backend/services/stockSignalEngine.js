@@ -4,38 +4,31 @@ const { analyzeCandles } = require("./indicatorEngine");
 const { getInstrumentUniverse } = require("./smartInstrumentService");
 const { getCandles, getLtp } = require("./smartApiService");
 
-// Sirf 2 timeframes — kam API calls, zyada success rate
-const SCAN_TIMEFRAMES = String(process.env.SMART_TRADE_TIMEFRAMES || "1h,1d")
+const SCAN_TIMEFRAMES = String(process.env.SMART_TRADE_TIMEFRAMES || "15m,1h")
   .split(",").map(i => i.trim()).filter(Boolean);
 
 const MAX_INSTRUMENTS            = Number(process.env.SMART_MAX_INSTRUMENTS || 15);
 const MAX_SIGNALS_PER_INSTRUMENT = Number(process.env.SMART_SIGNALS_PER_INSTRUMENT || 1);
-const ENGINE_INTERVAL_MS         = Number(process.env.SMART_SCAN_INTERVAL_MS || 600000); // 10 min
-const REQUEST_DELAY_MS           = Number(process.env.SMART_REQUEST_DELAY_MS || 1500);   // 1.5s between calls
+const ENGINE_INTERVAL_MS         = Number(process.env.SMART_SCAN_INTERVAL_MS || 600000);
+const REQUEST_DELAY_MS           = Number(process.env.SMART_REQUEST_DELAY_MS || 1500);
 
-// Angel One valid intervals for EQ stocks
-// FOUR_HOURS is NOT valid for EQ — only futures support it
+// Angel One valid intervals for NSE EQ stocks
+// FOUR_HOURS is NOT valid for EQ stocks
 const TIMEFRAME_INTERVALS = {
-  "1m":  { interval: "ONE_MINUTE",     minutes: 1    },
-  "5m":  { interval: "FIVE_MINUTE",    minutes: 5    },
-  "15m": { interval: "FIFTEEN_MINUTE", minutes: 15   },
-  "30m": { interval: "THIRTY_MINUTE",  minutes: 30   },
-  "1h":  { interval: "ONE_HOUR",       minutes: 60   },
-  "1d":  { interval: "ONE_DAY",        minutes: 1440 },
+  "1m":  { interval: "ONE_MINUTE",     calendarDays: 3   },
+  "5m":  { interval: "FIVE_MINUTE",    calendarDays: 7   },
+  "15m": { interval: "FIFTEEN_MINUTE", calendarDays: 15  },
+  "30m": { interval: "THIRTY_MINUTE",  calendarDays: 25  },
+  "1h":  { interval: "ONE_HOUR",       calendarDays: 60  },
+  "1d":  { interval: "ONE_DAY",        calendarDays: 400 },
 };
 
 const engineState = {
-  intervalMs:    ENGINE_INTERVAL_MS,
-  isScanning:    false,
-  lastError:     null,
-  lastGenerated: 0,
-  lastScanAt:    null,
-  running:       false,
-  scanCount:     0,
-  timer:         null,
+  intervalMs: ENGINE_INTERVAL_MS, isScanning: false, lastError: null,
+  lastGenerated: 0, lastScanAt: null, running: false, scanCount: 0, timer: null,
 };
 
-const sleep = ms => new Promise(res => setTimeout(res, ms));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function roundPrice(v) {
   if (!Number.isFinite(v)) return 0;
@@ -54,15 +47,15 @@ function buildTargetPrices(side, entry, risk) {
 
 async function fetchCandles(instrument, timeframe) {
   const meta = TIMEFRAME_INTERVALS[timeframe];
-  if (!meta) return null;
+  if (!meta) {
+    console.warn(`[stockEngine] Unknown timeframe: ${timeframe}`);
+    return null;
+  }
 
-  // Angel One max candles per call limits:
-  // 1d  -> 2 years ok
-  // 1h  -> 30 days
-  // 15m -> 60 days
-  const approx = 200;
+  // Use calendar days (not candle count * minutes) to avoid
+  // landing on weekends/holidays where Angel One returns 0 rows
   const to   = new Date();
-  const from = new Date(to.getTime() - meta.minutes * 60 * 1000 * (approx + 10));
+  const from = new Date(to.getTime() - meta.calendarDays * 24 * 60 * 60 * 1000);
 
   try {
     const rows = await getCandles({
@@ -74,16 +67,14 @@ async function fetchCandles(instrument, timeframe) {
     });
 
     if (!Array.isArray(rows) || rows.length < 50) {
-      console.warn(`[stockEngine] Few/no candles: ${instrument.tradingSymbol} ${timeframe} → ${Array.isArray(rows) ? rows.length : 0} rows`);
+      console.warn(`[stockEngine] Too few candles: ${instrument.tradingSymbol} ${timeframe} → ${Array.isArray(rows) ? rows.length : 0} rows`);
       return null;
     }
 
     return rows.map(r => ({
       openTime: new Date(r[0]).getTime(),
-      open:  Number(r[1]),
-      high:  Number(r[2]),
-      low:   Number(r[3]),
-      close: Number(r[4]),
+      open: Number(r[1]), high: Number(r[2]),
+      low:  Number(r[3]), close: Number(r[4]),
       volume: Number(r[5] || 0),
     }));
   } catch (err) {
@@ -95,17 +86,17 @@ async function fetchCandles(instrument, timeframe) {
 function buildCandidate(instrument, timeframe, analysis) {
   const { trend = {}, momentum = {}, volatility = {} } = analysis || {};
   const { ema21, ema50, ema200, adx = 0 } = trend;
-  const rsi  = momentum.rsi || 50;
-  const atr  = volatility.atr || analysis.currentPrice * 0.004;
+  const rsi   = momentum.rsi || 50;
+  const atr   = volatility.atr || analysis.currentPrice * 0.004;
   const price = analysis.currentPrice;
 
   if (!Number.isFinite(price) || !Number.isFinite(atr) || !ema21 || !ema50 || !ema200) return null;
 
-  const macdHist      = momentum.macd?.histogram || 0;
-  const emaTrendBull  = ema21 > ema50 * 0.998  && ema50 > ema200 * 0.995;
-  const emaTrendBear  = ema21 < ema50 * 1.002  && ema50 < ema200 * 1.005;
-  const adxOk         = adx >= 13;
-  const adxStrong     = adx >= 18;
+  const macdHist     = momentum.macd?.histogram || 0;
+  const emaTrendBull = ema21 > ema50 * 0.998 && ema50 > ema200 * 0.995;
+  const emaTrendBear = ema21 < ema50 * 1.002 && ema50 < ema200 * 1.005;
+  const adxOk        = adx >= 13;
+  const adxStrong    = adx >= 18;
 
   let side = null;
   if      (emaTrendBull && adxOk && rsi >= 35 && rsi <= 78) side = "LONG";
@@ -114,15 +105,12 @@ function buildCandidate(instrument, timeframe, analysis) {
   else return null;
 
   const confirmations = [];
-  if (adx >= 25)                                                       confirmations.push("ADX strong");
-  if ((trend.diPlus||0)  > (trend.diMinus||0) && side === "LONG")    confirmations.push("+DI lead");
-  if ((trend.diMinus||0) > (trend.diPlus||0)  && side === "SHORT")   confirmations.push("-DI lead");
-  if (Math.abs(macdHist) >= 0.2)                                       confirmations.push("MACD impulse");
+  if (adx >= 25)                                                      confirmations.push("ADX strong");
+  if ((trend.diPlus||0)  > (trend.diMinus||0) && side === "LONG")   confirmations.push("+DI lead");
+  if ((trend.diMinus||0) > (trend.diPlus||0)  && side === "SHORT")  confirmations.push("-DI lead");
+  if (Math.abs(macdHist) >= 0.2)                                      confirmations.push("MACD impulse");
 
-  const confidence = clamp(
-    (side === "LONG" ? 72 : 70) + confirmations.length * 3 + Math.round((adx - 20) / 2),
-    55, 96
-  );
+  const confidence  = clamp((side === "LONG" ? 72 : 70) + confirmations.length * 3 + Math.round((adx - 20) / 2), 55, 96);
   const risk        = clamp(atr * 1.35, price * 0.001, price * 0.05);
   const [tp1,tp2,tp3] = buildTargetPrices(side, price, risk);
 
@@ -133,16 +121,15 @@ function buildCandidate(instrument, timeframe, analysis) {
     stopLoss: roundPrice(side === "LONG" ? price - risk : price + risk),
     tp1, tp2, tp3,
     strength: confidence >= 85 ? "STRONG" : "MEDIUM",
-    source:   "SMART_ENGINE",
-    confirmations,
+    source: "SMART_ENGINE", confirmations,
   });
 
   signal.scanMeta = {
     instrument: {
       exchange: instrument.exchange, tradingSymbol: instrument.tradingSymbol,
-      segment:  instrument.segment,  token: instrument.token,
-      lotSize:  instrument.lotSize,  expiry: instrument.expiry || null,
-      symbol:   instrument.symbol,
+      segment: instrument.segment,   token: instrument.token,
+      lotSize: instrument.lotSize,   expiry: instrument.expiry || null,
+      symbol: instrument.symbol,
     },
     timeframe, modelVersion: "smart_v3",
   };
@@ -158,7 +145,7 @@ function buildCandidate(instrument, timeframe, analysis) {
 async function analyzeInstrument(instrument) {
   const candidates = [];
   for (const tf of SCAN_TIMEFRAMES) {
-    await sleep(REQUEST_DELAY_MS); // Rate limit se bachao
+    await sleep(REQUEST_DELAY_MS);
     const candles = await fetchCandles(instrument, tf);
     if (!candles) continue;
 
@@ -224,14 +211,14 @@ async function evaluateActiveSignals() {
     };
 
     if (s.side === "LONG") {
-      if (price >= s.tp3)     return hit("TP3_HIT");
-      if (price >= s.tp2)     return hit("TP2_HIT");
-      if (price >= s.tp1)     return hit("TP1_HIT");
+      if (price >= s.tp3)      return hit("TP3_HIT");
+      if (price >= s.tp2)      return hit("TP2_HIT");
+      if (price >= s.tp1)      return hit("TP1_HIT");
       if (price <= s.stopLoss) return hit("SL_HIT");
     } else {
-      if (price <= s.tp3)     return hit("TP3_HIT");
-      if (price <= s.tp2)     return hit("TP2_HIT");
-      if (price <= s.tp1)     return hit("TP1_HIT");
+      if (price <= s.tp3)      return hit("TP3_HIT");
+      if (price <= s.tp2)      return hit("TP2_HIT");
+      if (price <= s.tp1)      return hit("TP1_HIT");
       if (price >= s.stopLoss) return hit("SL_HIT");
     }
     return s;
@@ -248,7 +235,7 @@ async function scanUniverse() {
 
   try {
     const instruments = getInstrumentUniverse().slice(0, MAX_INSTRUMENTS);
-    console.log(`[stockEngine] 🔍 Starting scan: ${instruments.length} stocks | timeframes: ${SCAN_TIMEFRAMES} | delay: ${REQUEST_DELAY_MS}ms`);
+    console.log(`[stockEngine] 🔍 Scan: ${instruments.length} stocks | ${SCAN_TIMEFRAMES} | ${REQUEST_DELAY_MS}ms delay`);
 
     const generated = [];
     for (const inst of instruments) {
@@ -265,8 +252,8 @@ async function scanUniverse() {
 
     const closed = await evaluateActiveSignals();
     engineState.lastGenerated = generated.length;
-    engineState.scanCount    += 1;
-    console.log(`[stockEngine] ✅ Done: ${generated.length} new signals, ${closed.length} closed`);
+    engineState.scanCount += 1;
+    console.log(`[stockEngine] ✅ Done: ${generated.length} new, ${closed.length} closed`);
     return { generated, closed };
   } catch (e) {
     engineState.lastError = e.message;
@@ -292,20 +279,16 @@ function start() {
 
 function stop() {
   if (engineState.timer) clearInterval(engineState.timer);
-  engineState.timer   = null;
-  engineState.running = false;
+  engineState.timer = null; engineState.running = false;
   return getStatus();
 }
 
 function getStatus() {
   return {
-    intervalMs:    engineState.intervalMs,
-    isScanning:    engineState.isScanning,
-    lastError:     engineState.lastError,
-    lastGenerated: engineState.lastGenerated,
-    lastScanAt:    engineState.lastScanAt,
-    running:       engineState.running,
-    scanCount:     engineState.scanCount,
+    intervalMs: engineState.intervalMs, isScanning: engineState.isScanning,
+    lastError: engineState.lastError,   lastGenerated: engineState.lastGenerated,
+    lastScanAt: engineState.lastScanAt, running: engineState.running,
+    scanCount: engineState.scanCount,
   };
 }
 
