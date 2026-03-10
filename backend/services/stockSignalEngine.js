@@ -187,7 +187,8 @@ async function evaluateActiveSignals() {
     try {
       await sleep(REQUEST_DELAY_MS);
       const ltp   = await getLtp({ exchange: inst.exchange, symbolToken: inst.token });
-      const price = Number(ltp?.ltp || ltp?.closingPrice);
+      // getLtp returns fetched[0]: { ltp, open, high, low, close, tradingSymbol }
+      const price = Number(ltp?.ltp);
       if (Number.isFinite(price)) priceMap.set(inst.token, price);
     } catch (e) {
       console.warn("[stockEngine] LTP failed:", e.message);
