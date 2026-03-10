@@ -61,6 +61,8 @@ function base32ToBuffer(secret) {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   const cleaned = String(secret || "")
     .toUpperCase()
+    .replace(/0/g, "O")
+    .replace(/1/g, "L")
     .replace(/[^A-Z2-7]/g, "");
 
   if (!cleaned.length) {
@@ -115,23 +117,36 @@ async function login() {
   const totp = generateTotp(config.totpSecret);
   const url = `${SMART_API_BASE_URL}/rest/auth/angelbroking/user/v1/loginByPassword`;
 
-  const response = await axios.post(
-    url,
-    {
-      clientcode: config.clientCode,
-      password: config.password,
-      totp,
-    },
-    {
-      headers: {
-        ...buildHeaders(config.apiKey),
-        "X-ClientLocalIP": config.clientLocalIp,
-        "X-ClientPublicIP": config.clientPublicIp,
-        "X-MACAddress": config.macAddress,
+  let response;
+
+  try {
+    response = await axios.post(
+      url,
+      {
+        clientcode: config.clientCode,
+        password: config.password,
+        totp,
       },
-      timeout: SMART_API_TIMEOUT_MS,
-    },
-  );
+      {
+        headers: {
+          ...buildHeaders(config.apiKey),
+          "X-ClientLocalIP": config.clientLocalIp,
+          "X-ClientPublicIP": config.clientPublicIp,
+          "X-MACAddress": config.macAddress,
+        },
+        timeout: SMART_API_TIMEOUT_MS,
+      },
+    );
+  } catch (error) {
+    const status = error.response?.status;
+    const payload = error.response?.data;
+    console.error("[smartApi] Login request failed:", status, JSON.stringify(payload || {}));
+    throw new Error(
+      payload?.message
+        ? `SmartAPI login failed — ${payload.message}`
+        : `SmartAPI login request failed (status ${status || "network"})`,
+    );
+  }
 
   const data = response.data?.data || {};
   sessionState.token = data.jwtToken;
@@ -139,6 +154,7 @@ async function login() {
   sessionState.expiresAt = Date.now() + 22 * 60 * 60 * 1000; // refresh a bit earlier than 24h
 
   if (!sessionState.token) {
+    console.error("[smartApi] Login response missing token:", JSON.stringify(response.data));
     throw new Error("SmartAPI login failed — token missing in response");
   }
 
@@ -163,17 +179,24 @@ async function postSecure(path, payload = {}) {
   const token = await ensureSession();
   const url = `${SMART_API_BASE_URL}${path}`;
 
-  const response = await axios.post(url, payload, {
-    headers: {
-      ...buildHeaders(config.apiKey, token),
-      "X-ClientLocalIP": config.clientLocalIp,
-      "X-ClientPublicIP": config.clientPublicIp,
-      "X-MACAddress": config.macAddress,
-    },
-    timeout: SMART_API_TIMEOUT_MS,
-  });
+  try {
+    const response = await axios.post(url, payload, {
+      headers: {
+        ...buildHeaders(config.apiKey, token),
+        "X-ClientLocalIP": config.clientLocalIp,
+        "X-ClientPublicIP": config.clientPublicIp,
+        "X-MACAddress": config.macAddress,
+      },
+      timeout: SMART_API_TIMEOUT_MS,
+    });
 
-  return response.data;
+    return response.data;
+  } catch (error) {
+    const status = error.response?.status;
+    const payload = error.response?.data;
+    console.error(`[smartApi] Request to ${path} failed:`, status, JSON.stringify(payload || {}));
+    throw new Error(payload?.message || `SmartAPI request failed with status ${status || "network"}`);
+  }
 }
 
 async function getQuote({ exchange, symbolToken, tradingSymbol, symbolName }) {

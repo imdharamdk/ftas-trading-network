@@ -60,10 +60,37 @@ const FALLBACK_ARTICLES = {
       url: "/news",
     },
   ],
+  stocks: [
+    {
+      bannerImage: "",
+      headline: "Indian indices dashboard",
+      source: "FTAS Fallback",
+      summary: "Monitor NIFTY, BANKNIFTY, and F&O signals in the Stocks tab once your SmartAPI keys are configured.",
+      timePublished: "",
+      url: "/stocks",
+    },
+    {
+      bannerImage: "",
+      headline: "Angel One SmartAPI connected",
+      source: "FTAS Fallback",
+      summary: "Upload SmartAPI credentials in Render to fetch live quotes, candles, and scan F&O contracts.",
+      timePublished: "",
+      url: "/render.yaml",
+    },
+    {
+      bannerImage: "",
+      headline: "Stock engine controls live in dashboard",
+      source: "FTAS Fallback",
+      summary: "Start, stop, or manually scan the Indian market engine from Mission Control just like the crypto scanner.",
+      timePublished: "",
+      url: "/dashboard",
+    },
+  ],
 };
 FALLBACK_ARTICLES.mixed = [
   ...FALLBACK_ARTICLES.finance,
   ...FALLBACK_ARTICLES.crypto,
+  ...FALLBACK_ARTICLES.stocks,
 ];
 
 function getTopicFilter(kind) {
@@ -75,11 +102,15 @@ function getTopicFilter(kind) {
     return "financial_markets,economy_macro";
   }
 
+  if (kind === "stocks") {
+    return "financial_markets,earnings,ipo";
+  }
+
   return "financial_markets,blockchain,economy_macro";
 }
 
 function normalizeKind(kind) {
-  return ["crypto", "finance", "mixed"].includes(kind) ? kind : "mixed";
+  return ["crypto", "finance", "stocks", "mixed"].includes(kind) ? kind : "mixed";
 }
 
 function normalizeLimit(limit) {

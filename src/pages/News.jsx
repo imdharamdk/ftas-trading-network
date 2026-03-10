@@ -89,6 +89,13 @@ function NewsFilterActions({ kind, setKind }) {
         Finance
       </button>
       <button
+        className={`button ${kind === "stocks" ? "button-primary" : "button-ghost"}`}
+        onClick={() => setKind("stocks")}
+        type="button"
+      >
+        Stocks
+      </button>
+      <button
         className={`button ${kind === "crypto" ? "button-primary" : "button-ghost"}`}
         onClick={() => setKind("crypto")}
         type="button"
@@ -152,7 +159,7 @@ export default function News() {
     return (
       <AppShell
         actions={filters}
-        subtitle="Free news API se finance aur crypto stories, fallback content ke saath."
+        subtitle="Free news API se finance, stocks aur crypto stories, fallback content ke saath."
         title="Market News"
       >
         {error ? <div className="banner banner-warning">{error}</div> : null}
