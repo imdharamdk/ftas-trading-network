@@ -46,6 +46,24 @@ function addDaysToIso(days) {
   return date.toISOString();
 }
 
+function formatSubscriptionEndsAt(value) {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
 function buildPlanUpdate(plan) {
   if (plan === "FREE_TRIAL") {
     return {
@@ -77,6 +95,7 @@ function hasActivePaidPlan(user) {
 export default function Dashboard() {
   const { refreshUser, user } = useSession();
   const isAdmin = user?.role === "ADMIN";
+  const subscriptionExpiry = formatSubscriptionEndsAt(user?.subscriptionEndsAt);
   const paidPlanActive = hasActivePaidPlan(user);
   const [overview, setOverview] = useState(null);
   const [analytics, setAnalytics] = useState(null);
@@ -555,6 +574,11 @@ export default function Dashboard() {
           ) : null}
           <p className="panel-note">Har new account ko 7 days free trial milta hai. Uske baad paid plan approve hoga to signal access continue rahega.</p>
           <p className="panel-note">Contact for payment confirmation: {availablePaymentSettings.contactPerson}</p>
+          {!isAdmin ? (
+            <p className="panel-note">
+              {subscriptionExpiry ? `Access valid till ${subscriptionExpiry}.` : "Subscription expiry abhi set nahi hui. Payment approve hone ke baad yahi dikhai degi."}
+            </p>
+          ) : null}
 
           <div className="list-stack">
             {availablePlans.map((plan) => (
