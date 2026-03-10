@@ -1,8 +1,11 @@
 const express = require("express");
+const axios = require("axios");
 const { requireAdmin, requireAuth, requireSignalAccess } = require("../middleware/auth");
 const { SIGNAL_STATUS } = require("../models/Signal");
 const { readCollection } = require("../storage/fileStore");
 const stockEngine = require("../services/stockSignalEngine");
+const { ensureSession } = require("../services/smartApiService");
+const { getInstrumentUniverse } = require("../services/smartInstrumentService");
 
 const router = express.Router();
 
@@ -205,6 +208,86 @@ router.post("/scan", requireAuth, requireAdmin, async (_req, res) => {
     return res.json(result);
   } catch (error) {
     return res.status(500).json({ message: error.message });
+  }
+});
+
+// ── Live prices for stock signals ────────────────────────────────────────────
+async function fetchStockLivePrices(coins) {
+  if (!coins.length) return {};
+
+  const universe = getInstrumentUniverse();
+  const tokenMap = {};
+  for (const inst of universe) {
+    const key = (inst.symbol || inst.tradingSymbol || "").toUpperCase();
+    if (key) tokenMap[key] = { exchange: inst.exchange, token: String(inst.token) };
+  }
+
+  // Group by exchange
+  const byExchange = {};
+  const tokenToCoin = {};
+  for (const coin of coins) {
+    const info = tokenMap[coin];
+    if (!info) continue;
+    if (!byExchange[info.exchange]) byExchange[info.exchange] = [];
+    byExchange[info.exchange].push(info.token);
+    tokenToCoin[info.token] = coin;
+  }
+
+  if (!Object.keys(byExchange).length) return {};
+
+  const baseUrl = process.env.SMART_API_BASE_URL || "https://apiconnect.angelone.in";
+  const token = await ensureSession();
+
+  const resp = await axios.post(
+    `${baseUrl}/rest/secure/angelbroking/market/v1/quote/`,
+    { mode: "OHLC", exchangeTokens: byExchange },
+    {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-PrivateKey": process.env.SMART_API_KEY,
+        "X-UserType": "USER",
+        "X-SourceID": "WEB",
+        Authorization: `Bearer ${token}`,
+      },
+      timeout: 8000,
+    }
+  );
+
+  const priceMap = {};
+  for (const item of resp.data?.data?.fetched || []) {
+    const coinName = tokenToCoin[String(item.symbolToken)];
+    // ltp = live during market hours, close = last closing price when market closed
+    const price = Number(item.ltp) || Number(item.close);
+    if (coinName && Number.isFinite(price) && price > 0) {
+      priceMap[coinName] = price;
+    }
+  }
+  return priceMap;
+}
+
+router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) => {
+  try {
+    const coins = String(req.query.coins || "")
+      .split(",")
+      .map(c => c.trim().toUpperCase())
+      .filter(Boolean);
+
+    if (!coins.length) return res.json({ prices: [] });
+
+    const priceMap = await fetchStockLivePrices([...new Set(coins)]);
+    const liveUpdatedAt = new Date().toISOString();
+
+    return res.json({
+      prices: coins.map(coin => ({
+        coin,
+        livePrice: Number.isFinite(priceMap[coin]) ? priceMap[coin] : null,
+        liveUpdatedAt,
+      })),
+    });
+  } catch (err) {
+    console.error("[stocks/live-prices] Error:", err.message);
+    return res.status(500).json({ message: err.message });
   }
 });
 
