@@ -52,7 +52,7 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
               📊 Dashboard
             </NavLink>
             <NavLink className={navCls} onClick={close} to="/market">
-              🔍 Scanner
+              💹 Crypto
             </NavLink>
             <NavLink className={navCls} onClick={close} to="/stocks">
               🇮🇳 Stocks
