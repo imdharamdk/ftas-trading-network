@@ -1,7 +1,7 @@
 const express = require("express");
 const { requireAdmin, requireAuth, requireSignalAccess } = require("../middleware/auth");
 const { SIGNAL_STATUS } = require("../models/Signal");
-const { mutateCollection, readCollection } = require("../storage/fileStore");
+const { mutateCollection, readCollection, writeCollection } = require("../storage/fileStore");
 const { getPrices } = require("../services/binanceService");
 const { createManualSignal, getStatus, scanNow, seedDemoSignals, start, stop } = require("../services/signalEngine");
 
@@ -327,6 +327,38 @@ router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) =>
     return res.json({
       prices: priceRows,
     });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.post("/archive", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const action = String(req.body?.action || "").toUpperCase();
+    if (action === "ARCHIVE_CLOSED") {
+      const signals = await readCollection("signals");
+      const closedSignals = signals.filter((signal) => signal.status === SIGNAL_STATUS.CLOSED);
+      if (!closedSignals.length) {
+        const archiveSize = (await readCollection("signalsArchive")).length;
+        return res.json({ archived: 0, archiveSize, remaining: signals.length });
+      }
+      const closedIds = new Set(closedSignals.map((signal) => signal.id));
+      const archiveRecords = await readCollection("signalsArchive");
+      const stamped = closedSignals.map((signal) => ({
+        ...signal,
+        archivedAt: signal.archivedAt || new Date().toISOString(),
+      }));
+      const remaining = signals.filter((signal) => signal.status !== SIGNAL_STATUS.CLOSED);
+      const nextArchive = [...stamped, ...archiveRecords.filter((record) => record?.id && !closedIds.has(record.id))];
+      await writeCollection("signalsArchive", nextArchive);
+      await writeCollection("signals", remaining);
+      return res.json({ archived: stamped.length, archiveSize: nextArchive.length, remaining: remaining.length });
+    }
+    if (action === "CLEAR_ARCHIVE") {
+      await writeCollection("signalsArchive", []);
+      return res.json({ archived: 0, archiveSize: 0 });
+    }
+    return res.status(400).json({ message: "Invalid archive action" });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }

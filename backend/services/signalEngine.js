@@ -202,7 +202,9 @@ function getHigherTimeframeBias(analyses) {
 
 // ─── SL/TP ────────────────────────────────────────────────────────────────────
 // SL below nearest S/R + ATR buffer.
-// TP scaled at 1.2 / 2.0 / 3.0 R — forces asymmetric R:R.
+// TP scaled at softer 0.9 / 1.6 / 2.4 R to increase TP hit-rate on volatile moves.
+const TP_R_MULTIPLIERS = [0.9, 1.6, 2.4];
+
 function calculateTargets(side, analysis) {
   const entry  = analysis.currentPrice;
   const atr    = analysis.volatility.atr || analysis.averages.averageRange || entry * 0.003;
@@ -219,9 +221,9 @@ function calculateTargets(side, analysis) {
     return {
       entry: roundPrice(entry), riskPerUnit: roundPrice(risk),
       stopLoss: roundPrice(entry - risk),
-      tp1: roundPrice(entry + risk * 1.2),
-      tp2: roundPrice(entry + risk * 2.0),
-      tp3: roundPrice(entry + risk * 3.0),
+      tp1: roundPrice(entry + risk * TP_R_MULTIPLIERS[0]),
+      tp2: roundPrice(entry + risk * TP_R_MULTIPLIERS[1]),
+      tp3: roundPrice(entry + risk * TP_R_MULTIPLIERS[2]),
     };
   } else {
     const anchors = [high20, previousHigh20, srRes].filter(v => Number.isFinite(v) && v > entry);
@@ -231,9 +233,9 @@ function calculateTargets(side, analysis) {
     return {
       entry: roundPrice(entry), riskPerUnit: roundPrice(risk),
       stopLoss: roundPrice(entry + risk),
-      tp1: roundPrice(entry - risk * 1.2),
-      tp2: roundPrice(entry - risk * 2.0),
-      tp3: roundPrice(entry - risk * 3.0),
+      tp1: roundPrice(entry - risk * TP_R_MULTIPLIERS[0]),
+      tp2: roundPrice(entry - risk * TP_R_MULTIPLIERS[1]),
+      tp3: roundPrice(entry - risk * TP_R_MULTIPLIERS[2]),
     };
   }
 }

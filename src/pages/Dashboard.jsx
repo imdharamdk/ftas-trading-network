@@ -313,10 +313,24 @@ export default function Dashboard() {
         await refreshDataWithFeedback("Manual scan completed");
       }
 
-      if (action === "seed") {
-        await apiFetch("/signals/demo/seed", { method: "POST" });
-        await refreshDataWithFeedback("Demo signals seeded");
-      }
+    } catch (actionError) {
+      setError(actionError.message);
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  async function handleArchiveAction(action) {
+    setActionBusy(action);
+    setError("");
+
+    try {
+      await apiFetch("/signals/archive", {
+        method: "POST",
+        body: { action },
+      });
+      const message = action === "ARCHIVE_CLOSED" ? "Closed signals archived" : "Archive cleared";
+      await refreshDataWithFeedback(message);
     } catch (actionError) {
       setError(actionError.message);
     } finally {
@@ -545,14 +559,43 @@ export default function Dashboard() {
               <button className="button button-secondary" disabled={actionBusy === "scan"} onClick={() => handleEngineAction("scan")} type="button">
                 Run scan now
               </button>
-              <button className="button button-secondary" disabled={actionBusy === "seed"} onClick={() => handleEngineAction("seed")} type="button">
-                Seed demo signals
-              </button>
             </div>
           ) : (
             <p className="panel-note">Scanner controls are restricted to admin accounts.</p>
           )}
         </article>
+
+        {isAdmin ? (
+          <article className="panel">
+            <div className="panel-header">
+              <div>
+                <span className="eyebrow">Maintenance</span>
+                <h2>Closed-signal archive</h2>
+              </div>
+            </div>
+            <p className="panel-note">
+              Move every CLOSED trade out of the live dataset or wipe the archive to keep storage lean.
+            </p>
+            <div className="button-row">
+              <button
+                className="button button-secondary"
+                disabled={actionBusy === "ARCHIVE_CLOSED"}
+                onClick={() => handleArchiveAction("ARCHIVE_CLOSED")}
+                type="button"
+              >
+                Archive closed signals
+              </button>
+              <button
+                className="button button-ghost"
+                disabled={actionBusy === "CLEAR_ARCHIVE"}
+                onClick={() => handleArchiveAction("CLEAR_ARCHIVE")}
+                type="button"
+              >
+                Clear archive
+              </button>
+            </div>
+          </article>
+        ) : null}
 
         <article className="panel">
           <div className="panel-header">
@@ -564,19 +607,19 @@ export default function Dashboard() {
           </div>
           {paidPlanActive ? (
             <div className="banner banner-success">
-              Your {user.plan} plan is active. Purchase popup hide kar diya gaya hai because access already enabled hai.
+              Your {user.plan} plan is active, so the purchase form stays hidden because access is already enabled.
             </div>
           ) : null}
           {!paidPlanActive && hasPendingPayment ? (
             <div className="banner banner-warning">
-              Payment already submit ho chuka hai aur admin approval ka wait kar raha hai. Isliye purchase form abhi hidden hai.
+              A payment proof is already pending admin approval, so the purchase form is hidden for now.
             </div>
           ) : null}
-          <p className="panel-note">Har new account ko 7 days free trial milta hai. Uske baad paid plan approve hoga to signal access continue rahega.</p>
+          <p className="panel-note">Every new account gets a 7-day free trial. After that, signal access continues once a paid plan is approved.</p>
           <p className="panel-note">Contact for payment confirmation: {availablePaymentSettings.contactPerson}</p>
           {!isAdmin ? (
             <p className="panel-note">
-              {subscriptionExpiry ? `Access valid till ${subscriptionExpiry}.` : "Subscription expiry abhi set nahi hui. Payment approve hone ke baad yahi dikhai degi."}
+              {subscriptionExpiry ? `Access valid till ${subscriptionExpiry}.` : "Subscription expiry will show here after your next payment approval."}
             </p>
           ) : null}
 
