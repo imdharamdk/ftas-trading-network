@@ -330,8 +330,16 @@ function stop() {
 }
 
 function getStatus() {
+  // FIX: timer is a circular Timeout object — JSON.stringify crash karta hai isko
+  // Isliye sirf serializable fields return karo
   return {
-    ...engineState,
+    intervalMs:    engineState.intervalMs,
+    isScanning:    engineState.isScanning,
+    lastError:     engineState.lastError,
+    lastGenerated: engineState.lastGenerated,
+    lastScanAt:    engineState.lastScanAt,
+    running:       engineState.running,
+    scanCount:     engineState.scanCount,
   };
 }
 
