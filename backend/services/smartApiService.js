@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { authenticator } = require("otplib/authenticator");
+const crypto = require("crypto");
 
 const SMART_API_BASE_URL = process.env.SMART_API_BASE_URL || "https://apiconnect.angelbroking.com";
 const SMART_API_TIMEOUT_MS = Number(process.env.SMART_API_TIMEOUT_MS || 8000);
@@ -57,9 +57,62 @@ function buildHeaders(apiKey, token = null) {
   return headers;
 }
 
+function base32ToBuffer(secret) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const cleaned = String(secret || "")
+    .toUpperCase()
+    .replace(/[^A-Z2-7]/g, "");
+
+  if (!cleaned.length) {
+    return Buffer.alloc(0);
+  }
+
+  let bits = "";
+  for (const char of cleaned) {
+    const value = alphabet.indexOf(char);
+    if (value === -1) {
+      continue;
+    }
+    bits += value.toString(2).padStart(5, "0");
+  }
+
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) {
+    bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  }
+
+  return Buffer.from(bytes);
+}
+
+function generateTotp(secret, options = {}) {
+  const step = Number(options.step || 30);
+  const digits = Number(options.digits || 6);
+  const key = base32ToBuffer(secret);
+
+  if (!key.length) {
+    throw new Error("Invalid SMART_API_TOTP_SECRET");
+  }
+
+  const counter = Math.floor(Date.now() / 1000 / step);
+  const buffer = Buffer.alloc(8);
+  buffer.writeUInt32BE(Math.floor(counter / 0x100000000), 0);
+  buffer.writeUInt32BE(counter & 0xffffffff, 4);
+
+  const hmac = crypto.createHmac("sha1", key).update(buffer).digest();
+  const offset = hmac[hmac.length - 1] & 0xf;
+  const code =
+    ((hmac[offset] & 0x7f) << 24) |
+    ((hmac[offset + 1] & 0xff) << 16) |
+    ((hmac[offset + 2] & 0xff) << 8) |
+    (hmac[offset + 3] & 0xff);
+
+  const otp = (code % 10 ** digits).toString().padStart(digits, "0");
+  return otp;
+}
+
 async function login() {
   const config = getSmartApiConfig();
-  const totp = authenticator.generate(config.totpSecret);
+  const totp = generateTotp(config.totpSecret);
   const url = `${SMART_API_BASE_URL}/rest/auth/angelbroking/user/v1/loginByPassword`;
 
   const response = await axios.post(
