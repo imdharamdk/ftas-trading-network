@@ -132,6 +132,7 @@ export default function Dashboard() {
   const paidPlanActive = hasActivePaidPlan(user);
   const [engine, setEngine] = useState(null);
   const [overview, setOverview] = useState(null);
+  const [stockOverview, setStockOverview] = useState(null);
   const [analytics, setAnalytics] = useState(null);
   const [performance, setPerformance] = useState(null);
   const [myPayments, setMyPayments] = useState([]);
@@ -177,12 +178,14 @@ export default function Dashboard() {
       apiFetch("/signals/stats/analytics"),
       apiFetch("/signals/stats/performance"),
       apiFetch("/signals/engine/status"),
+      apiFetch("/stocks/stats/overview"),
     ]);
-    const [overviewRes, analyticsRes, performanceRes, engineRes] = results;
+    const [overviewRes, analyticsRes, performanceRes, engineRes, stockOverviewRes] = results;
     setOverview(overviewRes.status === "fulfilled" ? overviewRes.value.stats : null);
     setAnalytics(analyticsRes.status === "fulfilled" ? analyticsRes.value.analytics : null);
     setPerformance(performanceRes.status === "fulfilled" ? performanceRes.value.performance : null);
     setEngine(engineRes.status === "fulfilled" ? engineRes.value.engine : null);
+    setStockOverview(stockOverviewRes.status === "fulfilled" ? stockOverviewRes.value.stats : null);
     const rejected = results.find((r) => r.status === "rejected");
     return rejected ? rejected.reason : null;
   }, []);
@@ -412,9 +415,9 @@ export default function Dashboard() {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", minWidth: "220px" }}>
             {[
-              { label: "Active Signals", value: (overview?.activeSignals ?? 0) + (overview?.stockActiveSignals ?? 0), meta: "Across all markets" },
-              { label: "Win Rate", value: `${overview?.winRate ?? 0}%`, meta: `${overview?.closedSignals ?? 0} closed` },
-              { label: "Strong Setups", value: overview?.strongSignals ?? 0, meta: "High confidence" },
+              { label: "Active Signals", value: (overview?.activeSignals ?? 0) + (stockOverview?.activeSignals ?? 0), meta: "Crypto + Stocks" },
+              { label: "Win Rate", value: `${overview?.winRate ?? 0}%`, meta: `${(overview?.closedSignals ?? 0) + (stockOverview?.closedSignals ?? 0)} closed` },
+              { label: "Strong Setups", value: (overview?.strongSignals ?? 0) + (stockOverview?.strongSignals ?? 0), meta: "High confidence" },
               { label: "Your Plan", value: user?.plan || "FREE", meta: user?.subscriptionStatus || "INACTIVE" },
             ].map((stat) => (
               <div key={stat.label} className="metric-card" style={{ margin: 0 }}>
