@@ -268,6 +268,7 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   const signals = await readCollection("signals");
   const filtered = sortByCreatedAtDesc(signals)
     .filter((signal) => signal.status !== SIGNAL_STATUS.ACTIVE)
+    .filter((signal) => signal.result !== "EXPIRED")
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
   const responseSignals = await attachLivePrices(filtered.slice(0, Number(req.query.limit || 100)));
 
@@ -357,6 +358,12 @@ router.post("/archive", requireAuth, requireAdmin, async (req, res) => {
     if (action === "CLEAR_ARCHIVE") {
       await writeCollection("signalsArchive", []);
       return res.json({ archived: 0, archiveSize: 0 });
+    }
+    if (action === "CLEAR_HISTORY") {
+      const signals = await readCollection("signals");
+      const activeSignals = signals.filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE);
+      await writeCollection("signals", activeSignals);
+      return res.json({ remaining: activeSignals.length });
     }
     return res.status(400).json({ message: "Invalid archive action" });
   } catch (error) {

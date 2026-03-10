@@ -40,6 +40,8 @@ const fallbackPaymentSettings = {
   ],
 };
 
+const EXPIRY_PROMPT_STORAGE_KEY = "ftas_expiry_prompt_dismissed";
+
 function addDaysToIso(days) {
   const date = new Date();
   date.setDate(date.getDate() + Number(days || 0));
@@ -96,6 +98,18 @@ export default function Dashboard() {
   const { refreshUser, user } = useSession();
   const isAdmin = user?.role === "ADMIN";
   const subscriptionExpiry = formatSubscriptionEndsAt(user?.subscriptionEndsAt);
+  const subscriptionExpiryDate = user?.subscriptionEndsAt ? new Date(user.subscriptionEndsAt) : null;
+  const subscriptionExpiresSoon =
+    !isAdmin &&
+    subscriptionExpiryDate &&
+    !Number.isNaN(subscriptionExpiryDate.getTime()) &&
+    subscriptionExpiryDate.getTime() > Date.now() &&
+    subscriptionExpiryDate.getTime() - Date.now() <= 3 * 24 * 60 * 60 * 1000;
+  const [expiryPromptDismissed, setExpiryPromptDismissed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(EXPIRY_PROMPT_STORAGE_KEY) === "1";
+  });
+  const [showExpiryPrompt, setShowExpiryPrompt] = useState(false);
   const paidPlanActive = hasActivePaidPlan(user);
   const [overview, setOverview] = useState(null);
   const [analytics, setAnalytics] = useState(null);
@@ -132,6 +146,14 @@ export default function Dashboard() {
     [myPayments]
   );
   const shouldShowPaymentForm = !paidPlanActive && !hasPendingPayment;
+
+  useEffect(() => {
+    if (subscriptionExpiresSoon && !expiryPromptDismissed) {
+      setShowExpiryPrompt(true);
+    } else {
+      setShowExpiryPrompt(false);
+    }
+  }, [subscriptionExpiresSoon, expiryPromptDismissed]);
 
   useEffect(() => {
     if (!availablePaymentSettings) {
@@ -198,7 +220,11 @@ export default function Dashboard() {
     setAnalytics(analyticsResponse.status === "fulfilled" ? analyticsResponse.value.analytics : null);
     setPerformance(performanceResponse.status === "fulfilled" ? performanceResponse.value.performance : null);
     setActiveSignals(activeResponse.status === "fulfilled" ? activeResponse.value.signals || [] : []);
-    setHistorySignals(historyResponse.status === "fulfilled" ? historyResponse.value.signals || [] : []);
+    setHistorySignals(
+      historyResponse.status === "fulfilled"
+        ? (historyResponse.value.signals || []).filter((signal) => signal.result !== "EXPIRED")
+        : [],
+    );
     setEngine(engineResponse.status === "fulfilled" ? engineResponse.value.engine : null);
 
     const rejected = results.find((result) => result.status === "rejected");
@@ -329,7 +355,9 @@ export default function Dashboard() {
         method: "POST",
         body: { action },
       });
-      const message = action === "ARCHIVE_CLOSED" ? "Closed signals archived" : "Archive cleared";
+      let message = "Archive cleared";
+      if (action === "ARCHIVE_CLOSED") message = "Closed signals archived";
+      if (action === "CLEAR_HISTORY") message = "Closed history cleared";
       await refreshDataWithFeedback(message);
     } catch (actionError) {
       setError(actionError.message);
@@ -359,6 +387,19 @@ export default function Dashboard() {
       setActionBusy("");
     }
   }
+
+  const handleDismissExpiryPrompt = useCallback(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(EXPIRY_PROMPT_STORAGE_KEY, "1");
+    }
+    setExpiryPromptDismissed(true);
+    setShowExpiryPrompt(false);
+  }, []);
+
+  const handleRenewPrompt = useCallback(() => {
+    document.getElementById("plan-status-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    handleDismissExpiryPrompt();
+  }, [handleDismissExpiryPrompt]);
 
   async function handlePaymentReview(paymentId, status) {
     setActionBusy(paymentId);
@@ -491,6 +532,49 @@ export default function Dashboard() {
       subtitle="Active signals, confidence analytics, payment approvals and engine controls live on the website."
       title="Mission Control"
     >
+      {showExpiryPrompt ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.55)",
+            zIndex: 20,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+          }}
+        >
+          <div
+            className="panel"
+            style={{
+              maxWidth: "400px",
+              width: "100%",
+              boxShadow: "0 20px 35px rgba(0,0,0,0.35)",
+            }}
+          >
+            <div className="panel-header">
+              <div>
+                <span className="eyebrow">Reminder</span>
+                <h2>Your plan is about to expire</h2>
+              </div>
+            </div>
+            <p className="panel-note">
+              {subscriptionExpiry
+                ? `Current access ends on ${subscriptionExpiry}. Renew now to avoid losing live signals.`
+                : "Your current plan is ending soon. Renew now to keep receiving live signals."}
+            </p>
+            <div className="button-row">
+              <button className="button button-primary" onClick={handleRenewPrompt} type="button">
+                Purchase / Renew
+              </button>
+              <button className="button button-ghost" onClick={handleDismissExpiryPrompt} type="button">
+                Remind later
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {error ? <div className="banner banner-error">{error}</div> : null}
       {feedback ? <div className="banner banner-success">{feedback}</div> : null}
 
@@ -565,7 +649,7 @@ export default function Dashboard() {
           )}
         </article>
 
-        <article className="panel">
+        <article className="panel" id="plan-status-section">
           <div className="panel-header">
             <div>
               <span className="eyebrow">Payments</span>
@@ -917,6 +1001,14 @@ export default function Dashboard() {
                 Archive closed signals
               </button>
               <button
+                className="button button-secondary"
+                disabled={actionBusy === "CLEAR_HISTORY"}
+                onClick={() => handleArchiveAction("CLEAR_HISTORY")}
+                type="button"
+              >
+                Clear history
+              </button>
+              <button
                 className="button button-ghost"
                 disabled={actionBusy === "CLEAR_ARCHIVE"}
                 onClick={() => handleArchiveAction("CLEAR_ARCHIVE")}
@@ -1174,16 +1266,32 @@ export default function Dashboard() {
           </div>
 
           <div className="list-stack">
-            {users.map((account) => (
-              <div className="list-card list-card-wide" key={account.id}>
-                <div>
-                  <strong>{account.email}</strong>
-                  <span>
-                    {account.role} • {account.plan} • {account.subscriptionStatus}
-                  </span>
-                </div>
+            {users.map((account) => {
+              const accountExpiryLabel = formatSubscriptionEndsAt(account.subscriptionEndsAt);
+              const expiryDate = account.subscriptionEndsAt ? new Date(account.subscriptionEndsAt) : null;
+              const isExpired = expiryDate && !Number.isNaN(expiryDate.getTime()) && expiryDate.getTime() < Date.now();
+              const accountExpiresSoon =
+                expiryDate &&
+                !Number.isNaN(expiryDate.getTime()) &&
+                expiryDate.getTime() > Date.now() &&
+                expiryDate.getTime() - Date.now() <= 5 * 24 * 60 * 60 * 1000;
+              return (
+                <div className="list-card list-card-wide" key={account.id}>
+                  <div>
+                    <strong>{account.email}</strong>
+                    <span>
+                      {account.role} • {account.plan} • {account.subscriptionStatus}
+                    </span>
+                    <span
+                      className={`pill ${
+                        accountExpiryLabel ? (isExpired ? "pill-danger" : accountExpiresSoon ? "pill-warning" : "pill-neutral") : "pill-neutral"
+                      }`}
+                    >
+                      {accountExpiryLabel ? `${isExpired ? "Expired" : "Expires"} ${accountExpiryLabel}` : "No expiry set"}
+                    </span>
+                  </div>
 
-                <div className="button-row">
+                  <div className="button-row">
                   <button
                     className="button button-secondary"
                     disabled={actionBusy === account.id}
@@ -1241,8 +1349,9 @@ export default function Dashboard() {
                     Remove access
                   </button>
                 </div>
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
         </section>
       ) : null}
