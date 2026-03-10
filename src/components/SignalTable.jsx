@@ -1,33 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import CandlestickChart from "./CandlestickChart";
-
-/* ─── Expiry timings ───────────────────────────────────────────────────────── */
-const EXPIRY_MS = {
-  "1m":  30  * 60 * 1000,
-  "5m":  60  * 60 * 1000,
-  "15m": 4   * 60 * 60 * 1000,
-  "1h":  16  * 60 * 60 * 1000,
-  "4h":  72  * 60 * 60 * 1000,
-  "12h": 7   * 24 * 60 * 60 * 1000,
-  "1d":  21  * 24 * 60 * 60 * 1000,
-};
-
-function getExpiryMs(tf) {
-  return EXPIRY_MS[tf] || EXPIRY_MS["15m"];
-}
-
-function formatCountdown(createdAt, timeframe) {
-  if (!createdAt) return null;
-  const remaining = (new Date(createdAt).getTime() + getExpiryMs(timeframe)) - Date.now();
-  if (remaining <= 0) return { label: "Expired", urgent: true };
-  const ts = Math.floor(remaining / 1000);
-  const d = Math.floor(ts / 86400);
-  const h = Math.floor((ts % 86400) / 3600);
-  const m = Math.floor((ts % 3600) / 60);
-  const s = ts % 60;
-  const label = d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`;
-  return { label, urgent: remaining < 30 * 60 * 1000 };
-}
 
 function formatPrice(value) {
   const n = Number(value);
@@ -60,31 +32,6 @@ function statusClass(status, result) {
   if (status === "ACTIVE")   return "pill-warning";
   if (result === "SL_HIT")   return "pill-danger";
   return "pill-success";
-}
-
-/* ─── Live countdown ticker ────────────────────────────────────────────────── */
-function ExpiryCell({ createdAt, status, timeframe }) {
-  const [, tick] = useState(0);
-
-  useEffect(() => {
-    if (status !== "ACTIVE") return;
-    const id = setInterval(() => tick(t => t + 1), 1000);
-    return () => clearInterval(id);
-  }, [status]);
-
-  if (status !== "ACTIVE") return <span style={{ opacity: 0.4 }}>—</span>;
-
-  const info = formatCountdown(createdAt, timeframe);
-  if (!info) return <span style={{ opacity: 0.4 }}>—</span>;
-
-  return (
-    <span
-      className={`pill ${info.urgent ? "pill-danger" : "pill-neutral"}`}
-      style={{ fontVariantNumeric: "tabular-nums", minWidth: "60px", display: "inline-block", textAlign: "center" }}
-    >
-      ⏱ {info.label}
-    </span>
-  );
 }
 
 /* ─── Leverage badge ───────────────────────────────────────────────────────── */
@@ -193,12 +140,6 @@ function SignalCard({ signal, onChartOpen }) {
           <span className="signal-card-value">{signal.timeframe}</span>
         </div>
 
-        <div className="signal-card-row">
-          <span className="signal-card-label">Expires</span>
-          <span className="signal-card-value">
-            <ExpiryCell createdAt={signal.createdAt} status={signal.status} timeframe={signal.timeframe} />
-          </span>
-        </div>
       </div>
 
       {/* Confirmations */}
@@ -217,7 +158,7 @@ function SignalCard({ signal, onChartOpen }) {
 /* ══════════════════════════════════════════════════════════════════════════════
    DESKTOP TABLE ROW
 ══════════════════════════════════════════════════════════════════════════════ */
-function TableRow({ signal, compact, onChartOpen }) {
+function TableRow({ signal, onChartOpen }) {
   return (
     <tr>
       <td>
@@ -258,12 +199,6 @@ function TableRow({ signal, compact, onChartOpen }) {
 
       <td><LeverageBadge leverage={signal.leverage ?? signal.indicatorSnapshot?.leverage} /></td>
 
-      {!compact && (
-        <td>
-          <ExpiryCell createdAt={signal.createdAt} status={signal.status} timeframe={signal.timeframe} />
-        </td>
-      )}
-
       <td>
         <span className={`pill ${statusClass(signal.status, signal.result)}`}>
           {signal.result || signal.status}
@@ -291,7 +226,7 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
     setChartTf(timeframe || "15m");
   }
 
-  const colCount = compact ? 13 : 14;
+  const colCount = 13;
 
   return (
     <>
@@ -326,7 +261,6 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
                   <th>TP3</th>
                   <th>Confidence</th>
                   <th>Leverage</th>
-                  {!compact && <th>Expires In</th>}
                   <th>Status</th>
                   <th>Created</th>
                 </tr>
@@ -337,7 +271,6 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
                     <TableRow
                       key={signal.id}
                       signal={signal}
-                      compact={compact}
                       onChartOpen={openChart}
                     />
                   ))
