@@ -3,9 +3,20 @@ const { requireAdmin, requireAuth, requireSignalAccess } = require("../middlewar
 const { SIGNAL_STATUS } = require("../models/Signal");
 const { mutateCollection, readCollection, writeCollection } = require("../storage/fileStore");
 const { getPrices } = require("../services/binanceService");
-const { createManualSignal, getStatus, scanNow, seedDemoSignals, start, stop } = require("../services/signalEngine");
+const { createManualSignal, getStatus, scanNow, start, stop } = require("../services/signalEngine");
 
 const router = express.Router();
+
+async function dropExpiredSignals(signals = null) {
+  const source = signals || (await readCollection("signals"));
+  const filtered = source.filter((signal) => signal.result !== "EXPIRED");
+
+  if (filtered.length !== source.length) {
+    await writeCollection("signals", filtered);
+  }
+
+  return filtered;
+}
 
 function isWinningResult(result) {
   return ["TP1_HIT", "TP2_HIT", "TP3_HIT"].includes(result);
@@ -253,7 +264,8 @@ async function attachLivePrices(signals) {
 }
 
 router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
-  const signals = await readCollection("signals");
+  const rawSignals = await readCollection("signals");
+  const signals = await dropExpiredSignals(rawSignals);
   const filtered = sortByCreatedAtDesc(signals)
     .filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE)
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
@@ -265,10 +277,10 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
 });
 
 router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
-  const signals = await readCollection("signals");
+  const rawSignals = await readCollection("signals");
+  const signals = await dropExpiredSignals(rawSignals);
   const filtered = sortByCreatedAtDesc(signals)
     .filter((signal) => signal.status !== SIGNAL_STATUS.ACTIVE)
-    .filter((signal) => signal.result !== "EXPIRED")
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
   const responseSignals = await attachLivePrices(filtered.slice(0, Number(req.query.limit || 100)));
 
@@ -278,21 +290,24 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
 });
 
 router.get("/stats/overview", requireAuth, requireSignalAccess, async (req, res) => {
-  const signals = await readCollection("signals");
+  const rawSignals = await readCollection("signals");
+  const signals = await dropExpiredSignals(rawSignals);
   return res.json({
     stats: buildOverview(signals),
   });
 });
 
 router.get("/stats/analytics", requireAuth, requireSignalAccess, async (req, res) => {
-  const signals = await readCollection("signals");
+  const rawSignals = await readCollection("signals");
+  const signals = await dropExpiredSignals(rawSignals);
   return res.json({
     analytics: buildAnalytics(signals),
   });
 });
 
 router.get("/stats/performance", requireAuth, requireSignalAccess, async (req, res) => {
-  const signals = await readCollection("signals");
+  const rawSignals = await readCollection("signals");
+  const signals = await dropExpiredSignals(rawSignals);
   return res.json({
     performance: buildPerformance(signals),
   });
@@ -337,7 +352,7 @@ router.post("/archive", requireAuth, requireAdmin, async (req, res) => {
   try {
     const action = String(req.body?.action || "").toUpperCase();
     if (action === "ARCHIVE_CLOSED") {
-      const signals = await readCollection("signals");
+      const signals = await dropExpiredSignals();
       const closedSignals = signals.filter((signal) => signal.status === SIGNAL_STATUS.CLOSED);
       if (!closedSignals.length) {
         const archiveSize = (await readCollection("signalsArchive")).length;
@@ -360,7 +375,7 @@ router.post("/archive", requireAuth, requireAdmin, async (req, res) => {
       return res.json({ archived: 0, archiveSize: 0 });
     }
     if (action === "CLEAR_HISTORY") {
-      const signals = await readCollection("signals");
+      const signals = await dropExpiredSignals();
       const activeSignals = signals.filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE);
       await writeCollection("signals", activeSignals);
       return res.json({ remaining: activeSignals.length });
@@ -402,15 +417,6 @@ router.post("/manual", requireAuth, requireAdmin, async (req, res) => {
 
     const signal = await createManualSignal(req.body, req.user);
     return res.status(201).json({ signal });
-  } catch (error) {
-    return res.status(500).json({ message: error.message });
-  }
-});
-
-router.post("/demo/seed", requireAuth, requireAdmin, async (req, res) => {
-  try {
-    const signals = await seedDemoSignals(req.user);
-    return res.status(201).json({ signals });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }

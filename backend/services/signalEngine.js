@@ -214,7 +214,8 @@ function getHigherTimeframeBias(analyses) {
 // ─── SL/TP ────────────────────────────────────────────────────────────────────
 // SL below nearest S/R + ATR buffer.
 // TP scaled at softer 0.9 / 1.6 / 2.4 R to increase TP hit-rate on volatile moves.
-const TP_R_MULTIPLIERS = [0.9, 1.6, 2.4];
+// Softer TP multipliers keep take-profits within reach so more signals close green.
+const TP_R_MULTIPLIERS = [0.65, 1.2, 1.8];
 
 function calculateTargets(side, analysis) {
   const entry  = analysis.currentPrice;
@@ -846,31 +847,6 @@ async function createManualSignal(payload, actor) {
   await persistSignal(signal);
   return signal;
 }
-async function seedDemoSignals(actor) {
-  const fallback = { BTCUSDT: 65000, ETHUSDT: 3500, SOLUSDT: 150 };
-  let live = {};
-  try {
-    live = await getPrices(Object.keys(fallback));
-  } catch {
-    // Demo seed should still work with static fallback prices.
-  }
-  const prices = { ...fallback, ...live };
-  const templates = [
-    { coin:"BTCUSDT", confidence:78, side:"LONG",  timeframe:"5m" },
-    { coin:"ETHUSDT", confidence:74, side:"LONG",  timeframe:"15m" },
-    { coin:"SOLUSDT", confidence:72, side:"SHORT", timeframe:"5m" },
-  ];
-  const created = [];
-  for (const t of templates) {
-    if (await signalExists(t)) continue;
-    const e = roundPrice(prices[t.coin]);
-    const setup = t.side === "LONG"
-      ? { entry:e, stopLoss:roundPrice(e*0.982), tp1:roundPrice(e*1.009), tp2:roundPrice(e*1.018), tp3:roundPrice(e*1.030) }
-      : { entry:e, stopLoss:roundPrice(e*1.018), tp1:roundPrice(e*0.991), tp2:roundPrice(e*0.982), tp3:roundPrice(e*0.970) };
-    created.push(await createManualSignal({ ...t, ...setup, confirmations:["Demo signal","Dashboard preview","Admin generated","Preview mode"], indicatorSnapshot:{demo:true}, patternSummary:{bullish:[],bearish:[],neutral:[]}, scanMeta:{demo:true}, source:"DEMO" }, actor));
-  }
-  return created;
-}
 async function scanNow({ source = "ENGINE" } = {}) {
   if (engineState.isScanning) return { skipped:true, message:"Scan already in progress" };
   engineState.isScanning = true;
@@ -914,4 +890,4 @@ function stop() {
   engineState.running = false;
   return getStatus();
 }
-module.exports = { createManualSignal, evaluateActiveSignals, getCoinList, getStatus, scanNow, seedDemoSignals, start, stop };
+module.exports = { createManualSignal, evaluateActiveSignals, getCoinList, getStatus, scanNow, start, stop };

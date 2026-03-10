@@ -34,7 +34,7 @@ export default function Signup() {
         <div className="auth-panel">
           <span className="pill pill-neutral">Create FTAS Account</span>
           <h2>Signup</h2>
-          <p className="muted-copy">Har new user ko 7 days free trial milta hai. First account auto-becomes admin so the platform can be initialized.</p>
+          <p className="muted-copy">Every new user gets a 7-day free trial. The very first account automatically becomes admin so the platform can be initialized.</p>
 
           <form className="auth-form" onSubmit={handleSubmit}>
             <label>

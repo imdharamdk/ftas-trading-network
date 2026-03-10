@@ -888,7 +888,7 @@ export default function Dashboard() {
               <strong>{performance?.summary?.winRate ?? 0}%</strong>
             </div>
           </div>
-          <p className="panel-note">Ye closed-trade diagnostics live history se bante hain. Fresh scan ke baad quality trend yahin se measure hoga.</p>
+          <p className="panel-note">Closed-trade diagnostics are built from live history so you can measure quality trends after every scan.</p>
         </article>
 
         <article className="panel">
@@ -1010,7 +1010,7 @@ export default function Dashboard() {
               ? "Loading active signals..."
               : isAdmin
                 ? "No active signals yet. Use Run scan now or post a manual signal."
-                : "No active signals yet. Admin ko scan ya manual signal create karna hoga."
+                : "No active signals yet. An admin needs to run a scan or post a manual signal."
           }
           signals={activeSignals}
         />
@@ -1027,7 +1027,7 @@ export default function Dashboard() {
         {isAdmin ? (
           <>
             <p className="panel-note">
-              Move CLOSED trades out of the live dataset or wipe the archive to keep the board snappy.
+              Move closed trades (including expired ones) out of the live dataset or wipe the archive to keep the board fast.
             </p>
             <div className="button-row">
               <button
@@ -1365,6 +1365,9 @@ export default function Dashboard() {
                     >
                       {accountExpiryLabel ? `${isExpired ? "Expired" : "Expires"} ${accountExpiryLabel}` : "No expiry set"}
                     </span>
+                    <div className="profile-muted">
+                      {accountExpiryLabel ? `Plan expiry ${accountExpiryLabel}` : "Plan expiry not recorded"}
+                    </div>
                   </div>
 
                   <div className="button-row">

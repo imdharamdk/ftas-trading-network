@@ -80,20 +80,24 @@ function SignalCard({ signal, onChartOpen }) {
     : "";
   const symbolDisplay = formatDisplaySymbol(signal);
 
+  const canOpenChart = signal.source !== "SMART_ENGINE";
+
   return (
     <article className="signal-card">
       {/* Top row: coin + side + status */}
       <div className="signal-card-header">
         <button
           className="signal-card-coin"
-          onClick={() => onChartOpen(signal.coin, signal.timeframe)}
+          disabled={!canOpenChart}
+          onClick={canOpenChart ? () => onChartOpen(signal.coin, signal.timeframe) : undefined}
+          title={canOpenChart ? `View ${signal.coin} chart` : "Chart is available for crypto signals only"}
           type="button"
         >
           <span style={{ fontWeight: 600 }}>{symbolDisplay.label}</span>
           {symbolDisplay.detail ? (
             <span style={{ opacity: 0.55, fontSize: "0.75em" }}>{symbolDisplay.detail}</span>
           ) : null}
-          <span style={{ fontSize: "0.75em", opacity: 0.55, marginLeft: "4px" }}>📈</span>
+          {canOpenChart ? <span style={{ fontSize: "0.75em", opacity: 0.55, marginLeft: "4px" }}>📈</span> : null}
         </button>
         <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
           <span className={`pill ${sideClass(signal.side)}`}>{signal.side}</span>
@@ -182,20 +186,22 @@ function SignalCard({ signal, onChartOpen }) {
 ══════════════════════════════════════════════════════════════════════════════ */
 function TableRow({ signal, onChartOpen }) {
   const symbolDisplay = formatDisplaySymbol(signal);
+  const canOpenChart = signal.source !== "SMART_ENGINE";
   return (
     <tr>
       <td>
         <button
           className="coin-chart-btn"
-          onClick={() => onChartOpen(signal.coin, signal.timeframe)}
-          title={`View ${signal.coin} chart`}
+          disabled={!canOpenChart}
+          onClick={canOpenChart ? () => onChartOpen(signal.coin, signal.timeframe) : undefined}
+          title={canOpenChart ? `View ${signal.coin} chart` : "Chart is available for crypto signals only"}
           type="button"
         >
           <strong>{symbolDisplay.label}</strong>
           {symbolDisplay.detail ? (
             <span style={{ opacity: 0.6, fontSize: "0.75em", marginLeft: "6px" }}>{symbolDisplay.detail}</span>
           ) : null}
-          <span className="coin-chart-icon">📈</span>
+          {canOpenChart ? <span className="coin-chart-icon">📈</span> : null}
         </button>
       </td>
 

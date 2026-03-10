@@ -75,14 +75,20 @@ Important backend vars:
 - `SMART_API_CLIENT_CODE=your_angel_broking_id`
 - `SMART_API_PASSWORD=angel_portal_password`
 - `SMART_API_TOTP_SECRET=base32_seed_for_totp`
-- `SMART_MAX_INSTRUMENTS=40`
+- `SMART_MAX_INSTRUMENTS=80`
 - `SMART_SCAN_INTERVAL_MS=120000`
-- `SMART_TRADE_TIMEFRAMES=15m,1h,4h`
+- `SMART_TRADE_TIMEFRAMES=5m,15m,1h,4h`
 - `SMART_ALLOWED_SEGMENTS=EQUITY,FNO,COMMODITY`
 - `AUTO_START_STOCK_ENGINE=false`
+- `SMART_SIGNALS_PER_INSTRUMENT=2`
 - Optional helpers: `SMART_API_CLIENT_LOCAL_IP`, `SMART_API_CLIENT_PUBLIC_IP`, `SMART_API_CLIENT_MAC`, `SMART_API_SOURCE_ID`, `SMART_API_BASE_URL`, `SMART_API_TIMEOUT_MS`
 
-SmartAPI instruments live in `backend/config/smart-instruments.json`. Populate that JSON with the Angel/SmartAPI tokens you want scanned (NSE, BSE, MCX, F&O). Each entry needs `symbol`, `tradingSymbol`, `exchange`, `segment`, and `token`; optional fields such as `lotSize` or `expiry` are picked up by the stock engine.
+SmartAPI instruments can be provided in two ways:
+
+1. Drop the official `OpenAPIScripMaster.json` (downloaded from Angel One) into `backend/config/` and the engine will automatically ingest the full scrip universe.
+2. Or continue using the smaller curated list in `backend/config/smart-instruments.json`.
+
+Each entry needs `symbol`, `tradingSymbol`, `exchange`, `segment`, and `token`; optional fields such as `lotSize`, `instrumentType`, or `expiry` are picked up by the stock engine. Use `SMART_MAX_INSTRUMENTS` and `SMART_SIGNALS_PER_INSTRUMENT` to control how many contracts are scanned per cycle.
 
 ## Install
 

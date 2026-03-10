@@ -4,11 +4,12 @@ const { analyzeCandles } = require("./indicatorEngine");
 const { getInstrumentUniverse } = require("./smartInstrumentService");
 const { getCandles, getLtp } = require("./smartApiService");
 
-const SCAN_TIMEFRAMES = String(process.env.SMART_TRADE_TIMEFRAMES || "15m,1h,4h")
+const SCAN_TIMEFRAMES = String(process.env.SMART_TRADE_TIMEFRAMES || "5m,15m,1h,4h")
   .split(",")
   .map((item) => item.trim())
   .filter(Boolean);
-const MAX_INSTRUMENTS = Number(process.env.SMART_MAX_INSTRUMENTS || 40);
+const MAX_INSTRUMENTS = Number(process.env.SMART_MAX_INSTRUMENTS || 80);
+const MAX_SIGNALS_PER_INSTRUMENT = Number(process.env.SMART_SIGNALS_PER_INSTRUMENT || 2);
 const ENGINE_INTERVAL_MS = Number(process.env.SMART_SCAN_INTERVAL_MS || process.env.SCAN_INTERVAL_MS || 120000);
 const WIN_RESULTS = new Set(["TP1_HIT", "TP2_HIT", "TP3_HIT"]);
 const LOSS_RESULTS = new Set(["SL_HIT"]);
@@ -45,7 +46,7 @@ function clamp(value, min, max) {
 }
 
 function buildTargetPrices(side, entry, risk) {
-  const multipliers = [0.9, 1.6, 2.4];
+  const multipliers = [0.55, 1.05, 1.65];
   if (side === "LONG") {
     return multipliers.map((multiplier) => roundPrice(entry + risk * multiplier));
   }
@@ -93,13 +94,21 @@ function buildCandidate(instrument, timeframe, analysis) {
     return null;
   }
 
+  const macdHist = momentum.macd?.histogram || 0;
+  const emaTrendBull = ema21 > ema50 * 0.998 && ema50 > ema200 * 0.995;
+  const emaTrendBear = ema21 < ema50 * 1.002 && ema50 < ema200 * 1.005;
+  const adxAcceptable = adx >= 13;
+  const adxStrong = adx >= 18;
+  const rsiLongOk = rsi >= 35 && rsi <= 78;
+  const rsiShortOk = rsi >= 22 && rsi <= 65;
   let side = null;
-  const emaTrendBull = ema21 > ema50 && ema50 > ema200;
-  const emaTrendBear = ema21 < ema50 && ema50 < ema200;
-  if (emaTrendBull && adx >= 18 && rsi >= 40 && rsi <= 75) {
+
+  if (emaTrendBull && adxAcceptable && rsiLongOk) {
     side = "LONG";
-  } else if (emaTrendBear && adx >= 18 && rsi >= 25 && rsi <= 60) {
+  } else if (emaTrendBear && adxAcceptable && rsiShortOk) {
     side = "SHORT";
+  } else if (adxStrong && Math.abs(macdHist) >= 0.25) {
+    side = macdHist >= 0 ? "LONG" : "SHORT";
   } else {
     return null;
   }
@@ -108,7 +117,7 @@ function buildCandidate(instrument, timeframe, analysis) {
   if (adx >= 25) confirmations.push("ADX strong");
   if ((trend.diPlus || 0) > (trend.diMinus || 0) && side === "LONG") confirmations.push("+DI lead");
   if ((trend.diMinus || 0) > (trend.diPlus || 0) && side === "SHORT") confirmations.push("-DI lead");
-  if (momentum.macd?.histogram && Math.abs(momentum.macd.histogram) >= 0.2) confirmations.push("MACD impulse");
+  if (Math.abs(macdHist) >= 0.2) confirmations.push("MACD impulse");
 
   const baseConfidence = side === "LONG" ? 72 : 70;
   const confidence = clamp(baseConfidence + confirmations.length * 3 + Math.round((adx - 20) / 2), 55, 96);
@@ -116,7 +125,7 @@ function buildCandidate(instrument, timeframe, analysis) {
   const [tp1, tp2, tp3] = buildTargetPrices(side, price, risk);
 
   const signal = createSignal({
-    coin: instrument.tradingSymbol || instrument.symbol,
+    coin: instrument.symbol || instrument.tradingSymbol,
     side,
     confidence,
     leverage: 1,
@@ -134,6 +143,7 @@ function buildCandidate(instrument, timeframe, analysis) {
   signal.scanMeta = {
     instrument: {
       exchange: instrument.exchange,
+      tradingSymbol: instrument.tradingSymbol,
       segment: instrument.segment,
       token: instrument.token,
       lotSize: instrument.lotSize,
@@ -157,18 +167,20 @@ function buildCandidate(instrument, timeframe, analysis) {
 }
 
 async function analyzeInstrument(instrument) {
-  let best = null;
+  const candidates = [];
   for (const timeframe of SCAN_TIMEFRAMES) {
     const candles = await fetchCandles(instrument, timeframe);
     if (!candles) continue;
     const analysis = analyzeCandles(candles);
     analysis.currentPrice = candles[candles.length - 1].close;
     const candidate = buildCandidate(instrument, timeframe, analysis);
-    if (candidate && (!best || candidate.confidence > best.confidence)) {
-      best = candidate;
+    if (candidate) {
+      candidates.push(candidate);
     }
   }
-  return best;
+  return candidates
+    .sort((left, right) => right.confidence - left.confidence)
+    .slice(0, Math.max(1, MAX_SIGNALS_PER_INSTRUMENT));
 }
 
 async function persistSignal(candidate) {
@@ -269,11 +281,13 @@ async function scanUniverse() {
 
     for (const instrument of instruments) {
       try {
-        const candidate = await analyzeInstrument(instrument);
-        if (!candidate) continue;
-        const persisted = await persistSignal(candidate);
-        if (persisted) {
-          generated.push(persisted);
+        const candidates = await analyzeInstrument(instrument);
+        if (!candidates.length) continue;
+        for (const candidate of candidates) {
+          const persisted = await persistSignal(candidate);
+          if (persisted) {
+            generated.push(persisted);
+          }
         }
       } catch (error) {
         console.warn("[stockEngine] Instrument scan failed:", instrument.symbol, error.message);

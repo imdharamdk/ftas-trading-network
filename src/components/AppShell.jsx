@@ -17,6 +17,7 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
   const { logout, user } = useSession();
   const [open, setOpen] = useState(false);
   const planEnd = fmtExpiry(user?.subscriptionEndsAt);
+  const showPlanEnd = user?.role !== "ADMIN" && planEnd;
 
   const close = () => setOpen(false);
   const toggle = () => setOpen(o => !o);
@@ -75,7 +76,7 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
             <span>{user?.email}</span>
             <span className="profile-muted">
               {user?.plan || "FREE"} &bull; {user?.subscriptionStatus || "INACTIVE"}
-              {planEnd ? ` · till ${planEnd}` : ""}
+              {showPlanEnd ? ` · valid till ${planEnd}` : ""}
             </span>
           </div>
           <button
