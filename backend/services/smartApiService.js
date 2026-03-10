@@ -1,7 +1,7 @@
 const axios  = require("axios");
 const crypto = require("crypto");
 
-const SMART_API_BASE_URL    = process.env.SMART_API_BASE_URL    || "https://apiconnect.angelbroking.com";
+const SMART_API_BASE_URL    = process.env.SMART_API_BASE_URL    || "https://apiconnect.angelone.in";
 const SMART_API_TIMEOUT_MS  = Number(process.env.SMART_API_TIMEOUT_MS || 8000);
 const SESSION_REFRESH_BUFFER_MS = 10 * 60 * 1000;
 
