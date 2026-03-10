@@ -3,6 +3,7 @@ import AppShell from "../components/AppShell";
 import SignalTable from "../components/SignalTable";
 import { useSession } from "../context/useSession";
 import { apiFetch } from "../lib/api";
+import { getSignalCoins, mergeSignalLivePrices } from "../lib/liveSignalPrices";
 
 export default function Stocks() {
   const { user } = useSession();
@@ -45,7 +46,26 @@ export default function Stocks() {
 
   useEffect(() => {
     loadData();
+    const id = window.setInterval(loadData, 30000);
+    return () => window.clearInterval(id);
   }, [loadData]);
+
+  // Live price refresh every 10 seconds
+  const activeCoinsKey = getSignalCoins(activeSignals).join(",");
+  useEffect(() => {
+    let active = true;
+    async function refreshPrices() {
+      if (!activeCoinsKey) return;
+      try {
+        const res = await apiFetch(`/stocks/live-prices?coins=${activeCoinsKey}`);
+        if (!active) return;
+        setActiveSignals(cur => mergeSignalLivePrices(cur, res.prices || []));
+      } catch { /* keep stale prices */ }
+    }
+    refreshPrices();
+    const id = window.setInterval(refreshPrices, 10000);
+    return () => { active = false; window.clearInterval(id); };
+  }, [activeCoinsKey]);
 
   async function handleEngineAction(action) {
     setActionBusy(action);
