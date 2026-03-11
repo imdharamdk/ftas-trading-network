@@ -1,90 +1,29 @@
 const axios = require("axios");
 
-const client = axios.create({
-  baseURL: "https://www.alphavantage.co/query",
-  timeout: 15000,
-});
-
 const cache = new Map();
-const NEWS_CACHE_MS = Number(process.env.NEWS_CACHE_MS || 15 * 60 * 1000);
+const NEWS_CACHE_MS = Number(process.env.NEWS_CACHE_MS || 10 * 60 * 1000);
+
+// Hardcoded keys — can also be overridden via env vars
+const HARDCODED_GNEWS_KEY     = "6e15ede0b451a6d92027c9d6c822e28a";
+const HARDCODED_AV_KEY        = "SX9UN0F2N0JUEBMQ";
+const HARDCODED_NEWSDATA_KEY  = "pub_a9c26d2a997f409398291993bd872dac";
+
+/* ─── Fallback articles ──────────────────────────────────────────────────────── */
 const FALLBACK_ARTICLES = {
   crypto: [
-    {
-      bannerImage: "",
-      headline: "Crypto watchlist stays available even without a third-party news key",
-      source: "FTAS Fallback",
-      summary: "Configure ALPHA_VANTAGE_API_KEY for live headlines, or keep fallback mode enabled for a stable feed.",
-      timePublished: "",
-      url: "/news",
-    },
-    {
-      bannerImage: "",
-      headline: "Signal board continues to work independently of the news provider",
-      source: "FTAS Fallback",
-      summary: "Scanner, active signals, and payment flow keep running even if the external news API is disabled.",
-      timePublished: "",
-      url: "/dashboard",
-    },
-    {
-      bannerImage: "",
-      headline: "Use market view for live pair discovery while news runs in fallback mode",
-      source: "FTAS Fallback",
-      summary: "The market page still loads futures pairs and chart data separately from the news provider.",
-      timePublished: "",
-      url: "/market",
-    },
+    { headline: "Bitcoin and crypto markets: live price tracking on FTAS", source: "FTAS", summary: "Track all major crypto pairs live on the Scanner page — BTC, ETH, SOL, and 500+ Binance futures pairs.", timePublished: "", url: "/market" },
+    { headline: "Crypto signal engine running 24/7", source: "FTAS", summary: "The Binance signal scanner checks EMA, RSI, MACD, and ADX conditions across all USDT perpetual futures.", timePublished: "", url: "/crypto" },
+    { headline: "How to read crypto signals on FTAS", source: "FTAS", summary: "Each signal shows entry price, stop loss, and three take-profit targets with a confidence score.", timePublished: "", url: "/crypto" },
   ],
   finance: [
-    {
-      bannerImage: "",
-      headline: "Payment review and subscription updates remain available during news degradation",
-      source: "FTAS Fallback",
-      summary: "Admin plan approvals and account state changes do not depend on Alpha Vantage availability.",
-      timePublished: "",
-      url: "/dashboard",
-    },
-    {
-      bannerImage: "",
-      headline: "Deploy backend with a real news API key for production finance headlines",
-      source: "FTAS Fallback",
-      summary: "Set ALPHA_VANTAGE_API_KEY in backend environment settings to replace fallback articles with live feed data.",
-      timePublished: "",
-      url: "/news",
-    },
-    {
-      bannerImage: "",
-      headline: "Static frontend and Node backend should be deployed separately",
-      source: "FTAS Fallback",
-      summary: "Keep Vercel for the React app and a Node host such as Render for the API and scheduled scanner.",
-      timePublished: "",
-      url: "/news",
-    },
+    { headline: "Indian stock market signals via SmartAPI", source: "FTAS", summary: "NSE, BSE, NFO, and MCX instruments are scanned using Angel One SmartAPI for real-time F&O signals.", timePublished: "", url: "/stocks" },
+    { headline: "Win rate and performance dashboard updated", source: "FTAS", summary: "See separate win rates for crypto and Indian stock signals on the Dashboard page.", timePublished: "", url: "/dashboard" },
+    { headline: "Payment and subscription management on FTAS", source: "FTAS", summary: "Submit UPI or bank transfer payments directly on the website. Admin approval activates your plan instantly.", timePublished: "", url: "/dashboard" },
   ],
   stocks: [
-    {
-      bannerImage: "",
-      headline: "Indian indices dashboard",
-      source: "FTAS Fallback",
-      summary: "Monitor NIFTY, BANKNIFTY, and F&O signals in the Stocks tab once your SmartAPI keys are configured.",
-      timePublished: "",
-      url: "/stocks",
-    },
-    {
-      bannerImage: "",
-      headline: "Angel One SmartAPI connected",
-      source: "FTAS Fallback",
-      summary: "Upload SmartAPI credentials in Render to fetch live quotes, candles, and scan F&O contracts.",
-      timePublished: "",
-      url: "/render.yaml",
-    },
-    {
-      bannerImage: "",
-      headline: "Stock engine controls live in dashboard",
-      source: "FTAS Fallback",
-      summary: "Start, stop, or manually scan the Indian market engine from Mission Control just like the crypto scanner.",
-      timePublished: "",
-      url: "/dashboard",
-    },
+    { headline: "Nifty 50 and BANKNIFTY F&O signals", source: "FTAS", summary: "FTAS scans index futures and options contracts to find high-confidence entry setups.", timePublished: "", url: "/stocks" },
+    { headline: "MCX commodities: crude oil, gold, silver signals", source: "FTAS", summary: "Commodity contracts on MCX are scanned every 2 minutes by the SmartAPI engine.", timePublished: "", url: "/stocks" },
+    { headline: "All NSE/BSE equity instruments in one scanner", source: "FTAS", summary: "The Scanner page now shows all stock instruments with segment and exchange filters.", timePublished: "", url: "/market" },
   ],
 };
 FALLBACK_ARTICLES.mixed = [
@@ -93,178 +32,174 @@ FALLBACK_ARTICLES.mixed = [
   ...FALLBACK_ARTICLES.stocks,
 ];
 
-function getTopicFilter(kind) {
-  if (kind === "crypto") {
-    return "blockchain";
-  }
-
-  if (kind === "finance") {
-    return "financial_markets,economy_macro";
-  }
-
-  if (kind === "stocks") {
-    return "financial_markets,earnings,ipo";
-  }
-
-  return "financial_markets,blockchain,economy_macro";
-}
-
-function normalizeKind(kind) {
-  return ["crypto", "finance", "stocks", "mixed"].includes(kind) ? kind : "mixed";
-}
-
-function normalizeLimit(limit) {
-  return Math.min(Math.max(Number(limit) || 9, 3), 20);
-}
-
-const CRYPTO_RELEVANCE_PATTERNS = [
-  /\bcrypto(?:currency|currencies)?\b/i,
-  /\bblockchain\b/i,
-  /\bbitcoin\b/i,
-  /\bbtc\b/i,
-  /\beth(?:ereum)?\b/i,
-  /\bsol(?:ana)?\b/i,
-  /\bxrp\b/i,
-  /\bdoge(?:coin)?\b/i,
-  /\bstablecoin(?:s)?\b/i,
-  /\btoken(?:s)?\b/i,
-  /\bdigital asset(?:s)?\b/i,
-  /\bdefi\b/i,
-  /\bweb3\b/i,
-  /\bbinance\b/i,
-  /\bcoinbase\b/i,
-  /\bokx\b/i,
-  /\bkraken\b/i,
-  /\bcrypto\.com\b/i,
-];
-
-function normalizeArticle(article) {
-  return {
-    bannerImage: article.banner_image || "",
-    source: article.source || "Alpha Vantage",
-    headline: article.title || "Untitled story",
-    summary: article.summary || "No summary available.",
-    timePublished: article.time_published || "",
-    url: article.url || "#",
-  };
-}
-
-function getCryptoRelevanceScore(article) {
-  const haystack = [
-    article?.title || "",
-    article?.summary || "",
-    article?.source || "",
-    article?.url || "",
-  ].join(" ");
-
-  let score = 0;
-
-  for (const pattern of CRYPTO_RELEVANCE_PATTERNS) {
-    if (pattern.test(haystack)) {
-      score += 1;
-    }
-  }
-
-  return score;
-}
-
-function selectArticles(feed, kind, limit) {
-  const normalized = (Array.isArray(feed) ? feed : []).map((article, index) => ({
-    article,
-    index,
-    normalized: normalizeArticle(article),
-    cryptoScore: getCryptoRelevanceScore(article),
-  }));
-
-  if (kind === "crypto") {
-    const relevant = normalized.filter((item) => item.cryptoScore > 0);
-    const fallback = normalized.filter((item) => item.cryptoScore === 0);
-    relevant.sort((left, right) => right.cryptoScore - left.cryptoScore || left.index - right.index);
-    return [...relevant, ...fallback]
-      .slice(0, limit)
-      .map((item) => item.normalized);
-  }
-
-  return normalized.slice(0, limit).map((item) => item.normalized);
-}
-
 function buildFallbackPayload(kind, limit, message = "") {
-  return {
-    articles: (FALLBACK_ARTICLES[kind] || FALLBACK_ARTICLES.mixed).slice(0, limit),
-    degraded: true,
-    message,
-    provider: "FTAS_FALLBACK",
-  };
+  const articles = (FALLBACK_ARTICLES[kind] || FALLBACK_ARTICLES.mixed).slice(0, limit);
+  return { articles, degraded: true, message, provider: "FTAS_FALLBACK" };
 }
 
-async function fetchNews({ kind = "mixed", limit = 9 } = {}) {
-  const normalizedKind = normalizeKind(kind);
-  const normalizedLimit = normalizeLimit(limit);
-  const provider = String(process.env.NEWS_PROVIDER || "ALPHA_VANTAGE").trim().toUpperCase();
-  const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
-  const cacheKey = `${provider}:${normalizedKind}:${normalizedLimit}`;
-  const cached = cache.get(cacheKey);
+/* ─── Alpha Vantage ─────────────────────────────────────────────────────────── */
+function getAVTopic(kind) {
+  if (kind === "crypto")  return "blockchain,cryptocurrency";
+  if (kind === "stocks")  return "earnings,ipo,financial_markets";
+  if (kind === "finance") return "economy_macro,financial_markets,forex";
+  return "financial_markets,economy_macro,blockchain";
+}
 
-  if (cached && Date.now() - cached.createdAt < NEWS_CACHE_MS) {
+async function fetchFromAlphaVantage(kind, limit, apiKey) {
+  const url = `https://www.alphavantage.co/query`;
+  const params = {
+    function: "NEWS_SENTIMENT",
+    topics: getAVTopic(kind),
+    limit: Math.min(limit + 5, 50),
+    sort: "LATEST",
+    apikey: apiKey,
+  };
+  const res = await axios.get(url, { params, timeout: 12000 });
+  const feed = Array.isArray(res.data?.feed) ? res.data.feed : [];
+  // AV sometimes returns info messages instead of feed
+  if (!feed.length && res.data?.Information) {
+    throw new Error(`Alpha Vantage: ${res.data.Information}`);
+  }
+  return feed.slice(0, limit).map(a => ({
+    headline: a.title || "Untitled",
+    source: a.source || "Alpha Vantage",
+    summary: a.summary || "",
+    timePublished: a.time_published || "",
+    url: a.url || "#",
+    bannerImage: a.banner_image || "",
+  }));
+}
+
+/* ─── GNews API ─────────────────────────────────────────────────────────────── */
+function getGNewsQuery(kind) {
+  if (kind === "crypto")  return "bitcoin OR ethereum OR crypto OR blockchain";
+  if (kind === "stocks")  return "stock market OR NSE OR BSE OR Nifty OR share market";
+  if (kind === "finance") return "finance OR economy OR RBI OR interest rates OR inflation";
+  return "finance OR stock market OR crypto OR economy OR bitcoin";
+}
+
+async function fetchFromGNews(kind, limit, apiKey) {
+  const res = await axios.get("https://gnews.io/api/v4/search", {
+    params: {
+      q: getGNewsQuery(kind),
+      lang: "en",
+      max: Math.min(limit, 10),
+      apikey: apiKey,
+      sortby: "publishedAt",
+    },
+    timeout: 12000,
+  });
+  const articles = Array.isArray(res.data?.articles) ? res.data.articles : [];
+  if (!articles.length) throw new Error("GNews returned 0 articles");
+  return articles.map(a => ({
+    headline: a.title || "Untitled",
+    source: a.source?.name || "GNews",
+    summary: a.description || a.content || "",
+    timePublished: a.publishedAt || "",
+    url: a.url || "#",
+    bannerImage: a.image || "",
+  }));
+}
+
+/* ─── NewsData.io API (free tier: 200 req/day) ──────────────────────────────── */
+function getNewsDataCategory(kind) {
+  if (kind === "crypto")  return "technology,science";
+  if (kind === "stocks")  return "business";
+  if (kind === "finance") return "business,politics";
+  return "business,technology";
+}
+
+async function fetchFromNewsData(kind, limit, apiKey) {
+  const url = `https://newsdata.io/api/1/news`;
+  const params = {
+    apikey: apiKey,
+    language: "en",
+    category: getNewsDataCategory(kind),
+    q: kind === "crypto" ? "crypto OR bitcoin OR blockchain" : kind === "stocks" ? "stock market OR NSE OR Nifty" : "finance OR economy",
+  };
+  const res = await axios.get(url, { params, timeout: 12000 });
+  const results = Array.isArray(res.data?.results) ? res.data.results : [];
+  return results.slice(0, limit).map(a => ({
+    headline: a.title || "Untitled",
+    source: a.source_id || "NewsData",
+    summary: a.description || a.content || "",
+    timePublished: a.pubDate || "",
+    url: a.link || "#",
+    bannerImage: a.image_url || "",
+  }));
+}
+
+/* ─── CryptoCompare News (free, no key needed for basic) ───────────────────── */
+async function fetchFromCryptoCompare(limit) {
+  const url = `https://min-api.cryptocompare.com/data/v2/news/?lang=EN&sortOrder=latest`;
+  const res = await axios.get(url, { timeout: 10000 });
+  const data = Array.isArray(res.data?.Data) ? res.data.Data : [];
+  return data.slice(0, limit).map(a => ({
+    headline: a.title || "Untitled",
+    source: a.source_info?.name || a.source || "CryptoCompare",
+    summary: a.body?.slice(0, 200) || "",
+    timePublished: a.published_on ? new Date(a.published_on * 1000).toISOString() : "",
+    url: a.url || "#",
+    bannerImage: a.imageurl || "",
+  }));
+}
+
+/* ─── Main fetch function ───────────────────────────────────────────────────── */
+async function fetchNews({ kind = "mixed", limit = 9 } = {}) {
+  const normalizedKind = ["crypto", "finance", "stocks", "mixed"].includes(kind) ? kind : "mixed";
+  const normalizedLimit = Math.min(Math.max(Number(limit) || 9, 3), 10);
+  const cacheKey = `news:${normalizedKind}:${normalizedLimit}`;
+
+  // Return cached if fresh
+  const cached = cache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < NEWS_CACHE_MS) {
     return cached.payload;
   }
 
+  const provider = String(process.env.NEWS_PROVIDER || "AUTO").trim().toUpperCase();
   if (provider === "FALLBACK") {
-    const payload = buildFallbackPayload(normalizedKind, normalizedLimit, "NEWS_PROVIDER is set to FALLBACK.");
-    cache.set(cacheKey, {
-      createdAt: Date.now(),
-      payload,
-    });
-    return payload;
+    return buildFallbackPayload(normalizedKind, normalizedLimit, "NEWS_PROVIDER set to FALLBACK.");
   }
 
-  if (!apiKey) {
-    const payload = buildFallbackPayload(normalizedKind, normalizedLimit, "ALPHA_VANTAGE_API_KEY is not configured.");
-    cache.set(cacheKey, {
-      createdAt: Date.now(),
-      payload,
-    });
-    return payload;
+  // Resolve keys — env vars override hardcoded values
+  const gnewsKey    = process.env.GNEWS_API_KEY        || HARDCODED_GNEWS_KEY;
+  const avKey       = process.env.ALPHA_VANTAGE_API_KEY || HARDCODED_AV_KEY;
+  const newsdataKey = process.env.NEWSDATA_API_KEY      || HARDCODED_NEWSDATA_KEY;
+
+  // Provider priority: GNews → NewsData → AlphaVantage → CryptoCompare
+  const attempts = [
+    { name: "GNews",        fn: () => fetchFromGNews(normalizedKind, normalizedLimit, gnewsKey) },
+    { name: "NewsData",     fn: () => fetchFromNewsData(normalizedKind, normalizedLimit, newsdataKey) },
+    { name: "AlphaVantage", fn: () => fetchFromAlphaVantage(normalizedKind, normalizedLimit, avKey) },
+  ];
+
+  // CryptoCompare always available as last resort for crypto/mixed
+  if (normalizedKind === "crypto" || normalizedKind === "mixed") {
+    attempts.push({ name: "CryptoCompare", fn: () => fetchFromCryptoCompare(normalizedLimit) });
   }
 
-  try {
-    const response = await client.get("", {
-      params: {
-        apikey: apiKey,
-        function: "NEWS_SENTIMENT",
-        limit: normalizedLimit,
-        sort: "LATEST",
-        topics: getTopicFilter(normalizedKind),
-      },
-    });
-
-    const feed = Array.isArray(response.data?.feed) ? response.data.feed : [];
-    const articles = selectArticles(feed, normalizedKind, normalizedLimit);
-    const payload = articles.length
-      ? {
-          articles,
-          degraded: false,
-          message: "",
-          provider: "ALPHA_VANTAGE",
-        }
-      : buildFallbackPayload(normalizedKind, normalizedLimit, "Alpha Vantage returned no articles for this filter.");
-
-    cache.set(cacheKey, {
-      createdAt: Date.now(),
-      payload,
-    });
-
-    return payload;
-  } catch (error) {
-    const payload = buildFallbackPayload(normalizedKind, normalizedLimit, `Live news unavailable: ${error.message}`);
-    cache.set(cacheKey, {
-      createdAt: Date.now(),
-      payload,
-    });
-    return payload;
+  let lastError = "";
+  for (const attempt of attempts) {
+    try {
+      const articles = await attempt.fn();
+      if (articles && articles.length > 0) {
+        const payload = { articles, degraded: false, message: "", provider: attempt.name };
+        cache.set(cacheKey, { ts: Date.now(), payload });
+        console.log(`[news] Loaded ${articles.length} articles from ${attempt.name} (${normalizedKind})`);
+        return payload;
+      }
+      lastError = `${attempt.name} returned 0 articles`;
+    } catch (e) {
+      console.error(`[news] ${attempt.name} failed:`, e.message);
+      lastError = e.message;
+    }
   }
+
+  // All failed — return fallback, retry sooner
+  console.warn(`[news] All providers failed for "${normalizedKind}": ${lastError}`);
+  const payload = buildFallbackPayload(normalizedKind, normalizedLimit, "Live news temporarily unavailable.");
+  cache.set(cacheKey, { ts: Date.now() - NEWS_CACHE_MS + 60000, payload });
+  return payload;
 }
 
-module.exports = {
-  fetchNews,
-};
+module.exports = { fetchNews };
