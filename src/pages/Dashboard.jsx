@@ -226,12 +226,13 @@ export default function Dashboard() {
       }
     }
     loadData();
-    const id = window.setInterval(loadData, 30000);
+    const id = window.setInterval(loadData, 15000);
     return () => { active = false; window.clearInterval(id); };
   }, [loadPrivateData, loadPublicData]);
 
   async function refreshWithFeedback(msg) {
     setFeedback(msg);
+    setTimeout(() => setFeedback(""), 4000);
     const pe = await loadPublicData();
     const pve = await loadPrivateData();
     setError(pe?.message || pve?.message || "");
