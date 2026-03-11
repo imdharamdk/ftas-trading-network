@@ -45,6 +45,8 @@ function resolveSegment(exchange) {
   if (exchange === "BFO")   return "FNO";
   if (exchange === "NCO")   return "CURRENCY";
   if (exchange === "NCDEX") return "COMMODITY";
+  if (exchange === "MCX")   return "COMMODITY";
+  if (exchange === "BSE")   return "EQUITY";
   return "EQUITY";
 }
 
@@ -60,7 +62,10 @@ function normalizeMaster(entry = {}) {
 
   // Bonds, SGBs, ETF NAV instruments filter karo — inke candles nahi milte
   // Pattern: naam mein digits + letters mix (782HP32, SGBJUN27 etc.)
-  if (/\d/.test(symbol.replace(/-EQ$|-BE$|-SM$|-GB$|-SG$/, ""))) return null;
+  // EXCEPTION: Commodity futures (FUTCOM, COMDTY) legitimately have digits in their names
+  //            e.g. GOLD05JUN26FUT, SILVER05MAY26FUT, CRUDEOIL19MAR26FUT
+  const isCommodityFuture = instrumentType === "FUTCOM" || instrumentType === "COMDTY" || exchange === "MCX" || exchange === "NCDEX";
+  if (!isCommodityFuture && /\d/.test(symbol.replace(/-EQ$|-BE$|-SM$|-GB$|-SG$/, ""))) return null;
 
   const segment = resolveSegment(exchange);
   return {
