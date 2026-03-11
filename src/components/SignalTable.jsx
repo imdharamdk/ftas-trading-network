@@ -1,5 +1,6 @@
 import { useState } from "react";
 import CandlestickChart from "./CandlestickChart";
+import TradingViewModal from "./TradingViewModal";
 
 function formatPrice(value) {
   const n = Number(value);
@@ -69,7 +70,6 @@ function ConfBadge({ confidence }) {
 
 /* ══════════════════════════════════════════════════════════════════════════════
    MOBILE SIGNAL CARD — shown when screen width < 640px
-   Uses CSS class .signal-card defined in index.css
 ══════════════════════════════════════════════════════════════════════════════ */
 function SignalCard({ signal, onChartOpen }) {
   const move = Number(signal.signalMovePercent);
@@ -80,7 +80,7 @@ function SignalCard({ signal, onChartOpen }) {
     : "";
   const symbolDisplay = formatDisplaySymbol(signal);
 
-  const canOpenChart = signal.source !== "SMART_ENGINE";
+  const isStock = signal.source === "SMART_ENGINE";
 
   return (
     <article className="signal-card">
@@ -88,16 +88,15 @@ function SignalCard({ signal, onChartOpen }) {
       <div className="signal-card-header">
         <button
           className="signal-card-coin"
-          disabled={!canOpenChart}
-          onClick={canOpenChart ? () => onChartOpen(signal.coin, signal.timeframe) : undefined}
-          title={canOpenChart ? `View ${signal.coin} chart` : "Chart is available for crypto signals only"}
+          onClick={() => onChartOpen(signal)}
+          title={`View ${symbolDisplay.label} chart`}
           type="button"
         >
           <span style={{ fontWeight: 600 }}>{symbolDisplay.label}</span>
           {symbolDisplay.detail ? (
             <span style={{ opacity: 0.55, fontSize: "0.75em" }}>{symbolDisplay.detail}</span>
           ) : null}
-          {canOpenChart ? <span style={{ fontSize: "0.75em", opacity: 0.55, marginLeft: "4px" }}>📈</span> : null}
+          <span style={{ fontSize: "0.75em", opacity: 0.55, marginLeft: "4px" }}>{isStock ? "📊" : "📈"}</span>
         </button>
         <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
           <span className={`pill ${sideClass(signal.side)}`}>{signal.side}</span>
@@ -165,7 +164,6 @@ function SignalCard({ signal, onChartOpen }) {
           <span className="signal-card-label">Timeframe</span>
           <span className="signal-card-value">{signal.timeframe}</span>
         </div>
-
       </div>
 
       {/* Confirmations */}
@@ -186,31 +184,27 @@ function SignalCard({ signal, onChartOpen }) {
 ══════════════════════════════════════════════════════════════════════════════ */
 function TableRow({ signal, onChartOpen }) {
   const symbolDisplay = formatDisplaySymbol(signal);
-  const canOpenChart = signal.source !== "SMART_ENGINE";
+  const isStock = signal.source === "SMART_ENGINE";
   return (
     <tr>
       <td>
         <button
           className="coin-chart-btn"
-          disabled={!canOpenChart}
-          onClick={canOpenChart ? () => onChartOpen(signal.coin, signal.timeframe) : undefined}
-          title={canOpenChart ? `View ${signal.coin} chart` : "Chart is available for crypto signals only"}
+          onClick={() => onChartOpen(signal)}
+          title={`View ${symbolDisplay.label} chart`}
           type="button"
         >
           <strong>{symbolDisplay.label}</strong>
           {symbolDisplay.detail ? (
             <span style={{ opacity: 0.6, fontSize: "0.75em", marginLeft: "6px" }}>{symbolDisplay.detail}</span>
           ) : null}
-          {canOpenChart ? <span className="coin-chart-icon">📈</span> : null}
+          <span className="coin-chart-icon">{isStock ? "📊" : "📈"}</span>
         </button>
       </td>
 
       <td><span className={`pill ${sideClass(signal.side)}`}>{signal.side}</span></td>
-
       <td>{signal.timeframe}</td>
-
       <td>{formatPrice(signal.entry)}</td>
-
       <td>
         <strong>{formatPrice(signal.livePrice ?? signal.closePrice)}</strong>
         {Number.isFinite(Number(signal.signalMovePercent)) && (
@@ -221,22 +215,17 @@ function TableRow({ signal, onChartOpen }) {
           </div>
         )}
       </td>
-
       <td>{formatPrice(signal.stopLoss)}</td>
       <td>{formatPrice(signal.tp1)}</td>
       <td>{formatPrice(signal.tp2)}</td>
       <td>{formatPrice(signal.tp3)}</td>
-
       <td><ConfBadge confidence={signal.confidence} /></td>
-
       <td><LeverageBadge leverage={signal.leverage ?? signal.indicatorSnapshot?.leverage} /></td>
-
       <td>
         <span className={`pill ${statusClass(signal.status, signal.result)}`}>
           {signal.result || signal.status}
         </span>
       </td>
-
       <td>{formatDate(signal.createdAt)}</td>
     </tr>
   );
@@ -244,25 +233,26 @@ function TableRow({ signal, onChartOpen }) {
 
 /* ══════════════════════════════════════════════════════════════════════════════
    MAIN EXPORT
-   - Mobile (< 640px): renders SignalCard components
-   - Desktop (≥ 640px): renders scrollable table
-   Switching is done via CSS — both are rendered, one is hidden via CSS
-   This avoids any JS screen-size detection which can cause flickers.
 ══════════════════════════════════════════════════════════════════════════════ */
 export default function SignalTable({ compact = false, emptyLabel, signals }) {
   const [chartCoin, setChartCoin] = useState(null);
   const [chartTf, setChartTf]     = useState("15m");
+  const [tvSignal, setTvSignal]   = useState(null);
 
-  function openChart(coin, timeframe) {
-    setChartCoin(coin);
-    setChartTf(timeframe || "15m");
+  function openChart(signal) {
+    if (signal.source === "SMART_ENGINE") {
+      setTvSignal(signal);
+    } else {
+      setChartCoin(signal.coin);
+      setChartTf(signal.timeframe || "15m");
+    }
   }
 
   const colCount = 13;
 
   return (
     <>
-      {/* ── MOBILE CARD VIEW (hidden at 640px+ via CSS) ── */}
+      {/* ── MOBILE CARD VIEW ── */}
       <div className="signal-view-mobile">
         {signals.length ? (
           <div className="signal-cards">
@@ -275,7 +265,7 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
         )}
       </div>
 
-      {/* ── DESKTOP TABLE VIEW (hidden below 640px via CSS) ── */}
+      {/* ── DESKTOP TABLE VIEW ── */}
       <div className="signal-view-desktop">
         <div className="table-card">
           <div className="table-wrap">
@@ -317,13 +307,24 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
         </div>
       </div>
 
-      {/* Chart modal */}
+      {/* Crypto candlestick chart modal */}
       {chartCoin && (
         <CandlestickChart
           coin={chartCoin}
           timeframe={chartTf}
           signal={signals.find(s => s.coin === chartCoin && s.timeframe === chartTf) || null}
           onClose={() => setChartCoin(null)}
+        />
+      )}
+
+      {/* Indian stock TradingView chart modal */}
+      {tvSignal && (
+        <TradingViewModal
+          coin={tvSignal.coin || tvSignal.scanMeta?.instrument?.tradingSymbol || ""}
+          timeframe={tvSignal.timeframe || "15m"}
+          tradingSymbol={tvSignal.scanMeta?.instrument?.tradingSymbol}
+          exchange={tvSignal.scanMeta?.instrument?.exchange}
+          onClose={() => setTvSignal(null)}
         />
       )}
     </>
