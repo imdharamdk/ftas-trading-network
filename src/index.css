@@ -1121,3 +1121,299 @@ h1, h2, h3 { letter-spacing: -0.03em; line-height: 1.2; }
     grid-template-columns: 1fr;
   }
 }
+
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   MOBILE FIXES — Small screen improvements (≤ 479px)
+══════════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Stats grid: 2 columns on tiny screens ─── */
+@media (max-width: 479px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--s2);
+  }
+  .metric-card {
+    padding: var(--s3);
+  }
+  .metric-card strong {
+    font-size: 1.25rem;
+  }
+  .metric-label {
+    font-size: 0.70rem;
+  }
+
+  /* Panel padding tighter */
+  .panel, .table-card {
+    padding: var(--s3);
+  }
+  .panel-header {
+    gap: var(--s2);
+    margin-bottom: var(--s3);
+  }
+  .panel-header h2 {
+    font-size: 0.92rem;
+  }
+
+  /* Section grid: 1 col always */
+  .section-grid,
+  .section-grid-analytics {
+    grid-template-columns: 1fr;
+  }
+
+  /* Detail grid: 2 cols */
+  .detail-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--s2);
+  }
+  .detail-grid > div {
+    padding: var(--s2);
+  }
+
+  /* Ticker cards: 1 col on tiny */
+  .ticker-cards {
+    grid-template-columns: 1fr;
+  }
+
+  /* Page header smaller */
+  .page-header h1 {
+    font-size: 1.2rem;
+  }
+  .page-header p {
+    font-size: 0.78rem;
+  }
+
+  /* Signal cards tighter */
+  .signal-card {
+    padding: var(--s3);
+  }
+  .signal-card-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--s1) var(--s3);
+  }
+  .signal-card-coin {
+    font-size: 0.92rem;
+  }
+
+  /* button-row: single column stack */
+  .button-row {
+    flex-direction: column;
+    gap: var(--s2);
+  }
+  .button-row .button {
+    width: 100%;
+  }
+
+  /* News grid: 1 column */
+  .news-grid {
+    grid-template-columns: 1fr;
+  }
+  .news-card {
+    padding: var(--s3);
+  }
+  .news-card h2 {
+    font-size: 0.86rem;
+  }
+
+  /* List cards: tighter */
+  .list-card {
+    flex-direction: column;
+    gap: var(--s2);
+    padding: var(--s3);
+  }
+  .list-card-wide .button-row {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .list-card-wide .button {
+    flex: 1;
+    min-width: 80px;
+    font-size: 0.75rem;
+    padding: 0 10px;
+  }
+
+  /* Form grid: 1 col */
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .form-span-2 {
+    grid-column: span 1;
+  }
+
+  /* Filters row: 1 col */
+  .filters-row {
+    grid-template-columns: 1fr !important;
+    gap: var(--s2);
+  }
+
+  /* Shell padding minimum */
+  .shell {
+    padding: var(--s2);
+    gap: var(--s2);
+  }
+
+  /* Chart modal — tighter header on tiny */
+  .chart-header {
+    padding: 6px 8px;
+    gap: 4px;
+  }
+  .chart-tf-btn {
+    font-size: 0.60rem;
+    min-height: 26px;
+    padding: 2px 5px;
+  }
+  .chart-signal-bar {
+    font-size: 0.63rem;
+    gap: 5px;
+    padding: 5px 8px;
+  }
+
+  /* TradingView modal header */
+  .tv-modal-header {
+    padding: 8px 10px;
+  }
+  .tv-modal-title {
+    font-size: 0.82rem;
+  }
+
+  /* Spotlight grid 1 col */
+  .spotlight-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Pill smaller */
+  .pill {
+    font-size: 0.62rem;
+    padding: 3px 7px;
+  }
+
+  /* Banner */
+  .banner {
+    font-size: 0.78rem;
+    padding: 8px 10px;
+  }
+
+  /* Public page */
+  .public-page {
+    padding: var(--s3);
+    gap: var(--s3);
+  }
+}
+
+/* ─── 360px and below — very small phones ─── */
+@media (max-width: 360px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+  .signal-card-grid {
+    grid-template-columns: 1fr;
+  }
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+  .metric-card strong {
+    font-size: 1.1rem;
+  }
+}
+
+/* ─── Ticker card: 2 col on 480–639px ─── */
+@media (min-width: 480px) and (max-width: 639px) {
+  .ticker-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .section-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .detail-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ─── Hero section on mobile: stack vertically ─── */
+@media (max-width: 639px) {
+  /* Dashboard hero flex → column */
+  .shell .panel > div[style*="flex"] {
+    flex-direction: column !important;
+  }
+
+  /* Signal card grid always 2 col for readability */
+  .signal-card-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* Auth hero metrics: 2 col */
+  .hero-metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ─── Table scroll hint on mobile ─── */
+@media (max-width: 639px) {
+  .table-wrap::after {
+    content: '';
+    display: block;
+    height: 1px;
+  }
+  /* Ensure tables don't overflow shell */
+  .table-wrap {
+    margin: 0 calc(-1 * var(--s3));
+    padding: 0 var(--s3);
+    width: calc(100% + var(--s3) * 2);
+  }
+}
+
+/* ─── Mobile topbar on very small screens ─── */
+@media (max-width: 479px) {
+  .mobile-topbar {
+    padding: 6px 10px;
+  }
+  .brand-mark {
+    font-size: 1.3rem;
+  }
+}
+
+/* ─── Make select/input full width on mobile ─── */
+@media (max-width: 639px) {
+  .filters-row input,
+  .filters-row select {
+    min-height: 44px;
+    width: 100%;
+  }
+}
+
+/* ─── Dashboard hero: 2x2 grid for win rate cards on mobile ─── */
+@media (max-width: 639px) {
+  /* The inline-styled 2x2 grid in hero */
+  div[style*="grid-template-columns: 1fr 1fr"] {
+    grid-template-columns: repeat(2, 1fr) !important;
+    min-width: unset !important;
+    width: 100%;
+  }
+}
+
+/* ─── Candlestick canvas: full width responsive ─── */
+@media (max-width: 639px) {
+  .chart-canvas {
+    height: auto !important;
+    max-height: 220px;
+  }
+  .chart-vol {
+    max-height: 50px;
+  }
+  .chart-rsi {
+    max-height: 60px;
+  }
+}
+
+/* ─── Scanner tab buttons: wrap on small ─── */
+@media (max-width: 479px) {
+  div[style*="gap: 10px"] > button {
+    flex: 1;
+    min-width: 130px;
+    font-size: 0.80rem;
+    padding: 8px 12px;
+  }
+}
