@@ -423,12 +423,12 @@ export default function Dashboard() {
               {
                 label: "💹 Crypto Win Rate",
                 value: `${overview?.winRate ?? 0}%`,
-                meta: `${overview?.closedSignals ?? 0} closed trades`,
+                meta: `${overview?.totalWins ?? 0}W / ${overview?.totalLosses ?? 0}L · ${overview?.closedSignals ?? 0} resolved`,
               },
               {
                 label: "🇮🇳 Stock Win Rate",
                 value: `${stockOverview?.winRate ?? 0}%`,
-                meta: `${stockOverview?.closedSignals ?? 0} closed trades`,
+                meta: `${stockOverview?.totalWins ?? 0}W / ${stockOverview?.totalLosses ?? 0}L · ${stockOverview?.closedSignals ?? 0} resolved`,
               },
               {
                 label: "Your Plan",
@@ -471,12 +471,12 @@ export default function Dashboard() {
           </div>
           <div className="detail-grid">
             <div><span className="detail-label">Active</span><strong>{overview?.activeSignals ?? 0}</strong></div>
-            <div><span className="detail-label">Closed</span><strong>{overview?.closedSignals ?? 0}</strong></div>
+            <div><span className="detail-label">Resolved</span><strong>{overview?.closedSignals ?? 0}</strong></div>
+            <div><span className="detail-label">Wins ✅</span><strong style={{color:"#34d399"}}>{overview?.totalWins ?? 0}</strong></div>
+            <div><span className="detail-label">Losses ❌</span><strong style={{color:"#f87171"}}>{overview?.totalLosses ?? 0}</strong></div>
             <div><span className="detail-label">Win Rate</span><strong style={{ color: "#34d399", fontSize: "1.2rem" }}>{overview?.winRate ?? 0}%</strong></div>
+            <div><span className="detail-label">Expired</span><strong style={{color:"#94a3b8"}}>{overview?.expiredSignals ?? 0}</strong></div>
             <div><span className="detail-label">Avg Confidence</span><strong>{overview?.averageConfidence ?? 0}%</strong></div>
-            <div><span className="detail-label">Strong setups</span><strong>{overview?.strongSignals ?? 0}</strong></div>
-            <div><span className="detail-label">LONG signals</span><strong>{overview?.longSignals ?? 0}</strong></div>
-            <div><span className="detail-label">SHORT signals</span><strong>{overview?.shortSignals ?? 0}</strong></div>
             <div><span className="detail-label">Total</span><strong>{overview?.totalSignals ?? 0}</strong></div>
           </div>
           <a className="button button-ghost" href="/crypto" style={{ alignSelf: "flex-start", marginTop: "8px", fontSize: "0.82rem" }}>View Crypto →</a>
@@ -489,12 +489,12 @@ export default function Dashboard() {
           </div>
           <div className="detail-grid">
             <div><span className="detail-label">Active</span><strong>{stockOverview?.activeSignals ?? 0}</strong></div>
-            <div><span className="detail-label">Closed</span><strong>{stockOverview?.closedSignals ?? 0}</strong></div>
+            <div><span className="detail-label">Resolved</span><strong>{stockOverview?.closedSignals ?? 0}</strong></div>
+            <div><span className="detail-label">Wins ✅</span><strong style={{color:"#34d399"}}>{stockOverview?.totalWins ?? 0}</strong></div>
+            <div><span className="detail-label">Losses ❌</span><strong style={{color:"#f87171"}}>{stockOverview?.totalLosses ?? 0}</strong></div>
             <div><span className="detail-label">Win Rate</span><strong style={{ color: "#34d399", fontSize: "1.2rem" }}>{stockOverview?.winRate ?? 0}%</strong></div>
+            <div><span className="detail-label">Expired</span><strong style={{color:"#94a3b8"}}>{stockOverview?.expiredSignals ?? 0}</strong></div>
             <div><span className="detail-label">Avg Confidence</span><strong>{stockOverview?.averageConfidence ?? 0}%</strong></div>
-            <div><span className="detail-label">Strong setups</span><strong>{stockOverview?.strongSignals ?? 0}</strong></div>
-            <div><span className="detail-label">LONG signals</span><strong>{stockOverview?.longSignals ?? 0}</strong></div>
-            <div><span className="detail-label">SHORT signals</span><strong>{stockOverview?.shortSignals ?? 0}</strong></div>
             <div><span className="detail-label">Total</span><strong>{stockOverview?.totalSignals ?? 0}</strong></div>
           </div>
           <a className="button button-ghost" href="/stocks" style={{ alignSelf: "flex-start", marginTop: "8px", fontSize: "0.82rem" }}>View Stocks →</a>
