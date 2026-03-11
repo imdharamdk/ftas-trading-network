@@ -11,18 +11,43 @@ const TF_MAP = {
   "1d":  "D",
 };
 
-export default function TradingViewModal({ coin, timeframe, onClose }) {
+/**
+ * Build the correct TradingView symbol string.
+ *
+ * Indian stocks/F&O (SMART_ENGINE):
+ *   NSE equity  → "NSE:RELIANCE"
+ *   NFO futures → "NSE:NIFTY25JUNFUT"
+ *   MCX         → "MCX:CRUDEOIL25JUNFUT"
+ *   BSE equity  → "BSE:RELIANCE"
+ *
+ * Crypto (Binance):
+ *   "BTCUSDT" → "BINANCE:BTCUSDT.P"
+ */
+function buildTVSymbol(coin, tradingSymbol, exchange) {
+  if (tradingSymbol) {
+    const sym  = tradingSymbol.toUpperCase();
+    const exch = (exchange || "NSE").toUpperCase();
+
+    if (exch === "MCX")              return `MCX:${sym}`;
+    if (exch === "NFO" || exch === "BFO") return `NSE:${sym}`;
+    if (exch === "BSE")              return `BSE:${sym}`;
+    return `NSE:${sym}`;
+  }
+
+  const symbol = coin.endsWith("USDT") ? coin : `${coin}USDT`;
+  return `BINANCE:${symbol}.P`;
+}
+
+export default function TradingViewModal({ coin, timeframe, tradingSymbol, exchange, onClose }) {
   const containerRef = useRef(null);
 
-  // Build TradingView symbol  e.g. BTCUSDT → BINANCE:BTCUSDT.P  (perp futures)
-  const symbol   = coin.endsWith("USDT") ? coin : `${coin}USDT`;
-  const tvSymbol = `BINANCE:${symbol}.P`;
-  const interval = TF_MAP[timeframe] ?? "15";
+  const tvSymbol    = buildTVSymbol(coin, tradingSymbol, exchange);
+  const displayName = tradingSymbol || coin;
+  const interval    = TF_MAP[timeframe] ?? "15";
 
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // Remove any previous widget
     containerRef.current.innerHTML = "";
 
     const script = document.createElement("script");
@@ -30,22 +55,21 @@ export default function TradingViewModal({ coin, timeframe, onClose }) {
     script.type  = "text/javascript";
     script.async = true;
     script.innerHTML = JSON.stringify({
-      autosize:          true,
-      symbol:            tvSymbol,
-      interval:          interval,
-      timezone:          "Etc/UTC",
-      theme:             "dark",
-      style:             "1",
-      locale:            "en",
-      allow_symbol_change: false,
-      calendar:          false,
-      support_host:      "https://www.tradingview.com",
+      autosize:            true,
+      symbol:              tvSymbol,
+      interval:            interval,
+      timezone:            "Asia/Kolkata",
+      theme:               "dark",
+      style:               "1",
+      locale:              "en",
+      allow_symbol_change: true,
+      calendar:            false,
+      support_host:        "https://www.tradingview.com",
     });
 
     containerRef.current.appendChild(script);
   }, [tvSymbol, interval]);
 
-  // Close on backdrop click or Escape key
   useEffect(() => {
     function onKey(e) {
       if (e.key === "Escape") onClose();
@@ -56,23 +80,26 @@ export default function TradingViewModal({ coin, timeframe, onClose }) {
 
   return (
     <div className="tv-modal-backdrop" onClick={onClose}>
-      <div
-        className="tv-modal-box"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="tv-modal-box" onClick={(e) => e.stopPropagation()}>
+
         {/* Header */}
         <div className="tv-modal-header">
           <span className="tv-modal-title">
-            📈 {symbol} &nbsp;
+            📈 {displayName}
+            {tradingSymbol && exchange ? (
+              <span style={{ opacity: 0.6, fontSize: "0.78em", marginLeft: "6px" }}>{exchange}</span>
+            ) : null}
+            &nbsp;
             <span className="tv-modal-tf">{timeframe}</span>
           </span>
           <button className="tv-modal-close" onClick={onClose} title="Close">✕</button>
         </div>
 
-        {/* TradingView widget container */}
+        {/* TradingView widget */}
         <div className="tradingview-widget-container" ref={containerRef} style={{ height: "100%", width: "100%" }}>
           <div className="tradingview-widget-container__widget" style={{ height: "calc(100% - 32px)", width: "100%" }} />
         </div>
+
       </div>
     </div>
   );
