@@ -1134,5 +1134,135 @@
     "segment": "EQUITY",
     "token": "11377",
     "lotSize": 1
+  },
+  {
+    "symbol": "SILVER05MAY26FUT",
+    "tradingSymbol": "SILVER05MAY26FUT",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "token": "457532",
+    "lotSize": 30,
+    "expiry": "05MAY2026",
+    "instrumentType": "FUTCOM"
+  },
+  {
+    "symbol": "SILVERM30APR26FUT",
+    "tradingSymbol": "SILVERM30APR26FUT",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "token": "457533",
+    "lotSize": 5,
+    "expiry": "30APR2026",
+    "instrumentType": "FUTCOM"
+  },
+  {
+    "symbol": "SILVERMIC30APR26FUT",
+    "tradingSymbol": "SILVERMIC30APR26FUT",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "token": "466029",
+    "lotSize": 1,
+    "expiry": "30APR2026",
+    "instrumentType": "FUTCOM"
+  },
+  {
+    "symbol": "GOLDTEN31MAR26FUT",
+    "tradingSymbol": "GOLDTEN31MAR26FUT",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "token": "477176",
+    "lotSize": 1,
+    "expiry": "31MAR2026",
+    "instrumentType": "FUTCOM"
+  },
+  {
+    "symbol": "NATURALGAS26MAR26FUT",
+    "tradingSymbol": "NATURALGAS26MAR26FUT",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "token": "475111",
+    "lotSize": 1250,
+    "expiry": "26MAR2026",
+    "instrumentType": "FUTCOM"
+  },
+  {
+    "symbol": "GOLDM03APR26FUT",
+    "tradingSymbol": "GOLDM03APR26FUT",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "token": "477904",
+    "lotSize": 1,
+    "expiry": "03APR2026",
+    "instrumentType": "FUTCOM"
+  },
+  {
+    "symbol": "ZINC31MAR26FUT",
+    "tradingSymbol": "ZINC31MAR26FUT",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "token": "487662",
+    "lotSize": 5000,
+    "expiry": "31MAR2026",
+    "instrumentType": "FUTCOM"
+  },
+  {
+    "symbol": "CRUDEOILM19MAR26FUT",
+    "tradingSymbol": "CRUDEOILM19MAR26FUT",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "token": "472790",
+    "lotSize": 10,
+    "expiry": "19MAR2026",
+    "instrumentType": "FUTCOM"
+  },
+  {
+    "symbol": "LEAD31MAR26FUT",
+    "tradingSymbol": "LEAD31MAR26FUT",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "token": "487658",
+    "lotSize": 5000,
+    "expiry": "31MAR2026",
+    "instrumentType": "FUTCOM"
+  },
+  {
+    "symbol": "NICKEL18MAR26FUT",
+    "tradingSymbol": "NICKEL18MAR26FUT",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "token": "487660",
+    "lotSize": 1500,
+    "expiry": "18MAR2026",
+    "instrumentType": "FUTCOM"
+  },
+  {
+    "symbol": "COPPER31MAR26FUT",
+    "tradingSymbol": "COPPER31MAR26FUT",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "token": "487657",
+    "lotSize": 2500,
+    "expiry": "31MAR2026",
+    "instrumentType": "FUTCOM"
+  },
+  {
+    "symbol": "ALUMINIUM31MAR26FUT",
+    "tradingSymbol": "ALUMINIUM31MAR26FUT",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "token": "487656",
+    "lotSize": 5000,
+    "expiry": "31MAR2026",
+    "instrumentType": "FUTCOM"
+  },
+  {
+    "symbol": "CRUDEOIL19MAR26FUT",
+    "tradingSymbol": "CRUDEOIL19MAR26FUT",
+    "exchange": "MCX",
+    "segment": "COMMODITY",
+    "token": "472789",
+    "lotSize": 100,
+    "expiry": "19MAR2026",
+    "instrumentType": "FUTCOM"
   }
 ]
