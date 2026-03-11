@@ -266,6 +266,16 @@ async function fetchStockLivePrices(coins) {
   return priceMap;
 }
 
+// ── All instruments list (for Scanner page) ───────────────────────────────────
+router.get("/instruments", requireAuth, requireSignalAccess, (req, res) => {
+  try {
+    const universe = getInstrumentUniverse({ limit: 5000 });
+    return res.json({ instruments: universe });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+});
+
 router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) => {
   try {
     const coins = String(req.query.coins || "")
