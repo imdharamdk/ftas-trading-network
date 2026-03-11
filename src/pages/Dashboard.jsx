@@ -214,6 +214,7 @@ export default function Dashboard() {
   useEffect(() => {
     let active = true;
     async function loadData() {
+      if (!active) return;
       try {
         const pubErr = await loadPublicData();
         if (!active) return;
@@ -225,9 +226,20 @@ export default function Dashboard() {
         if (active) setLoading(false);
       }
     }
+    // Initial load
     loadData();
-    const id = window.setInterval(loadData, 15000);
-    return () => { active = false; window.clearInterval(id); };
+    // Poll every 10 seconds for live updates
+    const id = window.setInterval(loadData, 10000);
+    // Also refresh instantly when user comes back to this tab
+    function onVisible() {
+      if (document.visibilityState === "visible" && active) loadData();
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      active = false;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [loadPrivateData, loadPublicData]);
 
   async function refreshWithFeedback(msg) {
