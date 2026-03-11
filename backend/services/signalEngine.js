@@ -34,48 +34,50 @@ const MIN_SCAN_QUOTE_VOLUME_USDT  = 15_000_000;   // was 25M — include more li
 const MIN_SCAN_TRADE_COUNT_24H    = 20_000;        // was 30K
 const MIN_SCAN_OPEN_INTEREST_USDT = 5_000_000;    // was 8M
 
-const RULE_VERSION = "v15_balanced";
+const RULE_VERSION = "v16_working";
 const DEFAULT_PUBLISH_FLOOR = 82;                 // was 92 — realistic floor
 const STRENGTH_THRESHOLDS   = { STRONG: 90, MEDIUM: 82 };
 
 // ── Per-Timeframe Rules ────────────────────────────────────────────────────────
 const TIMEFRAME_RULES = {
   "1m": {
-    minScore: 62,
-    minConfirmations: 5,          // was 7
-    publishFloor: 82,             // was 92
+    minScore: 58,
+    minConfirmations: 4,
+    publishFloor: 78,
     requireHigherBias: true,
-    minAdx: 20,                   // was 30 — too strict before
-    minRsi: 45,                   // was 50
-    maxRsi: 78,                   // was 75 — slight wider range
-    minDiDelta: 4,                // was 6
+    minAdx: 18,
+    minRsi: 38,
+    maxRsi: 85,
+    requireRsiRising: false,      // RSI rising NOT required — in-range is enough
+    minDiDelta: 3,
     requireVwapSupport: true,
-    requireIchimoku: false,       // was true — removed as hard gate (bonus only)
-    requireHaStrong: false,       // was true — 2 candles enough, not 3
-    requireHaMedium: true,        // NEW — last 2 HA candles same direction
-    requireVolumeConfirm: true,
-    volumeMultiplier: 1.4,        // was 2.0 — 1.4x avg is enough
+    requireIchimoku: false,
+    requireHaStrong: false,
+    requireHaMedium: false,       // HA is bonus only, not gate
+    requireVolumeConfirm: false,  // Volume is bonus only
+    volumeMultiplier: 1.3,
     blockDailyBear: true,
-    entryDriftMultiplier: 0.4,    // was 0.2 — slightly more room
+    entryDriftMultiplier: 0.6,
     maxLeverage: 10,
   },
   "5m": {
-    minScore: 64,
-    minConfirmations: 5,          // was 8
-    publishFloor: 83,             // was 93
+    minScore: 60,
+    minConfirmations: 4,
+    publishFloor: 79,
     requireHigherBias: true,
-    minAdx: 20,                   // was 28
-    minRsi: 44,                   // was 50
-    maxRsi: 78,                   // was 76
-    minDiDelta: 4,                // was 6
+    minAdx: 18,
+    minRsi: 37,
+    maxRsi: 85,
+    requireRsiRising: false,
+    minDiDelta: 3,
     requireVwapSupport: true,
-    requireIchimoku: false,       // bonus only
+    requireIchimoku: false,
     requireHaStrong: false,
-    requireHaMedium: true,        // last 2 HA candles same direction
-    requireVolumeConfirm: true,
-    volumeMultiplier: 1.4,        // was 2.0
+    requireHaMedium: false,       // HA is bonus only
+    requireVolumeConfirm: false,  // Volume is bonus only
+    volumeMultiplier: 1.3,
     blockDailyBear: true,
-    entryDriftMultiplier: 0.5,    // was 0.3
+    entryDriftMultiplier: 0.6,
     maxLeverage: 15,
   },
 };
@@ -274,19 +276,22 @@ function calculateLeverage(analysis, confidence, timeframe) {
 // ─── GATE 4 helper: Momentum Check ───────────────────────────────────────────
 // RSI + MACD must agree; StochRSI is bonus (not hard gate)
 function isMomentumAligned(side, analysis, tfRule) {
-  const { rsi, rsiRising, rsiFalling, macd, macdHistIncreasing, macdHistDecreasing, stochRsi, stochKD } = analysis.momentum;
-  const minRsi = tfRule.minRsi ?? 44;
-  const maxRsi = tfRule.maxRsi ?? 78;
+  const { rsi, rsiRising, rsiFalling, macd, macdHistIncreasing, macdHistDecreasing } = analysis.momentum;
+  const minRsi = tfRule.minRsi ?? 37;
+  const maxRsi = tfRule.maxRsi ?? 85;
+  const requireRsiRising = tfRule.requireRsiRising ?? false;
 
   if (side === "LONG") {
-    // RSI in bull zone and rising
-    const rsiOk  = (rsi||0) >= minRsi && (rsi||0) <= maxRsi && rsiRising;
-    // MACD: MACD line above signal OR histogram increasing (either one)
-    const macdOk = (macd?.MACD||0) > (macd?.signal||0) || macdHistIncreasing;
+    // RSI in valid zone — rising is preferred but NOT required (it plateaus in trends)
+    const rsiInRange = (rsi||0) >= minRsi && (rsi||0) <= maxRsi;
+    const rsiOk = requireRsiRising ? (rsiInRange && rsiRising) : rsiInRange;
+    // MACD: histogram positive OR line above signal OR increasing — any one is enough
+    const macdOk = (macd?.histogram||0) > 0 || (macd?.MACD||0) > (macd?.signal||0) || macdHistIncreasing;
     return rsiOk && macdOk;
   } else {
-    const rsiOk  = (rsi||0) <= (100 - minRsi) && (rsi||0) >= 22 && rsiFalling;
-    const macdOk = (macd?.MACD||0) < (macd?.signal||0) || macdHistDecreasing;
+    const rsiInRange = (rsi||0) <= (100 - minRsi) && (rsi||0) >= 15;
+    const rsiOk = requireRsiRising ? (rsiInRange && rsiFalling) : rsiInRange;
+    const macdOk = (macd?.histogram||0) < 0 || (macd?.MACD||0) < (macd?.signal||0) || macdHistDecreasing;
     return rsiOk && macdOk;
   }
 }
@@ -385,12 +390,10 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   // GATE 4: Momentum — RSI + MACD (StochRSI is bonus)
   if (!isMomentumAligned(side, analysis, tfRule)) return null;
 
-  // GATE 5: Volume — 1.4x avg (was 2.0x)
-  const volMult = tfRule.volumeMultiplier ?? 1.4;
-  if (tfRule.requireVolumeConfirm && !isVolumeConfirmed(analysis, volMult)) return null;
+  // GATE 5: Volume — soft check (bonus scoring, not hard reject)
+  // Volume is already scoring bonus points below; hard gate removed to not block valid setups
 
-  // GATE 6: HA medium (2 candles same direction)
-  if (tfRule.requireHaMedium && !isHaMedium(side, analysis)) return null;
+  // GATE 6 removed: HA is bonus only (not hard gate — blocks too many valid signals)
 
   // ── SECONDARY FILTERS ─────────────────────────────────────────────────────
   // VWAP check
@@ -592,10 +595,10 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
       marketQuoteVolume: roundPrice(activeMarket.quoteVolume),
       marketTradeCount: roundPrice(activeMarket.tradeCount),
       marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
-      modelVersion: "v15_balanced",
+      modelVersion: "v16_working",
       sourceTimeframes: SCAN_TIMEFRAMES,
       timeframeRule: tfRule,
-      gatesPassed: 6,
+      gatesPassed: 4,
     },
     source: "ENGINE",
     ...targets,
