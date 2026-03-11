@@ -359,24 +359,22 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
 });
 
 router.get("/stats/overview", requireAuth, requireSignalAccess, async (req, res) => {
-  const rawSignals = await readCollection("signals");
-  const signals = await dropExpiredSignals(rawSignals);
+  // Use ALL signals including EXPIRED — buildOverview handles EXPIRED separately
+  const signals = await readCollection("signals");
   return res.json({
     stats: buildOverview(signals),
   });
 });
 
 router.get("/stats/analytics", requireAuth, requireSignalAccess, async (req, res) => {
-  const rawSignals = await readCollection("signals");
-  const signals = await dropExpiredSignals(rawSignals);
+  const signals = await readCollection("signals");
   return res.json({
     analytics: buildAnalytics(signals),
   });
 });
 
 router.get("/stats/performance", requireAuth, requireSignalAccess, async (req, res) => {
-  const rawSignals = await readCollection("signals");
-  const signals = await dropExpiredSignals(rawSignals);
+  const signals = await readCollection("signals");
   return res.json({
     performance: buildPerformance(signals),
   });
