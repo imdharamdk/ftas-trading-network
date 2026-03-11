@@ -135,6 +135,14 @@ function createApp() {
   app.use(cors(createCorsOptions()));
   app.use(express.json({ limit: "1mb" }));
 
+  // Disable caching for all /api routes — ensures dashboard always gets fresh data
+  app.use("/api", (_req, res, next) => {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+    next();
+  });
+
   // Health — Render uses this to confirm service is alive
   app.get("/api/health", (_req, res) => res.json({
     name:      "FTAS Signal Engine",
