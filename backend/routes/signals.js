@@ -31,24 +31,32 @@ function sortByCreatedAtDesc(records) {
 }
 
 function buildOverview(signals) {
-  const activeSignals = signals.filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE);
-  const closedSignals = signals.filter((signal) => signal.status === SIGNAL_STATUS.CLOSED);
-  const wins = closedSignals.filter((signal) => isWinningResult(signal.result));
-  const longSignals = signals.filter((signal) => signal.side === "LONG");
-  const shortSignals = signals.filter((signal) => signal.side === "SHORT");
-  const avgConfidence = signals.length
-    ? signals.reduce((sum, signal) => sum + Number(signal.confidence || 0), 0) / signals.length
+  const activeSignals   = signals.filter((s) => s.status === SIGNAL_STATUS.ACTIVE);
+  const allClosed       = signals.filter((s) => s.status === SIGNAL_STATUS.CLOSED);
+  const resolvedSignals = allClosed.filter((s) => s.result !== "EXPIRED");
+  const expiredSignals  = allClosed.filter((s) => s.result === "EXPIRED");
+  const wins            = resolvedSignals.filter((s) => isWinningResult(s.result));
+  const losses          = resolvedSignals.filter((s) => s.result === "SL_HIT");
+  const longSignals     = signals.filter((s) => s.side === "LONG");
+  const shortSignals    = signals.filter((s) => s.side === "SHORT");
+  const activeSrc       = activeSignals.length ? activeSignals : signals;
+  const avgConfidence   = activeSrc.length
+    ? activeSrc.reduce((sum, s) => sum + Number(s.confidence || 0), 0) / activeSrc.length
     : 0;
-
   return {
-    activeSignals: activeSignals.length,
-    closedSignals: closedSignals.length,
-    totalSignals: signals.length,
-    strongSignals: signals.filter((signal) => signal.confidence >= 70).length,
-    longSignals: longSignals.length,
-    shortSignals: shortSignals.length,
+    activeSignals:     activeSignals.length,
+    closedSignals:     resolvedSignals.length,
+    expiredSignals:    expiredSignals.length,
+    totalSignals:      signals.length,
+    totalWins:         wins.length,
+    totalLosses:       losses.length,
+    strongSignals:     signals.filter((s) => Number(s.confidence || 0) >= 90).length,
+    longSignals:       longSignals.length,
+    shortSignals:      shortSignals.length,
     averageConfidence: Number(avgConfidence.toFixed(1)),
-    winRate: closedSignals.length ? Number(((wins.length / closedSignals.length) * 100).toFixed(1)) : 0,
+    winRate: resolvedSignals.length
+      ? Number(((wins.length / resolvedSignals.length) * 100).toFixed(1))
+      : 0,
   };
 }
 
