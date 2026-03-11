@@ -9,15 +9,12 @@ const { createManualSignal, getStatus, scanNow, start, stop } = require("../serv
 
 const router = express.Router();
 
-async function dropExpiredSignals(signals = null) {
-  const source = signals || (await readCollection("signals"));
-  const filtered = source.filter((signal) => signal.result !== "EXPIRED");
-
-  if (filtered.length !== source.length) {
-    await writeCollection("signals", filtered);
-  }
-
-  return filtered;
+// FIXED: dropExpiredSignals now ONLY filters for display — never deletes from storage.
+// EXPIRED signals must stay in storage so stats (win rate, total closed, expired count) are correct.
+// Deletion only happens via explicit admin "Archive Closed" action.
+function dropExpiredSignals(signals) {
+  const source = Array.isArray(signals) ? signals : [];
+  return source.filter((signal) => signal.result !== "EXPIRED");
 }
 
 function isWinningResult(result) {
@@ -334,7 +331,7 @@ async function attachLivePrices(signals) {
 
 router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
   const rawSignals = await readCollection("signals");
-  const signals = await dropExpiredSignals(rawSignals);
+  const signals = dropExpiredSignals(rawSignals);
   const filtered = sortByCreatedAtDesc(signals)
     .filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE)
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
@@ -347,7 +344,7 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
 
 router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   const rawSignals = await readCollection("signals");
-  const signals = await dropExpiredSignals(rawSignals);
+  const signals = dropExpiredSignals(rawSignals);
   const filtered = sortByCreatedAtDesc(signals)
     .filter((signal) => signal.status !== SIGNAL_STATUS.ACTIVE)
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
@@ -501,7 +498,7 @@ router.post("/archive", requireAuth, requireAdmin, async (req, res) => {
   try {
     const action = String(req.body?.action || "").toUpperCase();
     if (action === "ARCHIVE_CLOSED") {
-      const signals = await dropExpiredSignals();
+      const signals = await readCollection("signals");
       const closedSignals = signals.filter((signal) => signal.status === SIGNAL_STATUS.CLOSED);
       if (!closedSignals.length) {
         const archiveSize = (await readCollection("signalsArchive")).length;
@@ -524,7 +521,7 @@ router.post("/archive", requireAuth, requireAdmin, async (req, res) => {
       return res.json({ archived: 0, archiveSize: 0 });
     }
     if (action === "CLEAR_HISTORY") {
-      const signals = await dropExpiredSignals();
+      const signals = await readCollection("signals");
       const activeSignals = signals.filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE);
       await writeCollection("signals", activeSignals);
       return res.json({ remaining: activeSignals.length });
