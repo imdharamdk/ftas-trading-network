@@ -16,6 +16,7 @@ function formatDate(value) {
   if (!value) return "-";
   return new Intl.DateTimeFormat("en-IN", {
     day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+    timeZone: "Asia/Kolkata",
   }).format(new Date(value));
 }
 
