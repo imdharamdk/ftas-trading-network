@@ -1,603 +1,362 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { apiFetch } from "../lib/api";
+const express = require("express");
+const axios = require("axios");
+const { requireAdmin, requireAuth, requireSignalAccess } = require("../middleware/auth");
+const { SIGNAL_STATUS } = require("../models/Signal");
+const { readCollection } = require("../storage/fileStore");
+const stockEngine = require("../services/stockSignalEngine");
+const { ensureSession } = require("../services/smartApiService");
+const { getInstrumentUniverse } = require("../services/smartInstrumentService");
 
-const TIMEFRAMES = ["1m","5m","15m","1h","4h","12h","1d"];
+const router = express.Router();
 
-// ─── EMA calculation ──────────────────────────────────────────────────────────
-function calcEMA(closes, period) {
-  if (closes.length < period) return [];
-  const k = 2 / (period + 1);
-  const result = new Array(closes.length).fill(null);
-  let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  result[period - 1] = ema;
-  for (let i = period; i < closes.length; i++) {
-    ema = closes[i] * k + ema * (1 - k);
-    result[i] = ema;
-  }
-  return result;
+function isWinningResult(result) {
+  return ["TP1_HIT", "TP2_HIT", "TP3_HIT"].includes(result);
 }
 
-// ─── Bollinger Bands ──────────────────────────────────────────────────────────
-function calcBB(closes, period = 20, stdDev = 2) {
-  const upper = [], middle = [], lower = [];
-  for (let i = 0; i < closes.length; i++) {
-    if (i < period - 1) { upper.push(null); middle.push(null); lower.push(null); continue; }
-    const slice = closes.slice(i - period + 1, i + 1);
-    const mean  = slice.reduce((a, b) => a + b, 0) / period;
-    const std   = Math.sqrt(slice.reduce((a, b) => a + (b - mean) ** 2, 0) / period);
-    upper.push(mean + std * stdDev);
-    middle.push(mean);
-    lower.push(mean - std * stdDev);
-  }
-  return { upper, middle, lower };
+function sortByCreatedAtDesc(records) {
+  return [...records].sort((left, right) => {
+    return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+  });
 }
 
-// ─── RSI ─────────────────────────────────────────────────────────────────────
-function calcRSI(closes, period = 14) {
-  const result = new Array(closes.length).fill(null);
-  if (closes.length < period + 1) return result;
-  let gains = 0, losses = 0;
-  for (let i = 1; i <= period; i++) {
-    const diff = closes[i] - closes[i - 1];
-    if (diff >= 0) gains += diff; else losses -= diff;
-  }
-  let avgGain = gains / period, avgLoss = losses / period;
-  result[period] = 100 - 100 / (1 + avgGain / (avgLoss || 0.0001));
-  for (let i = period + 1; i < closes.length; i++) {
-    const diff = closes[i] - closes[i - 1];
-    avgGain = (avgGain * (period - 1) + Math.max(diff, 0)) / period;
-    avgLoss = (avgLoss * (period - 1) + Math.max(-diff, 0)) / period;
-    result[i] = 100 - 100 / (1 + avgGain / (avgLoss || 0.0001));
-  }
-  return result;
-}
-
-// ─── Volume color ─────────────────────────────────────────────────────────────
-function volColor(candle, alpha = 0.7) {
-  return candle.close >= candle.open
-    ? `rgba(52,211,153,${alpha})`
-    : `rgba(248,113,113,${alpha})`;
-}
-
-const COLORS = {
-  bg:        "#0e0e16",
-  grid:      "rgba(255,255,255,0.06)",
-  text:      "rgba(255,255,255,0.45)",
-  textBright:"rgba(255,255,255,0.85)",
-  bull:      "#34d399",
-  bear:      "#f87171",
-  ema9:      "#f59e0b",
-  ema21:     "#818cf8",
-  ema50:     "#38bdf8",
-  bbUpper:   "rgba(139,92,246,0.6)",
-  bbMiddle:  "rgba(139,92,246,0.3)",
-  bbLower:   "rgba(139,92,246,0.6)",
-  bbFill:    "rgba(139,92,246,0.06)",
-  entry:     "#facc15",
-  sl:        "#f87171",
-  tp1:       "#34d399",
-  tp2:       "#10b981",
-  tp3:       "#059669",
-  crosshair: "rgba(255,255,255,0.3)",
-  rsiLine:   "#f59e0b",
-  rsiOB:     "rgba(248,113,113,0.3)",
-  rsiOS:     "rgba(52,211,153,0.3)",
-};
-
-export default function CandlestickChart({ coin, timeframe: initialTf = "15m", signal = null, onClose }) {
-  const mainRef  = useRef(null);
-  const rsiRef   = useRef(null);
-  const volRef   = useRef(null);
-  const [candles, setCandles]   = useState([]);
-  const [tf, setTf]             = useState(initialTf);
-  const [loading, setLoading]   = useState(true);
-  const [error, setError]       = useState(null);
-  const [hover, setHover]       = useState(null);
-  const [offset, setOffset]     = useState(0); // pan offset
-  const [zoom, setZoom]         = useState(1);
-  const isDragging = useRef(false);
-  const dragStart  = useRef(0);
-  const dragOffset = useRef(0);
-
-  // ─── Fetch candles ──────────────────────────────────────────────────────────
-  const fetchCandles = useCallback(async () => {
-    if (!coin) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await apiFetch(`/market/klines?symbol=${coin}&interval=${tf}&limit=200`);
-      setCandles(data.candles || []);
-      setOffset(0);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [coin, tf]);
-
-  useEffect(() => { fetchCandles(); }, [fetchCandles]);
-
-  // Auto-refresh every 30s
-  useEffect(() => {
-    const id = setInterval(fetchCandles, 30000);
-    return () => clearInterval(id);
-  }, [fetchCandles]);
-
-  // ─── Draw Main Chart ────────────────────────────────────────────────────────
-  useEffect(() => {
-    const canvas = mainRef.current;
-    if (!canvas || candles.length < 2) return;
-    const ctx  = canvas.getContext("2d");
-    const W    = canvas.width;
-    const H    = canvas.height;
-    const PAD  = { left: 70, right: 10, top: 20, bottom: 30 };
-    const chartW = W - PAD.left - PAD.right;
-    const chartH = H - PAD.top  - PAD.bottom;
-
-    // Visible candles based on zoom + offset
-    const baseVisible = Math.floor(80 / zoom);
-    const visible = Math.max(20, Math.min(baseVisible, candles.length));
-    const startIdx = Math.max(0, Math.min(candles.length - visible, candles.length - visible - offset));
-    const slice    = candles.slice(startIdx, startIdx + visible);
-
-    const closes = candles.map(c => c.close);
-    const ema9   = calcEMA(closes, 9);
-    const ema21  = calcEMA(closes, 21);
-    const ema50  = calcEMA(closes, 50);
-    const bb     = calcBB(closes, 20, 2);
-
-    const sliceEma9  = ema9.slice(startIdx,  startIdx + visible);
-    const sliceEma21 = ema21.slice(startIdx, startIdx + visible);
-    const sliceEma50 = ema50.slice(startIdx, startIdx + visible);
-    const sliceBbU   = bb.upper.slice(startIdx,  startIdx + visible);
-    const sliceBbM   = bb.middle.slice(startIdx, startIdx + visible);
-    const sliceBbL   = bb.lower.slice(startIdx,  startIdx + visible);
-
-    // Price range
-    const allPrices = slice.flatMap(c => [c.high, c.low]);
-    const signalPrices = signal
-      ? [signal.entry, signal.stopLoss, signal.tp1, signal.tp2, signal.tp3].filter(Number.isFinite)
-      : [];
-    [...signalPrices, ...sliceBbU.filter(Boolean), ...sliceBbL.filter(Boolean)].forEach(p => allPrices.push(p));
-
-    const minP   = Math.min(...allPrices);
-    const maxP   = Math.max(...allPrices);
-    const range  = maxP - minP || 1;
-    const padPct = 0.08;
-    const lo     = minP - range * padPct;
-    const hi     = maxP + range * padPct;
-
-    const toY = p => PAD.top + chartH * (1 - (p - lo) / (hi - lo));
-    const candleW = chartW / visible;
-    const bodyW   = Math.max(1, candleW * 0.6);
-    const toX     = i => PAD.left + i * candleW + candleW / 2;
-
-    // Clear
-    ctx.fillStyle = COLORS.bg;
-    ctx.fillRect(0, 0, W, H);
-
-    // Grid
-    ctx.strokeStyle = COLORS.grid;
-    ctx.lineWidth   = 1;
-    const gridLines = 6;
-    for (let i = 0; i <= gridLines; i++) {
-      const y = PAD.top + (chartH / gridLines) * i;
-      ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W - PAD.right, y); ctx.stroke();
-      const price = hi - ((hi - lo) / gridLines) * i;
-      ctx.fillStyle   = COLORS.text;
-      ctx.font        = "10px monospace";
-      ctx.textAlign   = "right";
-      ctx.fillText(price.toFixed(price > 100 ? 2 : 4), PAD.left - 4, y + 3);
-    }
-
-    // BB Fill
-    ctx.beginPath();
-    ctx.fillStyle = COLORS.bbFill;
-    sliceBbU.forEach((v, i) => { if (v) i === 0 ? ctx.moveTo(toX(i), toY(v)) : ctx.lineTo(toX(i), toY(v)); });
-    sliceBbL.slice().reverse().forEach((v, i) => { if (v) ctx.lineTo(toX(slice.length - 1 - i), toY(v)); });
-    ctx.closePath(); ctx.fill();
-
-    // BB Lines
-    const drawLine = (data, color, dash = []) => {
-      ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.setLineDash(dash);
-      ctx.beginPath();
-      let started = false;
-      data.forEach((v, i) => {
-        if (v === null) return;
-        if (!started) { ctx.moveTo(toX(i), toY(v)); started = true; }
-        else ctx.lineTo(toX(i), toY(v));
-      });
-      ctx.stroke(); ctx.setLineDash([]);
-    };
-    drawLine(sliceBbU,  COLORS.bbUpper, [3, 3]);
-    drawLine(sliceBbM,  COLORS.bbMiddle, [2, 4]);
-    drawLine(sliceBbL,  COLORS.bbLower, [3, 3]);
-
-    // EMAs
-    ctx.lineWidth = 1.5;
-    drawLine(sliceEma9,  COLORS.ema9);
-    drawLine(sliceEma21, COLORS.ema21);
-    ctx.lineWidth = 2;
-    drawLine(sliceEma50, COLORS.ema50);
-
-    // Signal levels
-    if (signal) {
-      const drawLevel = (price, color, label) => {
-        if (!Number.isFinite(price)) return;
-        const y = toY(price);
-        ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.setLineDash([6, 3]);
-        ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W - PAD.right, y); ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle = color;
-        ctx.font = "bold 10px monospace";
-        ctx.textAlign = "left";
-        ctx.fillText(`${label}: ${price}`, PAD.left + 4, y - 3);
-      };
-      drawLevel(signal.entry,    COLORS.entry, "ENTRY");
-      drawLevel(signal.stopLoss, COLORS.sl,    "SL");
-      drawLevel(signal.tp1,      COLORS.tp1,   "TP1");
-      drawLevel(signal.tp2,      COLORS.tp2,   "TP2");
-      drawLevel(signal.tp3,      COLORS.tp3,   "TP3");
-    }
-
-    // Candles
-    slice.forEach((c, i) => {
-      const x     = toX(i);
-      const oY    = toY(c.open);
-      const cY    = toY(c.close);
-      const hY    = toY(c.high);
-      const lY    = toY(c.low);
-      const bull  = c.close >= c.open;
-      const color = bull ? COLORS.bull : COLORS.bear;
-
-      // Wick
-      ctx.strokeStyle = color; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(x, hY); ctx.lineTo(x, lY); ctx.stroke();
-
-      // Body
-      ctx.fillStyle = bull ? COLORS.bull : COLORS.bear;
-      const bodyTop = Math.min(oY, cY);
-      const bodyH   = Math.max(1, Math.abs(oY - cY));
-      ctx.fillRect(x - bodyW / 2, bodyTop, bodyW, bodyH);
-    });
-
-    // Crosshair + hover info
-    if (hover !== null && hover >= 0 && hover < slice.length) {
-      const c = slice[hover];
-      const x = toX(hover);
-      ctx.strokeStyle = COLORS.crosshair; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
-      ctx.beginPath(); ctx.moveTo(x, PAD.top); ctx.lineTo(x, H - PAD.bottom); ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Tooltip
-      const bull  = c.close >= c.open;
-      const tipW  = 160, tipH = 90, tipX = x + 10 > W - tipW - 10 ? x - tipW - 10 : x + 10;
-      ctx.fillStyle   = "rgba(15,15,25,0.92)";
-      ctx.strokeStyle = bull ? COLORS.bull : COLORS.bear;
-      ctx.lineWidth   = 1;
-      ctx.beginPath(); ctx.roundRect(tipX, PAD.top + 4, tipW, tipH, 6); ctx.fill(); ctx.stroke();
-
-      const fmt = n => Number.isFinite(n) ? (n > 100 ? n.toFixed(2) : n.toFixed(4)) : "-";
-      const lines = [
-        `O: ${fmt(c.open)}   C: ${fmt(c.close)}`,
-        `H: ${fmt(c.high)}   L: ${fmt(c.low)}`,
-        `Vol: ${(c.volume/1000).toFixed(1)}K`,
-        new Date(c.openTime).toLocaleString("en-IN", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit", timeZone:"Asia/Kolkata" }),
-      ];
-      ctx.fillStyle = COLORS.textBright;
-      ctx.font      = "11px monospace";
-      ctx.textAlign = "left";
-      lines.forEach((l, li) => ctx.fillText(l, tipX + 10, PAD.top + 22 + li * 18));
-    }
-
-    // Price axis current price
-    const lastC = slice[slice.length - 1];
-    if (lastC) {
-      const y = toY(lastC.close);
-      const bull = lastC.close >= lastC.open;
-      ctx.fillStyle = bull ? COLORS.bull : COLORS.bear;
-      ctx.beginPath(); ctx.roundRect(W - PAD.right - 65, y - 9, 65, 18, 3); ctx.fill();
-      ctx.fillStyle = "#000"; ctx.font = "bold 10px monospace"; ctx.textAlign = "center";
-      ctx.fillText(lastC.close.toFixed(lastC.close > 100 ? 2 : 4), W - PAD.right - 32, y + 4);
-    }
-
-    // Bottom time labels
-    ctx.fillStyle = COLORS.text; ctx.font = "9px monospace"; ctx.textAlign = "center";
-    const step = Math.max(1, Math.floor(visible / 6));
-    slice.forEach((c, i) => {
-      if (i % step !== 0) return;
-      const d = new Date(c.openTime);
-      const label = tf === "1d" ? d.toLocaleDateString("en-IN", {day:"2-digit",month:"short",timeZone:"Asia/Kolkata"})
-        : d.toLocaleTimeString("en-IN", {hour:"2-digit", minute:"2-digit", timeZone:"Asia/Kolkata"});
-      ctx.fillText(label, toX(i), H - 8);
-    });
-
-  }, [candles, hover, offset, signal, tf, zoom]);
-
-  // ─── Volume Chart ───────────────────────────────────────────────────────────
-  useEffect(() => {
-    const canvas = volRef.current;
-    if (!canvas || candles.length < 2) return;
-    const ctx = canvas.getContext("2d");
-    const W = canvas.width, H = canvas.height;
-    const PAD = { left: 70, right: 10, top: 4, bottom: 16 };
-    const chartW = W - PAD.left - PAD.right;
-    const chartH = H - PAD.top - PAD.bottom;
-
-    const baseVisible = Math.floor(80 / zoom);
-    const visible  = Math.max(20, Math.min(baseVisible, candles.length));
-    const startIdx = Math.max(0, Math.min(candles.length - visible, candles.length - visible - offset));
-    const slice    = candles.slice(startIdx, startIdx + visible);
-
-    ctx.fillStyle = COLORS.bg;
-    ctx.fillRect(0, 0, W, H);
-
-    const maxVol  = Math.max(...slice.map(c => c.volume));
-    const barW    = chartW / visible;
-    const bodyW   = Math.max(1, barW * 0.6);
-
-    slice.forEach((c, i) => {
-      const x = PAD.left + i * barW + barW / 2;
-      const h = (c.volume / maxVol) * chartH;
-      ctx.fillStyle = volColor(c, 0.6);
-      ctx.fillRect(x - bodyW / 2, H - PAD.bottom - h, bodyW, h);
-    });
-
-    // Vol label
-    ctx.fillStyle = COLORS.text; ctx.font = "9px monospace"; ctx.textAlign = "right";
-    ctx.fillText("VOL", PAD.left - 4, H - PAD.bottom - 2);
-  }, [candles, offset, zoom]);
-
-  // ─── RSI Chart ─────────────────────────────────────────────────────────────
-  useEffect(() => {
-    const canvas = rsiRef.current;
-    if (!canvas || candles.length < 15) return;
-    const ctx = canvas.getContext("2d");
-    const W = canvas.width, H = canvas.height;
-    const PAD = { left: 70, right: 10, top: 4, bottom: 16 };
-    const chartW = W - PAD.left - PAD.right;
-    const chartH = H - PAD.top - PAD.bottom;
-
-    const baseVisible = Math.floor(80 / zoom);
-    const visible  = Math.max(20, Math.min(baseVisible, candles.length));
-    const startIdx = Math.max(0, Math.min(candles.length - visible, candles.length - visible - offset));
-
-    const closes  = candles.map(c => c.close);
-    const rsi     = calcRSI(closes, 14).slice(startIdx, startIdx + visible);
-
-    ctx.fillStyle = COLORS.bg;
-    ctx.fillRect(0, 0, W, H);
-
-    // OB/OS zones
-    const toY = v => PAD.top + chartH * (1 - (v - 0) / 100);
-    ctx.fillStyle = COLORS.rsiOB;
-    ctx.fillRect(PAD.left, toY(70), chartW, toY(100) - toY(70));
-    ctx.fillStyle = COLORS.rsiOS;
-    ctx.fillRect(PAD.left, toY(30), chartW, toY(0) - toY(30));
-
-    // Lines at 70/50/30
-    [70, 50, 30].forEach(v => {
-      ctx.strokeStyle = v === 50 ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.1)";
-      ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
-      ctx.beginPath(); ctx.moveTo(PAD.left, toY(v)); ctx.lineTo(W - PAD.right, toY(v)); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = COLORS.text; ctx.font = "9px monospace"; ctx.textAlign = "right";
-      ctx.fillText(v, PAD.left - 4, toY(v) + 3);
-    });
-
-    // RSI line
-    ctx.strokeStyle = COLORS.rsiLine; ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    let started = false;
-    rsi.forEach((v, i) => {
-      if (v === null) return;
-      const x = PAD.left + (i / visible) * chartW;
-      if (!started) { ctx.moveTo(x, toY(v)); started = true; }
-      else ctx.lineTo(x, toY(v));
-    });
-    ctx.stroke();
-
-    // RSI label
-    ctx.fillStyle = COLORS.rsiLine; ctx.font = "bold 9px monospace"; ctx.textAlign = "right";
-    ctx.fillText("RSI", PAD.left - 4, PAD.top + 10);
-
-    // Current RSI value
-    const lastRsi = rsi.filter(Boolean).pop();
-    if (lastRsi) {
-      ctx.fillStyle = COLORS.rsiLine; ctx.font = "bold 10px monospace"; ctx.textAlign = "left";
-      ctx.fillText(lastRsi.toFixed(1), PAD.left + 4, PAD.top + 10);
-    }
-  }, [candles, offset, zoom]);
-
-  // ─── Mouse events for hover + pan ─────────────────────────────────────────
-  const handleMouseMove = useCallback((e) => {
-    const canvas = mainRef.current;
-    if (!canvas) return;
-    const rect  = canvas.getBoundingClientRect();
-    const x     = e.clientX - rect.left;
-    const PAD   = { left: 70, right: 10 };
-    const chartW = canvas.width - PAD.left - PAD.right;
-    const visible = Math.max(20, Math.min(Math.floor(80 / zoom), candles.length));
-    const i = Math.floor((x - PAD.left) / (chartW / visible));
-    setHover(i >= 0 && i < visible ? i : null);
-
-    if (isDragging.current) {
-      const dx    = e.clientX - dragStart.current;
-      const candleW = chartW / visible;
-      const newOffset = dragOffset.current + Math.round(dx / candleW);
-      setOffset(Math.max(0, Math.min(candles.length - visible, newOffset)));
-    }
-  }, [candles.length, zoom]);
-
-  const handleMouseDown = (e) => {
-    isDragging.current = true;
-    dragStart.current  = e.clientX;
-    dragOffset.current = offset;
-  };
-  const handleMouseUp = () => { isDragging.current = false; };
-
-  // ─── Touch events (mobile swipe = pan, pinch = zoom) ───────────────────────
-  const touchStartX    = useRef(0);
-  const touchStartDist = useRef(0);
-  const touchStartZoom = useRef(1);
-
-  const handleTouchStart = (e) => {
-    if (e.touches.length === 1) {
-      isDragging.current = true;
-      dragStart.current  = e.touches[0].clientX;
-      dragOffset.current = offset;
-      touchStartX.current = e.touches[0].clientX;
-    } else if (e.touches.length === 2) {
-      // Pinch — record initial distance between two fingers
-      const dx = e.touches[0].clientX - e.touches[1].clientX;
-      const dy = e.touches[0].clientY - e.touches[1].clientY;
-      touchStartDist.current = Math.sqrt(dx * dx + dy * dy);
-      touchStartZoom.current = zoom;
-    }
-  };
-
-  const handleTouchMove = useCallback((e) => {
-    e.preventDefault(); // prevent page scroll while panning chart
-    const canvas = mainRef.current;
-    if (!canvas) return;
-
-    if (e.touches.length === 1 && isDragging.current) {
-      // Single finger pan
-      const PAD     = { left: 70, right: 10 };
-      const chartW  = canvas.width - PAD.left - PAD.right;
-      const visible = Math.max(20, Math.min(Math.floor(80 / zoom), candles.length));
-      const dx      = e.touches[0].clientX - dragStart.current;
-      const candleW = chartW / visible;
-      const newOff  = dragOffset.current + Math.round(dx / candleW);
-      setOffset(Math.max(0, Math.min(candles.length - visible, newOff)));
-
-      // Hover position for tooltip
-      const rect = canvas.getBoundingClientRect();
-      const x    = e.touches[0].clientX - rect.left;
-      const i    = Math.floor((x - PAD.left) / (chartW / visible));
-      setHover(i >= 0 && i < visible ? i : null);
-
-    } else if (e.touches.length === 2) {
-      // Pinch zoom
-      const dx   = e.touches[0].clientX - e.touches[1].clientX;
-      const dy   = e.touches[0].clientY - e.touches[1].clientY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const ratio = dist / (touchStartDist.current || 1);
-      const newZoom = Math.max(0.3, Math.min(3, touchStartZoom.current * ratio));
-      setZoom(newZoom);
-    }
-  }, [candles.length, zoom]);
-
-  const handleTouchEnd = () => {
-    isDragging.current = false;
-    setHover(null);
-  };
-
-  const handleWheel = (e) => {
-    e.preventDefault();
-    setZoom(z => Math.max(0.3, Math.min(3, z + (e.deltaY < 0 ? 0.1 : -0.1))));
-  };
-
-  // ─── Keyboard ESC ──────────────────────────────────────────────────────────
-  useEffect(() => {
-    const fn = e => { if (e.key === "Escape") onClose?.(); };
-    window.addEventListener("keydown", fn);
-    return () => window.removeEventListener("keydown", fn);
-  }, [onClose]);
-
-  const lastCandle = candles[candles.length - 1];
-  const priceChange = candles.length >= 2
-    ? ((candles[candles.length-1].close - candles[candles.length-2].close) / candles[candles.length-2].close * 100)
+function buildOverview(signals) {
+  const activeSignals   = signals.filter((s) => s.status === SIGNAL_STATUS.ACTIVE);
+  const allClosed       = signals.filter((s) => s.status === SIGNAL_STATUS.CLOSED);
+  const resolvedSignals = allClosed.filter((s) => s.result !== "EXPIRED");
+  const expiredSignals  = allClosed.filter((s) => s.result === "EXPIRED");
+  const wins            = resolvedSignals.filter((s) => isWinningResult(s.result));
+  const losses          = resolvedSignals.filter((s) => s.result === "SL_HIT");
+  const longs           = signals.filter((s) => s.side === "LONG");
+  const shorts          = signals.filter((s) => s.side === "SHORT");
+  const activeSrc       = activeSignals.length ? activeSignals : signals;
+  const avgConfidence   = activeSrc.length
+    ? activeSrc.reduce((sum, s) => sum + Number(s.confidence || 0), 0) / activeSrc.length
     : 0;
-
-  return (
-    <div className="chart-modal-backdrop" onClick={onClose}>
-      <div className="chart-modal-box" onClick={e => e.stopPropagation()}>
-
-        {/* Header */}
-        <div className="chart-header">
-          <div className="chart-title-group">
-            <span className="chart-symbol">{coin}</span>
-            {lastCandle && (
-              <>
-                <span className="chart-price" style={{ color: priceChange >= 0 ? COLORS.bull : COLORS.bear }}>
-                  {lastCandle.close > 100 ? lastCandle.close.toFixed(2) : lastCandle.close.toFixed(4)}
-                </span>
-                <span className="chart-change" style={{ color: priceChange >= 0 ? COLORS.bull : COLORS.bear }}>
-                  {priceChange >= 0 ? "▲" : "▼"} {Math.abs(priceChange).toFixed(2)}%
-                </span>
-              </>
-            )}
-          </div>
-
-          <div className="chart-tf-group">
-            {TIMEFRAMES.map(t => (
-              <button
-                key={t}
-                className={`chart-tf-btn${tf === t ? " active" : ""}`}
-                onClick={() => setTf(t)}
-              >{t}</button>
-            ))}
-          </div>
-
-          <div className="chart-legend">
-            <span style={{ color: COLORS.ema9 }}>● EMA9</span>
-            <span style={{ color: COLORS.ema21 }}>● EMA21</span>
-            <span style={{ color: COLORS.ema50 }}>● EMA50</span>
-            <span style={{ color: COLORS.bbUpper }}>● BB</span>
-          </div>
-
-          <button className="chart-close-btn" onClick={onClose}>✕</button>
-        </div>
-
-        {/* Chart area */}
-        <div className="chart-body">
-          {loading && (
-            <div className="chart-loading">
-              <div className="chart-spinner" />
-              <span>Loading {coin} {tf}…</span>
-            </div>
-          )}
-          {error && (
-            <div className="chart-error">⚠ {error}</div>
-          )}
-          {!loading && !error && (
-            <>
-              <canvas
-                ref={mainRef}
-                width={900} height={380}
-                className="chart-canvas"
-                style={{ cursor: isDragging.current ? "grabbing" : "crosshair", touchAction: "none" }}
-                onMouseMove={handleMouseMove}
-                onMouseDown={handleMouseDown}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={() => { setHover(null); isDragging.current = false; }}
-                onWheel={handleWheel}
-                onTouchStart={handleTouchStart}
-                onTouchMove={handleTouchMove}
-                onTouchEnd={handleTouchEnd}
-              />
-              <canvas ref={volRef} width={900} height={60} className="chart-canvas chart-vol" />
-              <canvas ref={rsiRef} width={900} height={70} className="chart-canvas chart-rsi" />
-            </>
-          )}
-        </div>
-
-        {/* Signal info bar */}
-        {signal && (
-          <div className="chart-signal-bar">
-            <span className={`pill ${signal.side === "LONG" ? "pill-success" : "pill-danger"}`}>{signal.side}</span>
-            <span style={{ color: COLORS.entry }}>Entry: {signal.entry}</span>
-            <span style={{ color: COLORS.sl }}>SL: {signal.stopLoss}</span>
-            <span style={{ color: COLORS.tp1 }}>TP1: {signal.tp1}</span>
-            <span style={{ color: COLORS.tp2 }}>TP2: {signal.tp2}</span>
-            <span style={{ color: COLORS.tp3 }}>TP3: {signal.tp3}</span>
-            <span style={{ color: "#a78bfa" }}>Conf: {signal.confidence}%</span>
-          </div>
-        )}
-
-        <div className="chart-hint">Scroll to zoom · Drag to pan · ESC to close</div>
-      </div>
-    </div>
-  );
+  return {
+    activeSignals:     activeSignals.length,
+    closedSignals:     resolvedSignals.length,
+    expiredSignals:    expiredSignals.length,
+    totalSignals:      signals.length,
+    totalWins:         wins.length,
+    totalLosses:       losses.length,
+    strongSignals:     signals.filter((s) => Number(s.confidence || 0) >= 90).length,
+    longSignals:       longs.length,
+    shortSignals:      shorts.length,
+    averageConfidence: Number(avgConfidence.toFixed(1)),
+    winRate: resolvedSignals.length
+      ? Number(((wins.length / resolvedSignals.length) * 100).toFixed(1))
+      : 0,
+  };
 }
+
+function buildAnalytics(signals) {
+  const recent = sortByCreatedAtDesc(signals).slice(0, 12).reverse();
+  const timeframeCounts = {};
+  const statusCounts = {};
+  const directionCounts = { LONG: 0, SHORT: 0 };
+  const confidenceBands = { low: 0, medium: 0, strong: 0 };
+
+  signals.forEach((signal) => {
+    timeframeCounts[signal.timeframe] = (timeframeCounts[signal.timeframe] || 0) + 1;
+    statusCounts[signal.status] = (statusCounts[signal.status] || 0) + 1;
+    directionCounts[signal.side] = (directionCounts[signal.side] || 0) + 1;
+
+    if (signal.confidence >= 80) confidenceBands.strong += 1;
+    else if (signal.confidence >= 65) confidenceBands.medium += 1;
+    else confidenceBands.low += 1;
+  });
+
+  return {
+    recentConfidence: recent.map((signal) => ({
+      coin: signal.coin,
+      confidence: signal.confidence,
+      createdAt: signal.createdAt,
+      side: signal.side,
+      timeframe: signal.timeframe,
+    })),
+    timeframeMix: Object.entries(timeframeCounts).map(([label, value]) => ({ label, value })),
+    statusMix: Object.entries(statusCounts).map(([label, value]) => ({ label, value })),
+    directionMix: Object.entries(directionCounts).map(([label, value]) => ({ label, value })),
+    confidenceBands: Object.entries(confidenceBands).map(([label, value]) => ({ label, value })),
+  };
+}
+
+function buildBucketLabel(confidence) {
+  if (confidence >= 85) return "85+";
+  if (confidence >= 75) return "75-84";
+  if (confidence >= 65) return "65-74";
+  return "55-64";
+}
+
+function summarizePerformanceGroup(signals, labelAccessor) {
+  const groups = new Map();
+
+  signals.forEach((signal) => {
+    const label = labelAccessor(signal);
+    const current = groups.get(label) || {
+      label,
+      losses: 0,
+      total: 0,
+      wins: 0,
+    };
+
+    current.total += 1;
+
+    if (signal.result === "SL_HIT") {
+      current.losses += 1;
+    } else if (isWinningResult(signal.result)) {
+      current.wins += 1;
+    }
+
+    groups.set(label, current);
+  });
+
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      winRate: group.total ? Number(((group.wins / group.total) * 100).toFixed(1)) : 0,
+    }))
+    .sort((left, right) => right.total - left.total);
+}
+
+function buildPerformance(signals) {
+  const closedSignals = sortByCreatedAtDesc(signals).filter((signal) => signal.status !== SIGNAL_STATUS.ACTIVE);
+  const completedSignals = closedSignals;
+  const summary = {
+    avgConfidence: completedSignals.length
+      ? Number((completedSignals.reduce((sum, signal) => sum + Number(signal.confidence || 0), 0) / completedSignals.length).toFixed(1))
+      : 0,
+    losses: closedSignals.filter((signal) => signal.result === "SL_HIT").length,
+    totalClosed: closedSignals.length,
+    wins: closedSignals.filter((signal) => isWinningResult(signal.result)).length,
+  };
+
+  summary.winRate = completedSignals.length ? Number(((summary.wins / completedSignals.length) * 100).toFixed(1)) : 0;
+
+  const timeframeBreakdown = summarizePerformanceGroup(closedSignals, (signal) => signal.timeframe || "unknown");
+  const sideBreakdown = summarizePerformanceGroup(closedSignals, (signal) => signal.side || "unknown");
+  const confidenceBreakdown = summarizePerformanceGroup(closedSignals, (signal) => buildBucketLabel(Number(signal.confidence || 0)));
+  const sourceBreakdown = summarizePerformanceGroup(closedSignals, (signal) => signal.source || "unknown");
+
+  return {
+    summary,
+    timeframeBreakdown,
+    sideBreakdown,
+    confidenceBreakdown,
+    sourceBreakdown,
+    troubleCoins: [],
+    recommendations: [],
+  };
+}
+
+router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
+  const signals = await readCollection("stockSignals");
+  const filtered = sortByCreatedAtDesc(signals)
+    .filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE)
+    .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
+
+  return res.json({
+    signals: filtered.slice(0, Number(req.query.limit || 50)),
+  });
+});
+
+router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
+  const signals = await readCollection("stockSignals");
+  const filtered = sortByCreatedAtDesc(signals)
+    .filter((signal) => signal.status !== SIGNAL_STATUS.ACTIVE)
+    .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
+
+  return res.json({
+    signals: req.query.limit ? filtered.slice(0, Number(req.query.limit)) : filtered,
+  });
+});
+
+router.get("/stats/overview", requireAuth, async (req, res) => {
+  const signals = await readCollection("stockSignals");
+  return res.json({
+    stats: buildOverview(signals),
+  });
+});
+
+router.get("/stats/analytics", requireAuth, async (req, res) => {
+  const signals = await readCollection("stockSignals");
+  return res.json({
+    analytics: buildAnalytics(signals),
+  });
+});
+
+router.get("/stats/performance", requireAuth, async (req, res) => {
+  const signals = await readCollection("stockSignals");
+  return res.json({
+    performance: buildPerformance(signals),
+  });
+});
+
+router.get("/engine/status", requireAuth, (_req, res) => {
+  return res.json({
+    engine: stockEngine.getStatus(),
+  });
+});
+
+router.post("/engine/start", requireAuth, requireAdmin, (_req, res) => {
+  return res.json({
+    engine: stockEngine.start(),
+  });
+});
+
+router.post("/engine/stop", requireAuth, requireAdmin, (_req, res) => {
+  return res.json({
+    engine: stockEngine.stop(),
+  });
+});
+
+router.post("/scan", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const result = await stockEngine.scanNow();
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+// ── Live prices for stock signals ────────────────────────────────────────────
+async function fetchStockLivePrices(coins) {
+  if (!coins.length) return {};
+
+  const universe = getInstrumentUniverse();
+  const tokenMap = {};
+  for (const inst of universe) {
+    const key = (inst.symbol || inst.tradingSymbol || "").toUpperCase();
+    if (key) tokenMap[key] = { exchange: inst.exchange, token: String(inst.token) };
+  }
+
+  // Group by exchange
+  const byExchange = {};
+  const tokenToCoin = {};
+  for (const coin of coins) {
+    const info = tokenMap[coin];
+    if (!info) continue;
+    if (!byExchange[info.exchange]) byExchange[info.exchange] = [];
+    byExchange[info.exchange].push(info.token);
+    tokenToCoin[info.token] = coin;
+  }
+
+  if (!Object.keys(byExchange).length) return {};
+
+  const baseUrl = process.env.SMART_API_BASE_URL || "https://apiconnect.angelone.in";
+  const token = await ensureSession();
+
+  const resp = await axios.post(
+    `${baseUrl}/rest/secure/angelbroking/market/v1/quote/`,
+    { mode: "OHLC", exchangeTokens: byExchange },
+    {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-PrivateKey": process.env.SMART_API_KEY,
+        "X-UserType": "USER",
+        "X-SourceID": "WEB",
+        Authorization: `Bearer ${token}`,
+      },
+      timeout: 8000,
+    }
+  );
+
+  const priceMap = {};
+  for (const item of resp.data?.data?.fetched || []) {
+    const coinName = tokenToCoin[String(item.symbolToken)];
+    // ltp = live during market hours, close = last closing price when market closed
+    const price = Number(item.ltp) || Number(item.close);
+    if (coinName && Number.isFinite(price) && price > 0) {
+      priceMap[coinName] = price;
+    }
+  }
+  return priceMap;
+}
+
+// ── All instruments list (for Scanner page) ───────────────────────────────────
+router.get("/instruments", requireAuth, requireSignalAccess, (req, res) => {
+  try {
+    const universe = getInstrumentUniverse({ limit: 5000 });
+    return res.json({ instruments: universe });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+});
+
+router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) => {
+  try {
+    const coins = String(req.query.coins || "")
+      .split(",")
+      .map(c => c.trim().toUpperCase())
+      .filter(Boolean);
+
+    if (!coins.length) return res.json({ prices: [] });
+
+    const priceMap = await fetchStockLivePrices([...new Set(coins)]);
+    const liveUpdatedAt = new Date().toISOString();
+
+    return res.json({
+      prices: coins.map(coin => ({
+        coin,
+        livePrice: Number.isFinite(priceMap[coin]) ? priceMap[coin] : null,
+        liveUpdatedAt,
+      })),
+    });
+  } catch (err) {
+    console.error("[stocks/live-prices] Error:", err.message);
+    return res.status(500).json({ message: err.message });
+  }
+});
+
+
+// ── Stock candle data for charts ─────────────────────────────────────────────
+router.get("/candles", requireAuth, requireSignalAccess, async (req, res) => {
+  try {
+    const { exchange, token, interval, days } = req.query;
+    if (!exchange || !token || !interval) {
+      return res.status(400).json({ message: "exchange, token, and interval are required" });
+    }
+
+    const { getCandles } = require("../services/smartApiService");
+
+    // Calculate from/to dates based on requested days (default 5 trading days)
+    const lookbackDays = Math.min(Number(days || 5), 30);
+    const to   = new Date();
+    const from = new Date(to.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
+
+    // Angel One interval codes
+    const INTERVAL_MAP = {
+      "1m": "ONE_MINUTE", "3m": "THREE_MINUTE", "5m": "FIVE_MINUTE",
+      "10m": "TEN_MINUTE", "15m": "FIFTEEN_MINUTE", "30m": "THIRTY_MINUTE",
+      "1h": "ONE_HOUR", "4h": "FOUR_HOUR", "1d": "ONE_DAY",
+    };
+
+    const smartInterval = INTERVAL_MAP[interval] || "FIFTEEN_MINUTE";
+
+    const rawCandles = await getCandles({
+      exchange: exchange.toUpperCase(),
+      symbolToken: token,
+      interval: smartInterval,
+      from,
+      to,
+    });
+
+    // Angel One returns: [ [timestamp, open, high, low, close, volume], ... ]
+    const candles = rawCandles.map(row => ({
+      openTime: new Date(row[0]).getTime(),
+      open:     Number(row[1]),
+      high:     Number(row[2]),
+      low:      Number(row[3]),
+      close:    Number(row[4]),
+      volume:   Number(row[5] || 0),
+    })).filter(c => Number.isFinite(c.open) && c.open > 0);
+
+    return res.json({ candles, interval, exchange, token });
+  } catch (err) {
+    console.error("[stocks/candles] Error:", err.message);
+    return res.status(500).json({ message: err.message, candles: [] });
+  }
+});
+
+module.exports = router;
