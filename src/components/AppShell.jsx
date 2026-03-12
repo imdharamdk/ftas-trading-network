@@ -10,7 +10,7 @@ function fmtExpiry(value) {
   if (!value) return "";
   const d = new Date(value);
   if (isNaN(d.getTime())) return "";
-  return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short" }).format(d);
+  return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" }).format(d);
 }
 
 export default function AppShell({ actions = null, children, subtitle, title }) {
