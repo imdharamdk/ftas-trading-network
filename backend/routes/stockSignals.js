@@ -309,4 +309,54 @@ router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) =>
   }
 });
 
+
+// ── Stock candle data for charts ─────────────────────────────────────────────
+router.get("/candles", requireAuth, requireSignalAccess, async (req, res) => {
+  try {
+    const { exchange, token, interval, days } = req.query;
+    if (!exchange || !token || !interval) {
+      return res.status(400).json({ message: "exchange, token, and interval are required" });
+    }
+
+    const { getCandles } = require("../services/smartApiService");
+
+    // Calculate from/to dates based on requested days (default 5 trading days)
+    const lookbackDays = Math.min(Number(days || 5), 30);
+    const to   = new Date();
+    const from = new Date(to.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
+
+    // Angel One interval codes
+    const INTERVAL_MAP = {
+      "1m": "ONE_MINUTE", "3m": "THREE_MINUTE", "5m": "FIVE_MINUTE",
+      "10m": "TEN_MINUTE", "15m": "FIFTEEN_MINUTE", "30m": "THIRTY_MINUTE",
+      "1h": "ONE_HOUR", "4h": "FOUR_HOUR", "1d": "ONE_DAY",
+    };
+
+    const smartInterval = INTERVAL_MAP[interval] || "FIFTEEN_MINUTE";
+
+    const rawCandles = await getCandles({
+      exchange: exchange.toUpperCase(),
+      symbolToken: token,
+      interval: smartInterval,
+      from,
+      to,
+    });
+
+    // Angel One returns: [ [timestamp, open, high, low, close, volume], ... ]
+    const candles = rawCandles.map(row => ({
+      openTime: new Date(row[0]).getTime(),
+      open:     Number(row[1]),
+      high:     Number(row[2]),
+      low:      Number(row[3]),
+      close:    Number(row[4]),
+      volume:   Number(row[5] || 0),
+    })).filter(c => Number.isFinite(c.open) && c.open > 0);
+
+    return res.json({ candles, interval, exchange, token });
+  } catch (err) {
+    console.error("[stocks/candles] Error:", err.message);
+    return res.status(500).json({ message: err.message, candles: [] });
+  }
+});
+
 module.exports = router;
