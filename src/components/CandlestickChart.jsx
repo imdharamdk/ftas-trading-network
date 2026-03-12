@@ -282,7 +282,7 @@ export default function CandlestickChart({ coin, timeframe: initialTf = "15m", s
         `O: ${fmt(c.open)}   C: ${fmt(c.close)}`,
         `H: ${fmt(c.high)}   L: ${fmt(c.low)}`,
         `Vol: ${(c.volume/1000).toFixed(1)}K`,
-        new Date(c.openTime).toLocaleString("en-IN", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" }),
+        new Date(c.openTime).toLocaleString("en-IN", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit", timeZone:"Asia/Kolkata" }),
       ];
       ctx.fillStyle = COLORS.textBright;
       ctx.font      = "11px monospace";
@@ -307,8 +307,8 @@ export default function CandlestickChart({ coin, timeframe: initialTf = "15m", s
     slice.forEach((c, i) => {
       if (i % step !== 0) return;
       const d = new Date(c.openTime);
-      const label = tf === "1d" ? d.toLocaleDateString("en-IN", {day:"2-digit",month:"short"})
-        : d.toLocaleTimeString("en-IN", {hour:"2-digit", minute:"2-digit"});
+      const label = tf === "1d" ? d.toLocaleDateString("en-IN", {day:"2-digit",month:"short",timeZone:"Asia/Kolkata"})
+        : d.toLocaleTimeString("en-IN", {hour:"2-digit", minute:"2-digit", timeZone:"Asia/Kolkata"});
       ctx.fillText(label, toX(i), H - 8);
     });
 
