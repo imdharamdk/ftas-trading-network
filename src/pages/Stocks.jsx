@@ -137,7 +137,7 @@ export default function Stocks() {
             <div><span className="detail-label">Interval</span><strong>{Math.round((engine?.intervalMs || 120000) / 1000)} sec</strong></div>
             <div><span className="detail-label">Scans</span><strong>{engine?.scanCount || 0}</strong></div>
             <div><span className="detail-label">Last output</span><strong>{engine?.lastGenerated || 0} signals</strong></div>
-            <div><span className="detail-label">Last scan</span><strong>{engine?.lastScanAt ? new Date(engine.lastScanAt).toLocaleTimeString("en-IN") : "Never"}</strong></div>
+            <div><span className="detail-label">Last scan</span><strong>{engine?.lastScanAt ? new Date(engine.lastScanAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }) : "Never"}</strong></div>
           </div>
           {isAdmin ? (
             <div className="button-row">
