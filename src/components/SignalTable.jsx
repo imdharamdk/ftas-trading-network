@@ -236,14 +236,20 @@ function TableRow({ signal, onChartOpen }) {
    MAIN EXPORT
 ══════════════════════════════════════════════════════════════════════════════ */
 export default function SignalTable({ compact = false, emptyLabel, signals }) {
-  const [chartCoin, setChartCoin] = useState(null);
-  const [chartTf, setChartTf]     = useState("15m");
-  const [tvSignal, setTvSignal]   = useState(null);
+  const [chartCoin, setChartCoin]   = useState(null);
+  const [chartTf, setChartTf]       = useState("15m");
+  const [chartSignal, setChartSignal] = useState(null);
+  const [tvSignal, setTvSignal]     = useState(null);
 
   function openChart(signal) {
-    if (signal.source === "SMART_ENGINE") {
-      setTvSignal(signal);
+    // All signals now use CandlestickChart:
+    // - Crypto → /market/klines (Bybit)
+    // - Stock (SMART_ENGINE) → /stocks/candles (SmartAPI) if instrument token available
+    //   fallback to TradingView if token missing
+    if (signal.source === "SMART_ENGINE" && !signal.scanMeta?.instrument?.token) {
+      setTvSignal(signal); // fallback
     } else {
+      setChartSignal(signal);
       setChartCoin(signal.coin);
       setChartTf(signal.timeframe || "15m");
     }
@@ -313,8 +319,8 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
         <CandlestickChart
           coin={chartCoin}
           timeframe={chartTf}
-          signal={signals.find(s => s.coin === chartCoin && s.timeframe === chartTf) || null}
-          onClose={() => setChartCoin(null)}
+          signal={chartSignal || signals.find(s => s.coin === chartCoin && s.timeframe === chartTf) || null}
+          onClose={() => { setChartCoin(null); setChartSignal(null); }}
         />
       )}
 
