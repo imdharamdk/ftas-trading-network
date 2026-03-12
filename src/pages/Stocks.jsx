@@ -56,7 +56,7 @@ export default function Stocks() {
       } catch {}
     }
     refreshPrices();
-    const id = window.setInterval(refreshPrices, 10000);
+    const id = window.setInterval(refreshPrices, 5000);
     return () => { mounted = false; window.clearInterval(id); };
   }, [activeCoinsKey]);
 
