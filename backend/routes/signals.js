@@ -355,7 +355,7 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   });
 });
 
-router.get("/stats/overview", requireAuth, requireSignalAccess, async (req, res) => {
+router.get("/stats/overview", requireAuth, async (req, res) => {
   // Use ALL signals including EXPIRED — buildOverview handles EXPIRED separately
   const signals = await readCollection("signals");
   return res.json({
@@ -363,21 +363,21 @@ router.get("/stats/overview", requireAuth, requireSignalAccess, async (req, res)
   });
 });
 
-router.get("/stats/analytics", requireAuth, requireSignalAccess, async (req, res) => {
+router.get("/stats/analytics", requireAuth, async (req, res) => {
   const signals = await readCollection("signals");
   return res.json({
     analytics: buildAnalytics(signals),
   });
 });
 
-router.get("/stats/performance", requireAuth, requireSignalAccess, async (req, res) => {
+router.get("/stats/performance", requireAuth, async (req, res) => {
   const signals = await readCollection("signals");
   return res.json({
     performance: buildPerformance(signals),
   });
 });
 
-router.get("/engine/status", requireAuth, requireSignalAccess, (req, res) => {
+router.get("/engine/status", requireAuth, (req, res) => {
   return res.json({
     engine: getStatus(),
   });
