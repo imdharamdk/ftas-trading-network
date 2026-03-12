@@ -171,28 +171,28 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   });
 });
 
-router.get("/stats/overview", requireAuth, requireSignalAccess, async (req, res) => {
+router.get("/stats/overview", requireAuth, async (req, res) => {
   const signals = await readCollection("stockSignals");
   return res.json({
     stats: buildOverview(signals),
   });
 });
 
-router.get("/stats/analytics", requireAuth, requireSignalAccess, async (req, res) => {
+router.get("/stats/analytics", requireAuth, async (req, res) => {
   const signals = await readCollection("stockSignals");
   return res.json({
     analytics: buildAnalytics(signals),
   });
 });
 
-router.get("/stats/performance", requireAuth, requireSignalAccess, async (req, res) => {
+router.get("/stats/performance", requireAuth, async (req, res) => {
   const signals = await readCollection("stockSignals");
   return res.json({
     performance: buildPerformance(signals),
   });
 });
 
-router.get("/engine/status", requireAuth, requireSignalAccess, (_req, res) => {
+router.get("/engine/status", requireAuth, (_req, res) => {
   return res.json({
     engine: stockEngine.getStatus(),
   });
