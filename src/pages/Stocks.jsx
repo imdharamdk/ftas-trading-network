@@ -24,7 +24,7 @@ export default function Stocks() {
     const responses = await Promise.allSettled([
       apiFetch("/stocks/stats/overview"),
       apiFetch("/stocks/active?limit=40"),
-      apiFetch("/stocks/history?limit=40"),
+      apiFetch("/stocks/history?limit=5000"),
       apiFetch("/stocks/engine/status"),
     ]);
     const [overviewRes, activeRes, historyRes, engineRes] = responses;
