@@ -40,6 +40,7 @@ function formatPublished(value) {
     hour: "2-digit",
     minute: "2-digit",
     month: "short",
+    timeZone: "Asia/Kolkata",
   }).format(date);
 }
 
