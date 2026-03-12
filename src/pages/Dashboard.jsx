@@ -181,11 +181,12 @@ export default function Dashboard() {
       apiFetch("/stocks/stats/overview"),
     ]);
     const [overviewRes, analyticsRes, performanceRes, engineRes, stockOverviewRes] = results;
-    setOverview(overviewRes.status === "fulfilled" ? overviewRes.value.stats : null);
-    setAnalytics(analyticsRes.status === "fulfilled" ? analyticsRes.value.analytics : null);
-    setPerformance(performanceRes.status === "fulfilled" ? performanceRes.value.performance : null);
-    setEngine(engineRes.status === "fulfilled" ? engineRes.value.engine : null);
-    setStockOverview(stockOverviewRes.status === "fulfilled" ? stockOverviewRes.value.stats : null);
+    // Only update state if request succeeded — preserve previous data on failure
+    if (overviewRes.status === "fulfilled") setOverview(overviewRes.value.stats ?? null);
+    if (analyticsRes.status === "fulfilled") setAnalytics(analyticsRes.value.analytics ?? null);
+    if (performanceRes.status === "fulfilled") setPerformance(performanceRes.value.performance ?? null);
+    if (engineRes.status === "fulfilled") setEngine(engineRes.value.engine ?? null);
+    if (stockOverviewRes.status === "fulfilled") setStockOverview(stockOverviewRes.value.stats ?? null);
     const rejected = results.find((r) => r.status === "rejected");
     return rejected ? rejected.reason : null;
   }, []);
@@ -228,8 +229,8 @@ export default function Dashboard() {
     }
     // Initial load
     loadData();
-    // Poll every 10 seconds for live updates
-    const id = window.setInterval(loadData, 10000);
+    // Poll every 30 seconds for live updates
+    const id = window.setInterval(loadData, 30000);
     // Also refresh instantly when user comes back to this tab
     function onVisible() {
       if (document.visibilityState === "visible" && active) loadData();
