@@ -51,7 +51,7 @@ function formatSubscriptionEndsAt(value) {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" }).format(date);
+  return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }).format(date);
 }
 
 function buildPlanUpdate(plan) {
@@ -174,19 +174,66 @@ export default function Dashboard() {
 
   const loadPublicData = useCallback(async () => {
     const results = await Promise.allSettled([
-      apiFetch("/signals/stats/overview"),
+      apiFetch("/signals/active?limit=200"),
+      apiFetch("/signals/history?limit=500"),
+      apiFetch("/stocks/active?limit=200"),
+      apiFetch("/stocks/history?limit=500"),
       apiFetch("/signals/stats/analytics"),
       apiFetch("/signals/stats/performance"),
       apiFetch("/signals/engine/status"),
-      apiFetch("/stocks/stats/overview"),
     ]);
-    const [overviewRes, analyticsRes, performanceRes, engineRes, stockOverviewRes] = results;
-    // Only update state if request succeeded — preserve previous data on failure
-    if (overviewRes.status === "fulfilled") setOverview(overviewRes.value.stats ?? null);
+    const [cryptoActiveRes, cryptoHistoryRes, stockActiveRes, stockHistoryRes, analyticsRes, performanceRes, engineRes] = results;
+
+    // Crypto: same filter as Crypto.jsx — 1m/5m, non-SMART_ENGINE only
+    const cryptoActive  = cryptoActiveRes.status  === "fulfilled" ? (cryptoActiveRes.value.signals  || []) : null;
+    const cryptoHistory = cryptoHistoryRes.status === "fulfilled" ? (cryptoHistoryRes.value.signals || []) : null;
+    if (cryptoActive !== null && cryptoHistory !== null) {
+      const filteredActive  = cryptoActive.filter(s => s.source !== "SMART_ENGINE" && ["1m","5m"].includes(s.timeframe));
+      const filteredHistory = cryptoHistory.filter(s => s.source !== "SMART_ENGINE" && ["1m","5m"].includes(s.timeframe));
+      const expiredC  = filteredHistory.filter(s => s.result === "EXPIRED").length;
+      const winsC     = filteredHistory.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result)).length;
+      const lossesC   = filteredHistory.filter(s => s.result === "SL_HIT").length;
+      const resolvedC = filteredHistory.length - expiredC;
+      setOverview({
+        activeSignals:     filteredActive.length,
+        closedSignals:     resolvedC,
+        expiredSignals:    expiredC,
+        totalSignals:      filteredActive.length + filteredHistory.length,
+        totalWins:         winsC,
+        totalLosses:       lossesC,
+        winRate:           resolvedC > 0 ? Number(((winsC / resolvedC) * 100).toFixed(1)) : 0,
+        averageConfidence: filteredActive.length
+          ? Number((filteredActive.reduce((s, x) => s + Number(x.confidence || 0), 0) / filteredActive.length).toFixed(1))
+          : 0,
+      });
+    }
+
+    // Stocks: same logic as Stocks.jsx — all stockSignals, no timeframe filter
+    const stockActive  = stockActiveRes.status  === "fulfilled" ? (stockActiveRes.value.signals  || []) : null;
+    const stockHistory = stockHistoryRes.status === "fulfilled" ? (stockHistoryRes.value.signals || []) : null;
+    if (stockActive !== null && stockHistory !== null) {
+      const expiredS  = stockHistory.filter(s => s.result === "EXPIRED").length;
+      const winsS     = stockHistory.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result)).length;
+      const lossesS   = stockHistory.filter(s => s.result === "SL_HIT").length;
+      const resolvedS = stockHistory.length - expiredS;
+      setStockOverview({
+        activeSignals:     stockActive.length,
+        closedSignals:     resolvedS,
+        expiredSignals:    expiredS,
+        totalSignals:      stockActive.length + stockHistory.length,
+        totalWins:         winsS,
+        totalLosses:       lossesS,
+        winRate:           resolvedS > 0 ? Number(((winsS / resolvedS) * 100).toFixed(1)) : 0,
+        averageConfidence: stockActive.length
+          ? Number((stockActive.reduce((s, x) => s + Number(x.confidence || 0), 0) / stockActive.length).toFixed(1))
+          : 0,
+      });
+    }
+
     if (analyticsRes.status === "fulfilled") setAnalytics(analyticsRes.value.analytics ?? null);
     if (performanceRes.status === "fulfilled") setPerformance(performanceRes.value.performance ?? null);
     if (engineRes.status === "fulfilled") setEngine(engineRes.value.engine ?? null);
-    if (stockOverviewRes.status === "fulfilled") setStockOverview(stockOverviewRes.value.stats ?? null);
+
     const rejected = results.find((r) => r.status === "rejected");
     return rejected ? rejected.reason : null;
   }, []);
@@ -528,7 +575,7 @@ export default function Dashboard() {
             <div><span className="detail-label">Interval</span><strong>{Math.round((engine?.intervalMs || 60000) / 1000)} sec</strong></div>
             <div><span className="detail-label">Scans</span><strong>{engine?.scanCount || 0}</strong></div>
             <div><span className="detail-label">Last output</span><strong>{engine?.lastGenerated || 0} signals</strong></div>
-            <div><span className="detail-label">Last scan</span><strong>{engine?.lastScanAt ? new Date(engine.lastScanAt).toLocaleTimeString("en-IN") : "—"}</strong></div>
+            <div><span className="detail-label">Last scan</span><strong>{engine?.lastScanAt ? new Date(engine.lastScanAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }) : "—"}</strong></div>
           </div>
           <div className="button-row">
             <button className="button button-primary" disabled={actionBusy === "start"} onClick={() => handleEngineAction("start")} type="button">
