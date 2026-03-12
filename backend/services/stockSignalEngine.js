@@ -4,24 +4,28 @@ const { analyzeCandles } = require("./indicatorEngine");
 const { getInstrumentUniverse } = require("./smartInstrumentService");
 const { getCandles, getLtp } = require("./smartApiService");
 
-const SCAN_TIMEFRAMES = String(process.env.SMART_TRADE_TIMEFRAMES || "15m,1h")
-  .split(",").map(i => i.trim()).filter(Boolean);
-
-const MAX_INSTRUMENTS            = Number(process.env.SMART_MAX_INSTRUMENTS || 15);
+// SCAN_TIMEFRAMES per segment — defined in TIMEFRAME_INTERVALS section below
+const MAX_INSTRUMENTS            = Number(process.env.SMART_MAX_INSTRUMENTS || 60);
 const MAX_SIGNALS_PER_INSTRUMENT = Number(process.env.SMART_SIGNALS_PER_INSTRUMENT || 1);
 const ENGINE_INTERVAL_MS         = Number(process.env.SMART_SCAN_INTERVAL_MS || 600000);
 const REQUEST_DELAY_MS           = Number(process.env.SMART_REQUEST_DELAY_MS || 1500);
 
-// Angel One valid intervals for NSE EQ stocks
-// FOUR_HOURS is NOT valid for EQ stocks
+// Angel One valid intervals
+// NSE EQ: FOUR_HOURS NOT valid. NFO/MCX: FOUR_HOURS valid.
 const TIMEFRAME_INTERVALS = {
   "1m":  { interval: "ONE_MINUTE",     calendarDays: 3   },
   "5m":  { interval: "FIVE_MINUTE",    calendarDays: 7   },
   "15m": { interval: "FIFTEEN_MINUTE", calendarDays: 15  },
   "30m": { interval: "THIRTY_MINUTE",  calendarDays: 25  },
   "1h":  { interval: "ONE_HOUR",       calendarDays: 60  },
+  "4h":  { interval: "FOUR_HOUR",      calendarDays: 120 },
   "1d":  { interval: "ONE_DAY",        calendarDays: 400 },
 };
+
+// NSE EQ stocks cannot use FOUR_HOUR — use only these
+const EQ_TIMEFRAMES = ["15m", "1h"];
+// F&O and Commodity futures can use more intervals
+const FNO_TIMEFRAMES = ["15m", "1h", "4h"];
 
 const engineState = {
   intervalMs: ENGINE_INTERVAL_MS, isScanning: false, lastError: null,
@@ -66,8 +70,9 @@ async function fetchCandles(instrument, timeframe) {
       to,
     });
 
-    if (!Array.isArray(rows) || rows.length < 50) {
-      console.warn(`[stockEngine] Too few candles: ${instrument.tradingSymbol} ${timeframe} → ${Array.isArray(rows) ? rows.length : 0} rows`);
+    const minCandles = (instrument.segment === "FNO" || instrument.segment === "COMMODITY") ? 30 : 50;
+    if (!Array.isArray(rows) || rows.length < minCandles) {
+      console.warn(`[stockEngine] Too few candles: ${instrument.tradingSymbol} ${timeframe} → ${Array.isArray(rows) ? rows.length : 0} rows (need ${minCandles})`);
       return null;
     }
 
@@ -144,7 +149,11 @@ function buildCandidate(instrument, timeframe, analysis) {
 
 async function analyzeInstrument(instrument) {
   const candidates = [];
-  for (const tf of SCAN_TIMEFRAMES) {
+  // Use FNO timeframes for futures (NFO/MCX), EQ timeframes for cash equities
+  const isFuture = instrument.segment === "FNO" || instrument.segment === "COMMODITY"
+    || instrument.exchange === "NFO" || instrument.exchange === "MCX";
+  const timeframes = isFuture ? FNO_TIMEFRAMES : EQ_TIMEFRAMES;
+  for (const tf of timeframes) {
     await sleep(REQUEST_DELAY_MS);
     const candles = await fetchCandles(instrument, tf);
     if (!candles) continue;
