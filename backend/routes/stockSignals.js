@@ -167,7 +167,7 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
 
   return res.json({
-    signals: filtered.slice(0, Number(req.query.limit || 100)),
+    signals: req.query.limit ? filtered.slice(0, Number(req.query.limit)) : filtered,
   });
 });
 
