@@ -521,4 +521,113 @@ function analyzeCandles(candles) {
   };
 }
 
-module.exports = { analyzeCandles };
+// ─── Fibonacci Retracement & Extension Levels ─────────────────────────────────
+// Uses the most significant swing high/low in recent candles (lookback configurable).
+// Returns retracement levels (0.236, 0.382, 0.5, 0.618, 0.786) and
+// extension levels (1.0, 1.272, 1.414, 1.618, 2.0, 2.618) relative to the swing.
+//
+// For a BULLISH move  → swing low to swing high  (price retraced from swing high down)
+// For a BEARISH move  → swing high to swing low  (price retraced from swing low up)
+//
+// Returns:
+//   swingHigh, swingLow     — the detected swing points
+//   retracements            — { level: price } map  (e.g. "0.618": 42100)
+//   extensions              — { level: price } map  (e.g. "1.618": 48200)
+//   nearestRetrace          — closest retracement level to current price
+//   nearestRetraceDistance  — distance as % of swing range
+//   atKeyLevel              — true if price is within 0.8% of a key Fib level (0.382/0.5/0.618)
+//   atGoldenZone            — true if price is between 0.5 and 0.618 (highest probability zone)
+//   trendDir                — "UP" (bullish swing) or "DOWN" (bearish swing)
+function computeFibonacci(candles, lookback = 50) {
+  const FIB_RETRACEMENTS = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
+  const FIB_EXTENSIONS   = [1.0, 1.272, 1.414, 1.618, 2.0, 2.618];
+  const KEY_LEVELS       = new Set(["0.382", "0.5", "0.618"]);
+  const PROXIMITY_PCT    = 0.008; // 0.8% proximity window
+
+  const slice = candles.slice(-lookback);
+  if (slice.length < 5) {
+    return { swingHigh: null, swingLow: null, retracements: {}, extensions: {},
+      nearestRetrace: null, nearestRetraceDistance: null, atKeyLevel: false, atGoldenZone: false, trendDir: null };
+  }
+
+  // Find absolute swing high and low in the lookback window
+  let swingHigh = -Infinity, swingHighIdx = 0;
+  let swingLow  =  Infinity, swingLowIdx  = 0;
+  for (let i = 0; i < slice.length; i++) {
+    if (slice[i].high > swingHigh) { swingHigh = slice[i].high; swingHighIdx = i; }
+    if (slice[i].low  < swingLow)  { swingLow  = slice[i].low;  swingLowIdx  = i; }
+  }
+
+  const currentPrice = slice[slice.length - 1].close;
+  const range = swingHigh - swingLow;
+  if (range <= 0) {
+    return { swingHigh, swingLow, retracements: {}, extensions: {},
+      nearestRetrace: null, nearestRetraceDistance: null, atKeyLevel: false, atGoldenZone: false, trendDir: null };
+  }
+
+  // Determine trend direction by which swing came LAST (more recent)
+  // trendDir "UP"   = swing low appeared before swing high → bullish leg
+  // trendDir "DOWN" = swing high appeared before swing low → bearish leg
+  const trendDir = swingHighIdx > swingLowIdx ? "UP" : "DOWN";
+
+  // Compute retracement levels
+  // UP trend  → retraces DOWN from swingHigh  → level = swingHigh - ratio * range
+  // DOWN trend → retraces UP from swingLow    → level = swingLow  + ratio * range
+  const retracements = {};
+  for (const ratio of FIB_RETRACEMENTS) {
+    const key = String(ratio);
+    retracements[key] = trendDir === "UP"
+      ? roundP(swingHigh - ratio * range)
+      : roundP(swingLow  + ratio * range);
+  }
+
+  // Compute extension levels
+  // UP trend  → extends ABOVE swingHigh → level = swingHigh + (ratio - 1) * range
+  // DOWN trend → extends BELOW swingLow  → level = swingLow  - (ratio - 1) * range
+  const extensions = {};
+  for (const ratio of FIB_EXTENSIONS) {
+    const key = String(ratio);
+    extensions[key] = trendDir === "UP"
+      ? roundP(swingLow  + ratio * range)
+      : roundP(swingHigh - ratio * range);
+  }
+
+  // Find nearest retracement level to current price
+  let nearestRetrace = null, nearestRetraceDistance = Infinity;
+  for (const [key, level] of Object.entries(retracements)) {
+    const dist = Math.abs(currentPrice - level) / range;
+    if (dist < nearestRetraceDistance) { nearestRetraceDistance = dist; nearestRetrace = key; }
+  }
+
+  // atKeyLevel: price within 0.8% of 0.382, 0.5, or 0.618
+  const atKeyLevel = nearestRetrace !== null &&
+    KEY_LEVELS.has(nearestRetrace) &&
+    Math.abs(currentPrice - retracements[nearestRetrace]) / currentPrice <= PROXIMITY_PCT;
+
+  // Golden zone: price between 0.5 and 0.618 retracement
+  const fib50  = retracements["0.5"];
+  const fib618 = retracements["0.618"];
+  const [zoneLo, zoneHi] = trendDir === "UP"
+    ? [Math.min(fib50, fib618), Math.max(fib50, fib618)]
+    : [Math.min(fib50, fib618), Math.max(fib50, fib618)];
+
+  // Expand zone slightly (±0.3% buffer) so price just above/below still counts
+  const atGoldenZone = currentPrice >= zoneLo * 0.997 && currentPrice <= zoneHi * 1.003;
+
+  return {
+    swingHigh: roundP(swingHigh), swingLow: roundP(swingLow),
+    range: roundP(range), trendDir,
+    retracements, extensions,
+    nearestRetrace, nearestRetraceDistance: roundP(nearestRetraceDistance),
+    atKeyLevel, atGoldenZone,
+  };
+}
+
+function roundP(v) {
+  if (!Number.isFinite(v)) return 0;
+  if (Math.abs(v) >= 1000) return Number(v.toFixed(2));
+  if (Math.abs(v) >= 1)    return Number(v.toFixed(4));
+  return Number(v.toFixed(6));
+}
+
+module.exports = { analyzeCandles, computeFibonacci };
