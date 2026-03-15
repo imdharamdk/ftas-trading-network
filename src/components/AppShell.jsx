@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import { useSession } from "../context/useSession";
+import ChatBox from "./ChatBox";
 
 function navCls({ isActive }) {
   return `nav-link${isActive ? " nav-link-active" : ""}`;
@@ -131,6 +132,7 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
         {/* Page content */}
         {children}
       </main>
+      <ChatBox />
     </div>
   );
 }
