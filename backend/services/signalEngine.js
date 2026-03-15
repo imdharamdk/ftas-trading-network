@@ -234,6 +234,40 @@ function getHigherTimeframeBias(analyses, tradeTimeframe = "5m") {
   return b15m;
 }
 
+// ─── Relaxed HTF Bias (for admin search only) ────────────────────────────────
+// Regular bias requires BOTH 15m+1h to agree. This version accepts:
+//   - ANY one higher TF showing clear directional bias
+//   - Lower ADX threshold (12 instead of 15-16)
+//   - Wider RSI range (35-65 instead of 40-60)
+function getRelaxedBias(analyses, tradeTimeframe = "5m") {
+  const tfsToCheck = tradeTimeframe === "1m"
+    ? ["5m", "15m", "1h"]
+    : ["15m", "1h", "4h"];
+
+  const getDir = (a) => {
+    if (!a) return "NEUTRAL";
+    const { ema50, ema100, ema200, adx } = a.trend;
+    const rsi = a.momentum?.rsi || 50;
+    const bull = ema50 > ema100 * 0.999 && ema50 > ema200 * 0.996 && (adx||0) >= 12 && rsi >= 35 && rsi <= 72;
+    const bear = ema50 < ema100 * 1.001 && ema50 < ema200 * 1.004 && (adx||0) >= 12 && rsi <= 65 && rsi >= 28;
+    return bull ? "BULLISH" : bear ? "BEARISH" : "NEUTRAL";
+  };
+
+  const biases = tfsToCheck
+    .map(tf => getDir(analyses[tf]))
+    .filter(b => b !== "NEUTRAL");
+
+  if (!biases.length) return "NEUTRAL";
+
+  // If majority agree, return that direction
+  const bullCount = biases.filter(b => b === "BULLISH").length;
+  const bearCount = biases.filter(b => b === "BEARISH").length;
+  if (bullCount > bearCount) return "BULLISH";
+  if (bearCount > bullCount) return "BEARISH";
+  // Tie — use the most recent (first) TF's bias
+  return biases[0];
+}
+
 // ─── Fibonacci levels for a coin/timeframe (uses raw candles) ─────────────────
 // Called once per coin in analyzeCoin — result passed into buildCandidate
 function computeFibForSignal(candles, lookback = 55) {
@@ -857,14 +891,19 @@ async function analyzeCoinForAdmin(coin, marketActivity = null) {
     }
     const analysis  = analyses[tf];
     const price     = analysis.currentPrice;
-    const bias      = getHigherTimeframeBias(analyses, tf);
     const tfRule    = TIMEFRAME_RULES[tf] || {};
     const gates     = {};
 
-    // GATE 1: HTF bias
-    gates.htfBias = bias !== "NEUTRAL" ? "PASS" : "FAIL";
+    // GATE 1: HTF bias — RELAXED for admin
+    // Regular engine: both 15m+1h must agree. Admin: any ONE higher TF is enough.
+    let bias = getHigherTimeframeBias(analyses, tf);
     if (bias === "NEUTRAL") {
-      diagnostics.gateResults[tf] = { gates, verdict: "FAIL — HTF timeframes not aligned (15m+1h disagree)" };
+      // Try relaxed single-TF bias check
+      bias = getRelaxedBias(analyses, tf);
+    }
+    gates.htfBias = bias !== "NEUTRAL" ? `PASS (${bias})` : "FAIL";
+    if (bias === "NEUTRAL") {
+      diagnostics.gateResults[tf] = { gates, verdict: "FAIL — HTF timeframes not aligned (15m+1h disagree on both relaxed and strict)" };
       continue;
     }
     const side = bias === "BULLISH" ? "LONG" : "SHORT";
@@ -922,10 +961,10 @@ async function analyzeCoinForAdmin(coin, marketActivity = null) {
       ? (fib.atGoldenZone ? "GOLDEN_ZONE ⭐ (highest prob)" : fib.atKeyLevel ? "KEY_LEVEL ✓" : "Not at key Fib (bypassed for admin)")
       : "No Fib data (bypassed)";
 
-    // Build candidate with relaxed floor
+    // Build candidate with maximally relaxed floor for admin
     const activity   = marketActivity || buildFallbackMarketActivity(coin);
     const origRules  = { ...TIMEFRAME_RULES[tf] };
-    TIMEFRAME_RULES[tf] = { ...origRules, publishFloor: 50, minScore: 42, minConfirmations: 3 };
+    TIMEFRAME_RULES[tf] = { ...origRules, publishFloor: 38, minScore: 32, minConfirmations: 2 };
     let candidate;
     try {
       candidate = buildCandidate(coin, tf, analysis, bias, htf, activity, null, null); // fib=null bypasses GATE 7
