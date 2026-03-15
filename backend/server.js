@@ -5,6 +5,7 @@ const cors    = require("cors");
 const fs      = require("fs");
 const path    = require("path");
 
+const chatRoutes        = require("./routes/chat");
 const authRoutes        = require("./routes/auth");
 const marketRoutes      = require("./routes/market");
 const newsRoutes        = require("./routes/news");
@@ -152,6 +153,7 @@ function createApp() {
   }));
 
   app.use("/api/auth",     authRoutes);
+  app.use("/api/chat",     chatRoutes);
   app.use("/api/news",     newsRoutes);
   app.use("/api/market",   marketRoutes);
   app.use("/api/payments", paymentRoutes);
