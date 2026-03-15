@@ -818,6 +818,132 @@ async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = nu
   return candidates.sort((a, b) => b.confidence - a.confidence)[0];
 }
 
+// ─── Admin Search: Relaxed analyzer with diagnostic info ─────────────────────
+// Bypasses Fibonacci gate and lowers publishFloor.
+// Returns { candidate, diagnostics } — candidate may be null with reason explained.
+async function analyzeCoinForAdmin(coin, marketActivity = null) {
+  const analyses = {};
+  const rawCandles = {};
+  const diagnostics = { coin, timeframes: {}, gateResults: {} };
+
+  for (const tf of SCAN_TIMEFRAMES) {
+    try {
+      const candles  = await getKlines(coin, tf, 260);
+      if (!candles || candles.length < 20) {
+        diagnostics.timeframes[tf] = "NO_DATA";
+        continue;
+      }
+      analyses[tf]   = analyzeCandles(candles);
+      rawCandles[tf] = candles;
+      diagnostics.timeframes[tf] = "OK";
+    } catch (e) {
+      diagnostics.timeframes[tf] = `ERROR: ${e.message}`;
+    }
+    await new Promise(r => setTimeout(r, 80));
+  }
+
+  const htf = {
+    daily:   analyses["1d"]  || null,
+    twelveH: null,
+    fourH:   analyses["4h"]  || null,
+    oneH:    analyses["1h"]  || null,
+  };
+  const tradeTimeframes = getTradeTimeframes();
+
+  for (const tf of tradeTimeframes) {
+    if (!analyses[tf]) {
+      diagnostics.gateResults[tf] = "SKIP: no candle data";
+      continue;
+    }
+    const analysis  = analyses[tf];
+    const price     = analysis.currentPrice;
+    const bias      = getHigherTimeframeBias(analyses, tf);
+    const tfRule    = TIMEFRAME_RULES[tf] || {};
+    const gates     = {};
+
+    // GATE 1: HTF bias
+    gates.htfBias = bias !== "NEUTRAL" ? "PASS" : "FAIL";
+    if (bias === "NEUTRAL") {
+      diagnostics.gateResults[tf] = { gates, verdict: "FAIL — HTF timeframes not aligned (15m+1h disagree)" };
+      continue;
+    }
+    const side = bias === "BULLISH" ? "LONG" : "SHORT";
+
+    // GATE 2: EMA stack
+    const { ema21, ema50, ema200, adx, pdi, mdi, vwap } = analysis.trend;
+    const coreBullStack = ema21 > ema50 * 0.997 && ema50 > ema200 * 0.993;
+    const coreBearStack = ema21 < ema50 * 1.003 && ema50 < ema200 * 1.007;
+    const emaOk = side === "LONG" ? coreBullStack : coreBearStack;
+    gates.emaStack = emaOk ? `PASS (21>50>200)` : `FAIL — EMA stack not aligned for ${side}`;
+    if (!emaOk) {
+      diagnostics.gateResults[tf] = { side, gates, verdict: "FAIL — EMA trend not confirmed" };
+      continue;
+    }
+
+    // GATE 3: ADX (15% relaxed for admin)
+    const minAdx     = (tfRule.minAdx ?? 18) * 0.85;
+    const minDiDelta = (tfRule.minDiDelta ?? 3) * 0.8;
+    const adxOk = (adx||0) >= minAdx &&
+      (side === "LONG" ? ((pdi||0)-(mdi||0)) >= minDiDelta : ((mdi||0)-(pdi||0)) >= minDiDelta);
+    gates.adx = adxOk ? `PASS (ADX ${(adx||0).toFixed(1)})` : `FAIL (ADX ${(adx||0).toFixed(1)} needs ≥${minAdx.toFixed(0)})`;
+    if (!adxOk) {
+      diagnostics.gateResults[tf] = { side, gates, verdict: "FAIL — ADX too weak, no clear trend" };
+      continue;
+    }
+
+    // GATE 4: Momentum (slightly relaxed RSI range)
+    const relaxedRule = { ...tfRule, minRsi: (tfRule.minRsi ?? 37) - 5, maxRsi: (tfRule.maxRsi ?? 85) + 5 };
+    const momentumOk  = isMomentumAligned(side, analysis, relaxedRule);
+    const { rsi } = analysis.momentum;
+    gates.momentum = momentumOk ? `PASS (RSI ${(rsi||0).toFixed(1)})` : `FAIL (RSI ${(rsi||0).toFixed(1)} or MACD not aligned)`;
+    if (!momentumOk) {
+      diagnostics.gateResults[tf] = { side, gates, verdict: "FAIL — RSI/MACD momentum not confirmed" };
+      continue;
+    }
+
+    // GATE 5: Not ranging
+    gates.regime = analysis.regime !== "RANGING" ? `PASS (${analysis.regime})` : "FAIL — market is RANGING";
+    if (analysis.regime === "RANGING") {
+      diagnostics.gateResults[tf] = { side, gates, verdict: "FAIL — market is ranging, no directional trade" };
+      continue;
+    }
+
+    // VWAP (warn only)
+    const vwapOk = side === "LONG" ? price >= vwap : price <= vwap;
+    gates.vwap = vwapOk ? "PASS" : `WARN — price ${side === "LONG" ? "below" : "above"} VWAP (relaxed for admin)`;
+
+    // Fibonacci — informational only, no gate
+    const fibTrade = computeFibForSignal(rawCandles[tf] || [], 55);
+    const fibHTF   = tf === "1m"
+      ? computeFibForSignal(rawCandles["5m"]  || [], 55)
+      : computeFibForSignal(rawCandles["15m"] || [], 55);
+    const fib = (fibTrade && fibTrade.swingHigh) ? fibTrade : fibHTF;
+    gates.fibonacci = fib
+      ? (fib.atGoldenZone ? "GOLDEN_ZONE ⭐ (highest prob)" : fib.atKeyLevel ? "KEY_LEVEL ✓" : "Not at key Fib (bypassed for admin)")
+      : "No Fib data (bypassed)";
+
+    // Build candidate with relaxed floor
+    const activity   = marketActivity || buildFallbackMarketActivity(coin);
+    const origRules  = { ...TIMEFRAME_RULES[tf] };
+    TIMEFRAME_RULES[tf] = { ...origRules, publishFloor: 50, minScore: 42, minConfirmations: 3 };
+    let candidate;
+    try {
+      candidate = buildCandidate(coin, tf, analysis, bias, htf, activity, null, null); // fib=null bypasses GATE 7
+    } finally {
+      TIMEFRAME_RULES[tf] = origRules;
+    }
+
+    if (candidate) {
+      diagnostics.gateResults[tf] = { side, gates, verdict: "PASS ✅", confidence: candidate.confidence };
+      diagnostics.winner = tf;
+      return { candidate, diagnostics };
+    }
+    diagnostics.gateResults[tf] = { side, gates, verdict: "FAIL — score too low even with relaxed thresholds" };
+  }
+
+  return { candidate: null, diagnostics };
+}
+
 // ─── Signal Evaluation (TP/SL only) ──────────────────────────────────────────
 async function evaluateActiveSignals() {
   const signals = await readCollection("signals");
@@ -996,20 +1122,27 @@ async function generateForCoin(symbol, actor) {
   const coin = String(symbol || "").trim().toUpperCase();
   if (!coin) throw new Error("Symbol required");
 
-  // Build minimal market activity so analyzeCoin doesn't crash
   const marketActivity = buildFallbackMarketActivity(coin);
-  const performanceSnapshot = await getPerformanceSnapshot();
 
-  const candidate = await analyzeCoin(coin, marketActivity, performanceSnapshot);
+  const { candidate, diagnostics } = await analyzeCoinForAdmin(coin, marketActivity);
+
   if (!candidate) {
-    return { generated: false, message: `No qualifying signal found for ${coin} — indicators may not be aligned.` };
+    // Build a readable failure message from diagnostics
+    const reasons = Object.entries(diagnostics.gateResults || {})
+      .map(([tf, r]) => `[${tf}] ${typeof r === "object" ? r.verdict : r}`)
+      .join(" | ");
+    return {
+      generated: false,
+      message: `No signal generated for ${coin}. Gate results: ${reasons || "All timeframes failed"}`,
+      diagnostics,
+    };
   }
-  // Even if a duplicate exists, allow admin-forced generation
+
   candidate.source    = "ADMIN_SEARCH";
   candidate.updatedAt = new Date().toISOString();
   if (candidate.scanMeta) candidate.scanMeta.createdBy = actor?.email || "admin";
   const signal = await persistSignal(candidate);
-  return { generated: true, signal };
+  return { generated: true, signal, diagnostics };
 }
 
 module.exports = { createManualSignal, evaluateActiveSignals, getCoinList, getStatus, scanNow, start, stop, pauseCoin, resumeCoin, getPausedCoins, generateForCoin };
