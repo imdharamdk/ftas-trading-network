@@ -30,74 +30,86 @@ const FALLBACK_COINS = [
   "NEARUSDT","ARBUSDT","OPUSDT","SUIUSDT","INJUSDT",
 ];
 
-const SCAN_TIMEFRAMES          = ["1m","5m","15m","1h","4h","1d"];
-const DEFAULT_TRADE_TIMEFRAMES = ["1m","5m"];
+// All timeframes fetched for analysis (HTF data needed for bias detection)
+const SCAN_TIMEFRAMES          = ["1m","5m","15m","30m","1h","4h","1d"];
+// Timeframes that actually generate trade signals
+const DEFAULT_TRADE_TIMEFRAMES = ["1m","5m","15m","30m","1h"];
 const DEFAULT_MAX_COINS_PER_SCAN = 50;
 const MAX_COINS_PER_SCAN_CAP     = 70;
 
-const MIN_SCAN_QUOTE_VOLUME_USDT  = 15_000_000;   // was 25M — include more liquid coins
-const MIN_SCAN_TRADE_COUNT_24H    = 20_000;        // was 30K
-const MIN_SCAN_OPEN_INTEREST_USDT = 5_000_000;    // was 8M
+const MIN_SCAN_QUOTE_VOLUME_USDT  = 15_000_000;
+const MIN_SCAN_TRADE_COUNT_24H    = 20_000;
+const MIN_SCAN_OPEN_INTEREST_USDT = 5_000_000;
 
-const RULE_VERSION = "v17_fibonacci";
-const DEFAULT_PUBLISH_FLOOR = 82;                 // was 92 — realistic floor
+const RULE_VERSION = "v18_multitf";
+const DEFAULT_PUBLISH_FLOOR = 82;
 const STRENGTH_THRESHOLDS   = { STRONG: 90, MEDIUM: 82 };
 
 // ── Per-Timeframe Rules ────────────────────────────────────────────────────────
 const TIMEFRAME_RULES = {
   "1m": {
-    minScore: 58,
-    minConfirmations: 4,
-    publishFloor: 78,
-    requireHigherBias: true,
-    minAdx: 18,
-    minRsi: 38,
-    maxRsi: 85,
-    requireRsiRising: false,      // RSI rising NOT required — in-range is enough
-    minDiDelta: 3,
-    requireVwapSupport: true,
-    requireIchimoku: false,
-    requireHaStrong: false,
-    requireHaMedium: false,       // HA is bonus only, not gate
-    requireVolumeConfirm: false,  // Volume is bonus only
-    volumeMultiplier: 1.3,
-    blockDailyBear: true,
-    entryDriftMultiplier: 0.6,
-    maxLeverage: 10,
+    minScore: 58, minConfirmations: 4, publishFloor: 78,
+    requireHigherBias: true, minAdx: 18, minRsi: 38, maxRsi: 85,
+    requireRsiRising: false, minDiDelta: 3, requireVwapSupport: true,
+    requireIchimoku: false, requireHaStrong: false, requireHaMedium: false,
+    requireVolumeConfirm: false, volumeMultiplier: 1.3,
+    blockDailyBear: true, entryDriftMultiplier: 0.6, maxLeverage: 10,
   },
   "5m": {
-    minScore: 60,
-    minConfirmations: 4,
-    publishFloor: 79,
-    requireHigherBias: true,
-    minAdx: 18,
-    minRsi: 37,
-    maxRsi: 85,
-    requireRsiRising: false,
-    minDiDelta: 3,
-    requireVwapSupport: true,
-    requireIchimoku: false,
-    requireHaStrong: false,
-    requireHaMedium: false,       // HA is bonus only
-    requireVolumeConfirm: false,  // Volume is bonus only
-    volumeMultiplier: 1.3,
-    blockDailyBear: true,
-    entryDriftMultiplier: 0.6,
-    maxLeverage: 15,
+    minScore: 60, minConfirmations: 4, publishFloor: 79,
+    requireHigherBias: true, minAdx: 18, minRsi: 37, maxRsi: 85,
+    requireRsiRising: false, minDiDelta: 3, requireVwapSupport: true,
+    requireIchimoku: false, requireHaStrong: false, requireHaMedium: false,
+    requireVolumeConfirm: false, volumeMultiplier: 1.3,
+    blockDailyBear: true, entryDriftMultiplier: 0.6, maxLeverage: 15,
+  },
+  "15m": {
+    minScore: 62, minConfirmations: 4, publishFloor: 80,
+    requireHigherBias: true, minAdx: 20, minRsi: 36, maxRsi: 84,
+    requireRsiRising: false, minDiDelta: 4, requireVwapSupport: true,
+    requireIchimoku: false, requireHaStrong: false, requireHaMedium: false,
+    requireVolumeConfirm: false, volumeMultiplier: 1.3,
+    blockDailyBear: true, entryDriftMultiplier: 0.7, maxLeverage: 20,
+  },
+  "30m": {
+    minScore: 63, minConfirmations: 4, publishFloor: 81,
+    requireHigherBias: true, minAdx: 20, minRsi: 35, maxRsi: 83,
+    requireRsiRising: false, minDiDelta: 4, requireVwapSupport: true,
+    requireIchimoku: false, requireHaStrong: false, requireHaMedium: false,
+    requireVolumeConfirm: false, volumeMultiplier: 1.2,
+    blockDailyBear: true, entryDriftMultiplier: 0.8, maxLeverage: 20,
+  },
+  "1h": {
+    minScore: 65, minConfirmations: 5, publishFloor: 82,
+    requireHigherBias: true, minAdx: 22, minRsi: 35, maxRsi: 82,
+    requireRsiRising: false, minDiDelta: 5, requireVwapSupport: false,
+    requireIchimoku: false, requireHaStrong: false, requireHaMedium: false,
+    requireVolumeConfirm: false, volumeMultiplier: 1.2,
+    blockDailyBear: true, entryDriftMultiplier: 1.0, maxLeverage: 20,
   },
 };
 
 // ── Signal Expiry ──────────────────────────────────────────────────────────────
 const SIGNAL_EXPIRY_MS = {
-  "1m":  8  * 60 * 1000,   // was 5 min — slight more time to hit TP
-  "5m":  25 * 60 * 1000,   // was 15 min
-  default: 25 * 60 * 1000,
+  "1m":  8  * 60 * 1000,
+  "5m":  25 * 60 * 1000,
+  "15m": 90 * 60 * 1000,
+  "30m": 3  * 60 * 60 * 1000,
+  "1h":  6  * 60 * 60 * 1000,
+  default: 6 * 60 * 60 * 1000,
 };
 
-// ── TP targets — realistic R:R for scalps ─────────────────────────────────────
-// TP1 closer = higher hit rate, TP2/TP3 for runners
-const TP_R_MULTIPLIERS_1M = [0.45, 0.8, 1.2];   // was [0.5, 0.85, 1.3]
-const TP_R_MULTIPLIERS_5M = [0.55, 0.95, 1.4];  // was [0.6, 1.0, 1.5]
+// ── TP R:R multipliers per timeframe ──────────────────────────────────────────
+const TP_R_MULTIPLIERS = {
+  "1m":  [0.45, 0.80, 1.20],
+  "5m":  [0.55, 0.95, 1.40],
+  "15m": [0.60, 1.10, 1.60],
+  "30m": [0.70, 1.20, 1.80],
+  "1h":  [0.80, 1.40, 2.00],
+};
+// Legacy aliases kept for any direct references
+const TP_R_MULTIPLIERS_1M = TP_R_MULTIPLIERS["1m"];
+const TP_R_MULTIPLIERS_5M = TP_R_MULTIPLIERS["5m"];
 
 const WIN_RESULTS  = new Set(["TP1_HIT","TP2_HIT","TP3_HIT"]);
 const LOSS_RESULTS = new Set(["SL_HIT"]);
@@ -178,94 +190,69 @@ function getTradeTimeframes() {
 
 // ─── GATE 1: HTF Bias ─────────────────────────────────────────────────────────
 // Balanced: 2 timeframes must agree (was requiring both 4H + 1D which killed many valid signals)
-function getHigherTimeframeBias(analyses, tradeTimeframe = "5m") {
-  if (tradeTimeframe === "1m") {
-    const a5m  = analyses["5m"];
-    const a15m = analyses["15m"];
-    const a1h  = analyses["1h"];
-    if (!a5m || !a15m) return "NEUTRAL";
-
-    const get = (a) => {
-      const { ema50, ema100, ema200, adx } = a.trend;
-      const rsi = a.momentum.rsi || 50;
-      // Relaxed: ema50 > ema100 is sufficient (not requiring ema100 > ema200)
-      const bull = ema50 > ema100 * 0.998 && ema50 > ema200 * 0.995 && (adx||0) >= 16 && rsi >= 42;
-      const bear = ema50 < ema100 * 1.002 && ema50 < ema200 * 1.005 && (adx||0) >= 16 && rsi <= 58;
-      return bull ? "BULLISH" : bear ? "BEARISH" : "NEUTRAL";
-    };
-
-    const b5m  = get(a5m);
-    const b15m = get(a15m);
-    if (b5m === "NEUTRAL" || b15m === "NEUTRAL") return "NEUTRAL";
-    if (b5m !== b15m) return "NEUTRAL";
-
-    // 1H soft veto only (was hard veto)
-    if (a1h) {
-      const b1h = get(a1h);
-      if (b1h !== "NEUTRAL" && b1h !== b5m) return "NEUTRAL";
-    }
-    return b5m;
-  }
-
-  // 5m: 15m + 1h must agree
-  const a15m = analyses["15m"];
-  const a1h  = analyses["1h"];
-  const a4h  = analyses["4h"];
-  const a1d  = analyses["1d"];
-  if (!a15m || !a1h) return "NEUTRAL";
-
-  const get = (a) => {
-    const { ema50, ema100, ema200, adx } = a.trend;
-    const rsi = a.momentum.rsi || 50;
-    const bull = ema50 > ema100 * 0.997 && ema50 > ema200 * 0.993 && (adx||0) >= 15 && rsi >= 40;
-    const bear = ema50 < ema100 * 1.003 && ema50 < ema200 * 1.007 && (adx||0) >= 15 && rsi <= 60;
-    return bull ? "BULLISH" : bear ? "BEARISH" : "NEUTRAL";
-  };
-
-  const b15m = get(a15m);
-  const b1h  = get(a1h);
-  if (b15m === "NEUTRAL" || b1h === "NEUTRAL") return "NEUTRAL";
-  if (b15m !== b1h) return "NEUTRAL";
-
-  // 4H and 1D as soft vetos only
-  if (a4h) { const b4h = get(a4h); if (b4h !== "NEUTRAL" && b4h !== b15m) return "NEUTRAL"; }
-  if (a1d) { const b1d = get(a1d); if (b1d !== "NEUTRAL" && b1d !== b15m) return "NEUTRAL"; }
-
-  return b15m;
+// Shared helper — get directional bias from a single analysis object
+function getTFDir(a, minAdx = 15, minRsi = 38, maxRsi = 62) {
+  if (!a) return "NEUTRAL";
+  const { ema50, ema100, ema200, adx } = a.trend;
+  const rsi = a.momentum?.rsi || 50;
+  const bull = ema50 > ema100 * 0.997 && ema50 > ema200 * 0.993 && (adx||0) >= minAdx && rsi >= minRsi && rsi <= 75;
+  const bear = ema50 < ema100 * 1.003 && ema50 < ema200 * 1.007 && (adx||0) >= minAdx && rsi <= maxRsi && rsi >= 25;
+  return bull ? "BULLISH" : bear ? "BEARISH" : "NEUTRAL";
 }
 
-// ─── Relaxed HTF Bias (for admin search only) ────────────────────────────────
-// Regular bias requires BOTH 15m+1h to agree. This version accepts:
-//   - ANY one higher TF showing clear directional bias
-//   - Lower ADX threshold (12 instead of 15-16)
-//   - Wider RSI range (35-65 instead of 40-60)
-function getRelaxedBias(analyses, tradeTimeframe = "5m") {
-  const tfsToCheck = tradeTimeframe === "1m"
-    ? ["5m", "15m", "1h"]
-    : ["15m", "1h", "4h"];
+function getHigherTimeframeBias(analyses, tradeTimeframe = "5m") {
+  // HTF requirements per trade timeframe:
+  //   1m  → 5m + 15m must agree  (1h soft veto)
+  //   5m  → 15m + 1h must agree  (4h soft veto)
+  //   15m → 1h + 4h must agree   (1d soft veto)
+  //   30m → 1h + 4h must agree   (1d soft veto)
+  //   1h  → 4h must agree        (1d soft veto)
 
-  const getDir = (a) => {
-    if (!a) return "NEUTRAL";
-    const { ema50, ema100, ema200, adx } = a.trend;
-    const rsi = a.momentum?.rsi || 50;
-    const bull = ema50 > ema100 * 0.999 && ema50 > ema200 * 0.996 && (adx||0) >= 12 && rsi >= 35 && rsi <= 72;
-    const bear = ema50 < ema100 * 1.001 && ema50 < ema200 * 1.004 && (adx||0) >= 12 && rsi <= 65 && rsi >= 28;
-    return bull ? "BULLISH" : bear ? "BEARISH" : "NEUTRAL";
+  const TF_CONFIG = {
+    "1m":  { required: ["5m","15m"],  veto: ["1h"],      minAdx: 15, minRsi: 40, maxRsi: 60 },
+    "5m":  { required: ["15m","1h"],  veto: ["4h"],      minAdx: 15, minRsi: 38, maxRsi: 62 },
+    "15m": { required: ["1h","4h"],   veto: ["1d"],      minAdx: 16, minRsi: 37, maxRsi: 63 },
+    "30m": { required: ["1h","4h"],   veto: ["1d"],      minAdx: 16, minRsi: 36, maxRsi: 64 },
+    "1h":  { required: ["4h"],        veto: ["1d"],      minAdx: 18, minRsi: 35, maxRsi: 65 },
   };
 
-  const biases = tfsToCheck
-    .map(tf => getDir(analyses[tf]))
-    .filter(b => b !== "NEUTRAL");
+  const cfg = TF_CONFIG[tradeTimeframe];
+  if (!cfg) return "NEUTRAL";
 
-  if (!biases.length) return "NEUTRAL";
+  // All required HTFs must have data and agree
+  const requiredDirs = cfg.required.map(tf => getTFDir(analyses[tf], cfg.minAdx, cfg.minRsi, cfg.maxRsi));
+  if (requiredDirs.some(d => d === "NEUTRAL")) return "NEUTRAL";
+  const allSame = requiredDirs.every(d => d === requiredDirs[0]);
+  if (!allSame) return "NEUTRAL";
+  const bias = requiredDirs[0];
 
-  // If majority agree, return that direction
-  const bullCount = biases.filter(b => b === "BULLISH").length;
-  const bearCount = biases.filter(b => b === "BEARISH").length;
-  if (bullCount > bearCount) return "BULLISH";
-  if (bearCount > bullCount) return "BEARISH";
-  // Tie — use the most recent (first) TF's bias
-  return biases[0];
+  // Veto: if higher TF disagrees, block the signal
+  for (const vTf of (cfg.veto || [])) {
+    const vDir = getTFDir(analyses[vTf], cfg.minAdx - 2, cfg.minRsi - 3, cfg.maxRsi + 3);
+    if (vDir !== "NEUTRAL" && vDir !== bias) return "NEUTRAL";
+  }
+
+  return bias;
+}
+
+// ─── Relaxed HTF Bias (admin search only) ────────────────────────────────────
+// Strict bias: ALL required TFs must agree. Relaxed: MAJORITY agreement enough.
+function getRelaxedBias(analyses, tradeTimeframe = "5m") {
+  const TF_POOL = {
+    "1m":  ["5m","15m","1h"],
+    "5m":  ["15m","1h","4h"],
+    "15m": ["1h","4h","1d"],
+    "30m": ["1h","4h","1d"],
+    "1h":  ["4h","1d"],
+  };
+  const pool = TF_POOL[tradeTimeframe] || ["1h","4h"];
+  const dirs = pool.map(tf => getTFDir(analyses[tf], 12, 33, 67)).filter(d => d !== "NEUTRAL");
+  if (!dirs.length) return "NEUTRAL";
+  const bulls = dirs.filter(d => d === "BULLISH").length;
+  const bears = dirs.filter(d => d === "BEARISH").length;
+  if (bulls > bears) return "BULLISH";
+  if (bears > bulls) return "BEARISH";
+  return dirs[0]; // tie → use first
 }
 
 // ─── Fibonacci levels for a coin/timeframe (uses raw candles) ─────────────────
@@ -292,7 +279,7 @@ function calculateTargets(side, analysis, timeframe = "5m", fib = null) {
   const { low20, high20, previousLow20, previousHigh20 } = analysis.recentSwing;
   const srSup = analysis.srLevels?.supports?.[0]    ?? null;
   const srRes = analysis.srLevels?.resistances?.[0] ?? null;
-  const tpMult = timeframe === "1m" ? TP_R_MULTIPLIERS_1M : TP_R_MULTIPLIERS_5M;
+  const tpMult = TP_R_MULTIPLIERS[timeframe] || TP_R_MULTIPLIERS["5m"];
 
   // ── Fibonacci-based targets ───────────────────────────────────────────────
   if (fib && fib.swingHigh && fib.swingLow && fib.extensions && fib.retracements) {
@@ -838,13 +825,10 @@ async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = nu
   const candidates = tradeTimeframes.map(tf => {
     if (!analyses[tf]) return null;
     const bias = getHigherTimeframeBias(analyses, tf);
-    // Compute Fibonacci on the trade timeframe candles (55 candles lookback)
-    // Also blend with a higher timeframe Fib for confluence
     const fibTrade = computeFibForSignal(rawCandles[tf] || [], 55);
-    const fibHTF   = tf === "1m"
-      ? computeFibForSignal(rawCandles["5m"]  || [], 55)
-      : computeFibForSignal(rawCandles["15m"] || [], 55);
-    // Use trade-TF fib if valid; fall back to HTF fib
+    // HTF fib: use one step higher timeframe
+    const fibHTFMap = { "1m":"5m", "5m":"15m", "15m":"1h", "30m":"1h", "1h":"4h" };
+    const fibHTF = computeFibForSignal(rawCandles[fibHTFMap[tf]] || [], 55);
     const fib = (fibTrade && fibTrade.swingHigh) ? fibTrade : fibHTF;
     return buildCandidate(coin, tf, analyses[tf], bias, htf, marketActivity, performanceSnapshot, fib);
   }).filter(Boolean);
@@ -953,9 +937,8 @@ async function analyzeCoinForAdmin(coin, marketActivity = null) {
 
     // Fibonacci — informational only, no gate
     const fibTrade = computeFibForSignal(rawCandles[tf] || [], 55);
-    const fibHTF   = tf === "1m"
-      ? computeFibForSignal(rawCandles["5m"]  || [], 55)
-      : computeFibForSignal(rawCandles["15m"] || [], 55);
+    const fibHTFMap = { "1m":"5m", "5m":"15m", "15m":"1h", "30m":"1h", "1h":"4h" };
+    const fibHTF = computeFibForSignal(rawCandles[fibHTFMap[tf]] || [], 55);
     const fib = (fibTrade && fibTrade.swingHigh) ? fibTrade : fibHTF;
     gates.fibonacci = fib
       ? (fib.atGoldenZone ? "GOLDEN_ZONE ⭐ (highest prob)" : fib.atKeyLevel ? "KEY_LEVEL ✓" : "Not at key Fib (bypassed for admin)")
