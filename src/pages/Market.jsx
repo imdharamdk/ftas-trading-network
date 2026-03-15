@@ -95,7 +95,7 @@ function CryptoTab() {
       finally     { if (active) setLoading(false); }
     }
     load();
-    const id = window.setInterval(load, 20000);
+    const id = window.setInterval(load, 45000);
     return () => { active = false; window.clearInterval(id); };
   }, [sortBy]);
 
@@ -110,7 +110,7 @@ function CryptoTab() {
       } catch { /* stale */ }
     }
     refresh();
-    const id = window.setInterval(refresh, 5000);
+    const id = window.setInterval(refresh, 12000);
     return () => { active = false; window.clearInterval(id); };
   }, [signalCoinsKey]);
 
@@ -129,7 +129,7 @@ function CryptoTab() {
       } catch { /* stale */ }
     }
     refreshTicker();
-    const id = window.setInterval(refreshTicker, 5000);
+    const id = window.setInterval(refreshTicker, 12000);
     return () => { active = false; window.clearInterval(id); };
   }, [tickerCoinsKey]);
 
