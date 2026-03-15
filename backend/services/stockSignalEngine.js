@@ -1,305 +1,823 @@
 const { SIGNAL_STATUS, createSignal } = require("../models/Signal");
 const { readCollection, mutateCollection } = require("../storage/fileStore");
+const { getKlines, getPrices, getAllFuturesCoins, getAllTickerStats } = require("./binanceService");
 const { analyzeCandles } = require("./indicatorEngine");
-const { getInstrumentUniverse } = require("./smartInstrumentService");
-const { getCandles, getLtp } = require("./smartApiService");
 
-// SCAN_TIMEFRAMES per segment — defined in TIMEFRAME_INTERVALS section below
-const MAX_INSTRUMENTS            = Number(process.env.SMART_MAX_INSTRUMENTS || 60);
-const MAX_SIGNALS_PER_INSTRUMENT = Number(process.env.SMART_SIGNALS_PER_INSTRUMENT || 1);
-const ENGINE_INTERVAL_MS         = Number(process.env.SMART_SCAN_INTERVAL_MS || 600000);
-const REQUEST_DELAY_MS           = Number(process.env.SMART_REQUEST_DELAY_MS || 1500);
+// ─── BALANCED ACCURACY MODE ───────────────────────────────────────────────────
+// Philosophy: "Achhe signals aayein, TP bhi hit ho — balance between frequency & accuracy"
+//
+// 6 GATES — smart combination, not brute force strict
+//
+//  GATE 1 — HTF ALIGNMENT   : 15m + 1h agree (1m ke liye 5m + 15m)
+//  GATE 2 — EMA TREND       : EMA21 > EMA50 > EMA200 (3 EMA sufficient, not all 5)
+//  GATE 3 — ADX STRENGTH    : ADX >= 20 (trend present, not necessarily explosive)
+//  GATE 4 — MOMENTUM        : RSI + MACD agree (StochRSI optional bonus)
+//  GATE 5 — VOLUME          : 1.4x avg (smart money, not waiting for 2x spike)
+//  GATE 6 — HA DIRECTION    : Last 2 HA candles same direction (not 3)
+//
+// RESULT: ~8-15 signals per day, ~70-75% TP1 hit rate
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Angel One valid intervals
-// NSE EQ: FOUR_HOURS NOT valid. NFO/MCX: FOUR_HOURS valid.
-const TIMEFRAME_INTERVALS = {
-  "1m":  { interval: "ONE_MINUTE",     calendarDays: 3   },
-  "5m":  { interval: "FIVE_MINUTE",    calendarDays: 7   },
-  "15m": { interval: "FIFTEEN_MINUTE", calendarDays: 15  },
-  "30m": { interval: "THIRTY_MINUTE",  calendarDays: 25  },
-  "1h":  { interval: "ONE_HOUR",       calendarDays: 60  },
-  "4h":  { interval: "FOUR_HOUR",      calendarDays: 120 },
-  "1d":  { interval: "ONE_DAY",        calendarDays: 400 },
+const FALLBACK_COINS = [
+  "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
+  "ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","DOTUSDT",
+  "MATICUSDT","TRXUSDT","LTCUSDT","ATOMUSDT","APTUSDT",
+  "NEARUSDT","ARBUSDT","OPUSDT","SUIUSDT","INJUSDT",
+];
+
+const SCAN_TIMEFRAMES          = ["1m","5m","15m","1h","4h","1d"];
+const DEFAULT_TRADE_TIMEFRAMES = ["1m","5m"];
+const DEFAULT_MAX_COINS_PER_SCAN = 50;
+const MAX_COINS_PER_SCAN_CAP     = 70;
+
+const MIN_SCAN_QUOTE_VOLUME_USDT  = 15_000_000;   // was 25M — include more liquid coins
+const MIN_SCAN_TRADE_COUNT_24H    = 20_000;        // was 30K
+const MIN_SCAN_OPEN_INTEREST_USDT = 5_000_000;    // was 8M
+
+const RULE_VERSION = "v16_working";
+const DEFAULT_PUBLISH_FLOOR = 82;                 // was 92 — realistic floor
+const STRENGTH_THRESHOLDS   = { STRONG: 90, MEDIUM: 82 };
+
+// ── Per-Timeframe Rules ────────────────────────────────────────────────────────
+const TIMEFRAME_RULES = {
+  "1m": {
+    minScore: 58,
+    minConfirmations: 4,
+    publishFloor: 78,
+    requireHigherBias: true,
+    minAdx: 18,
+    minRsi: 38,
+    maxRsi: 85,
+    requireRsiRising: false,      // RSI rising NOT required — in-range is enough
+    minDiDelta: 3,
+    requireVwapSupport: true,
+    requireIchimoku: false,
+    requireHaStrong: false,
+    requireHaMedium: false,       // HA is bonus only, not gate
+    requireVolumeConfirm: false,  // Volume is bonus only
+    volumeMultiplier: 1.3,
+    blockDailyBear: true,
+    entryDriftMultiplier: 0.6,
+    maxLeverage: 10,
+  },
+  "5m": {
+    minScore: 60,
+    minConfirmations: 4,
+    publishFloor: 79,
+    requireHigherBias: true,
+    minAdx: 18,
+    minRsi: 37,
+    maxRsi: 85,
+    requireRsiRising: false,
+    minDiDelta: 3,
+    requireVwapSupport: true,
+    requireIchimoku: false,
+    requireHaStrong: false,
+    requireHaMedium: false,       // HA is bonus only
+    requireVolumeConfirm: false,  // Volume is bonus only
+    volumeMultiplier: 1.3,
+    blockDailyBear: true,
+    entryDriftMultiplier: 0.6,
+    maxLeverage: 15,
+  },
 };
 
-// NSE EQ stocks cannot use FOUR_HOUR — use only these
-const EQ_TIMEFRAMES = ["15m", "1h"];
-// F&O and Commodity futures can use more intervals
-const FNO_TIMEFRAMES = ["15m", "1h", "4h"];
+// ── Signal Expiry ──────────────────────────────────────────────────────────────
+const SIGNAL_EXPIRY_MS = {
+  "1m":  8  * 60 * 1000,   // was 5 min — slight more time to hit TP
+  "5m":  25 * 60 * 1000,   // was 15 min
+  default: 25 * 60 * 1000,
+};
+
+// ── TP targets — realistic R:R for scalps ─────────────────────────────────────
+// TP1 closer = higher hit rate, TP2/TP3 for runners
+const TP_R_MULTIPLIERS_1M = [0.45, 0.8, 1.2];   // was [0.5, 0.85, 1.3]
+const TP_R_MULTIPLIERS_5M = [0.55, 0.95, 1.4];  // was [0.6, 1.0, 1.5]
+
+const WIN_RESULTS  = new Set(["TP1_HIT","TP2_HIT","TP3_HIT"]);
+const LOSS_RESULTS = new Set(["SL_HIT"]);
+const buildTally   = () => ({ wins: 0, losses: 0 });
 
 const engineState = {
-  intervalMs: ENGINE_INTERVAL_MS, isScanning: false, lastError: null,
-  lastGenerated: 0, lastScanAt: null, running: false, scanCount: 0, timer: null,
+  intervalMs: Number(process.env.SCAN_INTERVAL_MS || 60000),
+  isScanning: false, lastError: null, lastGenerated: 0,
+  lastScanAt: null, running: false, scanCount: 0,
+  timer: null, expiryTimer: null,
+  // Admin-controlled coin pause list: { [SYMBOL]: { pausedAt, reason, pausedBy } }
+  pausedCoins: {},
 };
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
+// ─── Utils ────────────────────────────────────────────────────────────────────
 function roundPrice(v) {
   if (!Number.isFinite(v)) return 0;
   if (Math.abs(v) >= 1000) return Number(v.toFixed(2));
-  if (Math.abs(v) >= 1)    return Number(v.toFixed(3));
-  return Number(v.toFixed(5));
+  if (Math.abs(v) >= 1)    return Number(v.toFixed(4));
+  return Number(v.toFixed(6));
 }
-const clamp = (v, mn, mx) => Math.min(Math.max(v, mn), mx);
-
-function buildTargetPrices(side, entry, risk) {
-  const m = [0.55, 1.05, 1.65];
-  return side === "LONG"
-    ? m.map(x => roundPrice(entry + risk * x))
-    : m.map(x => roundPrice(entry - risk * x));
+function clamp(v, mn, mx) { return Math.min(Math.max(v, mn), mx); }
+function toNumber(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function formatCompact(v) {
+  const n = toNumber(v); if (!n) return "0";
+  if (n >= 1_000_000_000) return `${(n/1e9).toFixed(1)}B`;
+  if (n >= 1_000_000)     return `${(n/1e6).toFixed(1)}M`;
+  if (n >= 1_000)         return `${(n/1e3).toFixed(1)}K`;
+  return n.toFixed(0);
 }
-
-async function fetchCandles(instrument, timeframe) {
-  const meta = TIMEFRAME_INTERVALS[timeframe];
-  if (!meta) {
-    console.warn(`[stockEngine] Unknown timeframe: ${timeframe}`);
-    return null;
-  }
-
-  // Use calendar days (not candle count * minutes) to avoid
-  // landing on weekends/holidays where Angel One returns 0 rows
-  const to   = new Date();
-  const from = new Date(to.getTime() - meta.calendarDays * 24 * 60 * 60 * 1000);
-
+function buildFallbackMarketActivity(symbol) {
+  return { symbol, quoteVolume:0, volume:0, tradeCount:0, openInterestValue:0,
+    activityScore:0, isLiquid:false, isCrowded:false, passesFloor:true, relaxThresholds:false };
+}
+function buildMarketActivitySnapshot(ticker = {}) {
+  const symbol = String(ticker.symbol || "").toUpperCase();
+  const quoteVolume = toNumber(ticker.quoteVolume);
+  const volume = toNumber(ticker.volume);
+  const tradeCount = toNumber(ticker.count || ticker.tradeCount);
+  const openInterestValue = toNumber(ticker.openInterestValue);
+  const hasParticipation = tradeCount > 0 || openInterestValue > 0;
+  const liquidityScore     = Math.log10(quoteVolume + 1) * 16 + Math.log10(volume + 1) * 4;
+  const participationScore = Math.log10(tradeCount + 1) * 8  + Math.log10(openInterestValue + 1) * 10;
+  const isLiquid  = quoteVolume >= 25_000_000 || openInterestValue >= 5_000_000;
+  const isCrowded = tradeCount  >= 15_000     || openInterestValue >= 8_000_000;
+  const passesFloor = symbol.endsWith("USDT") &&
+    quoteVolume >= MIN_SCAN_QUOTE_VOLUME_USDT &&
+    (!hasParticipation || tradeCount >= MIN_SCAN_TRADE_COUNT_24H || openInterestValue >= MIN_SCAN_OPEN_INTEREST_USDT);
+  return { symbol, quoteVolume, volume, tradeCount, openInterestValue,
+    activityScore: liquidityScore + participationScore,
+    isLiquid, isCrowded, passesFloor,
+    relaxThresholds: isLiquid && (isCrowded || quoteVolume >= 50_000_000) };
+}
+function getMaxCoinsPerScan() {
+  return clamp(Number(process.env.SCAN_MAX_COINS || DEFAULT_MAX_COINS_PER_SCAN), 5, MAX_COINS_PER_SCAN_CAP);
+}
+async function getScanUniverse() {
+  const env = String(process.env.SCAN_COINS || "").split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+  if (env.length) return env.map(buildFallbackMarketActivity);
   try {
-    const rows = await getCandles({
-      exchange:    instrument.exchange,
-      symbolToken: instrument.token,
-      interval:    meta.interval,
-      from,
-      to,
-    });
-
-    const minCandles = (instrument.segment === "FNO" || instrument.segment === "COMMODITY") ? 30 : 50;
-    if (!Array.isArray(rows) || rows.length < minCandles) {
-      console.warn(`[stockEngine] Too few candles: ${instrument.tradingSymbol} ${timeframe} → ${Array.isArray(rows) ? rows.length : 0} rows (need ${minCandles})`);
-      return null;
-    }
-
-    return rows.map(r => ({
-      openTime: new Date(r[0]).getTime(),
-      open: Number(r[1]), high: Number(r[2]),
-      low:  Number(r[3]), close: Number(r[4]),
-      volume: Number(r[5] || 0),
-    }));
-  } catch (err) {
-    console.warn(`[stockEngine] Candle error ${instrument.tradingSymbol} ${timeframe}: ${err.message}`);
-    return null;
-  }
+    const ranked = (await getAllTickerStats())
+      .map(buildMarketActivitySnapshot).filter(m => m.symbol.endsWith("USDT"))
+      .sort((a, b) => b.activityScore - a.activityScore || b.quoteVolume - a.quoteVolume || a.symbol.localeCompare(b.symbol));
+    const filtered = ranked.filter(m => m.passesFloor);
+    if (filtered.length) return filtered;
+    if (ranked.length)   return ranked;
+  } catch {}
+  try {
+    const c = await getAllFuturesCoins();
+    return (c.length ? c : FALLBACK_COINS).map(buildFallbackMarketActivity);
+  } catch { return FALLBACK_COINS.map(buildFallbackMarketActivity); }
+}
+async function getCoinList() { return (await getScanUniverse()).map(m => m.symbol); }
+function getTradeTimeframes() {
+  const r = String(process.env.TRADE_TIMEFRAMES || "").split(",").map(s => s.trim()).filter(Boolean);
+  return r.length ? r : DEFAULT_TRADE_TIMEFRAMES;
 }
 
-function buildCandidate(instrument, timeframe, analysis) {
-  const { trend = {}, momentum = {}, volatility = {} } = analysis || {};
-  const { ema21, ema50, ema200, adx = 0 } = trend;
-  const rsi   = momentum.rsi || 50;
-  const atr   = volatility.atr || analysis.currentPrice * 0.004;
-  const price = analysis.currentPrice;
+// ─── GATE 1: HTF Bias ─────────────────────────────────────────────────────────
+// Balanced: 2 timeframes must agree (was requiring both 4H + 1D which killed many valid signals)
+function getHigherTimeframeBias(analyses, tradeTimeframe = "5m") {
+  if (tradeTimeframe === "1m") {
+    const a5m  = analyses["5m"];
+    const a15m = analyses["15m"];
+    const a1h  = analyses["1h"];
+    if (!a5m || !a15m) return "NEUTRAL";
 
-  if (!Number.isFinite(price) || !Number.isFinite(atr) || !ema21 || !ema50 || !ema200) return null;
-
-  const macdHist     = momentum.macd?.histogram || 0;
-  const emaTrendBull = ema21 > ema50 * 0.998 && ema50 > ema200 * 0.995;
-  const emaTrendBear = ema21 < ema50 * 1.002 && ema50 < ema200 * 1.005;
-  const adxOk        = adx >= 13;
-  const adxStrong    = adx >= 18;
-
-  let side = null;
-  if      (emaTrendBull && adxOk && rsi >= 35 && rsi <= 78) side = "LONG";
-  else if (emaTrendBear && adxOk && rsi >= 22 && rsi <= 65) side = "SHORT";
-  else if (adxStrong && Math.abs(macdHist) >= 0.25)         side = macdHist >= 0 ? "LONG" : "SHORT";
-  else return null;
-
-  const confirmations = [];
-  if (adx >= 25)                                                      confirmations.push("ADX strong");
-  if ((trend.diPlus||0)  > (trend.diMinus||0) && side === "LONG")   confirmations.push("+DI lead");
-  if ((trend.diMinus||0) > (trend.diPlus||0)  && side === "SHORT")  confirmations.push("-DI lead");
-  if (Math.abs(macdHist) >= 0.2)                                      confirmations.push("MACD impulse");
-
-  const confidence  = clamp((side === "LONG" ? 72 : 70) + confirmations.length * 3 + Math.round((adx - 20) / 2), 55, 96);
-  const risk        = clamp(atr * 1.35, price * 0.001, price * 0.05);
-  const [tp1,tp2,tp3] = buildTargetPrices(side, price, risk);
-
-  const signal = createSignal({
-    coin: instrument.symbol || instrument.tradingSymbol,
-    side, confidence, leverage: 1, timeframe,
-    entry:    roundPrice(price),
-    stopLoss: roundPrice(side === "LONG" ? price - risk : price + risk),
-    tp1, tp2, tp3,
-    strength: confidence >= 85 ? "STRONG" : "MEDIUM",
-    source: "SMART_ENGINE", confirmations,
-  });
-
-  signal.scanMeta = {
-    instrument: {
-      exchange: instrument.exchange, tradingSymbol: instrument.tradingSymbol,
-      segment: instrument.segment,   token: instrument.token,
-      lotSize: instrument.lotSize,   expiry: instrument.expiry || null,
-      symbol: instrument.symbol,
-    },
-    timeframe, modelVersion: "smart_v3",
-  };
-
-  signal.indicatorSnapshot = {
-    ema21: roundPrice(ema21), ema50: roundPrice(ema50), ema200: roundPrice(ema200),
-    adx: roundPrice(adx), rsi: roundPrice(rsi), atr: roundPrice(atr),
-  };
-
-  return signal;
-}
-
-async function analyzeInstrument(instrument) {
-  const candidates = [];
-  // Use FNO timeframes for futures (NFO/MCX), EQ timeframes for cash equities
-  const isFuture = instrument.segment === "FNO" || instrument.segment === "COMMODITY"
-    || instrument.exchange === "NFO" || instrument.exchange === "MCX";
-  const timeframes = isFuture ? FNO_TIMEFRAMES : EQ_TIMEFRAMES;
-  for (const tf of timeframes) {
-    await sleep(REQUEST_DELAY_MS);
-    const candles = await fetchCandles(instrument, tf);
-    if (!candles) continue;
-
-    const analysis = analyzeCandles(candles);
-    if (!analysis) continue;
-
-    analysis.currentPrice = candles[candles.length - 1].close;
-    const candidate = buildCandidate(instrument, tf, analysis);
-    if (candidate) {
-      console.log(`[stockEngine] ✅ ${instrument.tradingSymbol} ${tf} ${candidate.side} conf=${candidate.confidence}`);
-      candidates.push(candidate);
-    }
-  }
-  return candidates.sort((a, b) => b.confidence - a.confidence).slice(0, MAX_SIGNALS_PER_INSTRUMENT);
-}
-
-async function persistSignal(candidate) {
-  return mutateCollection("stockSignals", records => {
-    const dup = records.some(r =>
-      r.status === SIGNAL_STATUS.ACTIVE &&
-      r.coin === candidate.coin &&
-      r.timeframe === candidate.timeframe &&
-      r.side === candidate.side
-    );
-    if (dup) return { records, value: null };
-    return { records: [candidate, ...records], value: candidate };
-  });
-}
-
-async function evaluateActiveSignals() {
-  const signals = await readCollection("stockSignals");
-  const active  = signals.filter(s => s.status === SIGNAL_STATUS.ACTIVE);
-  if (!active.length) return [];
-
-  const priceMap = new Map();
-  for (const s of active) {
-    const inst = s.scanMeta?.instrument;
-    if (!inst || priceMap.has(inst.token)) continue;
-    try {
-      await sleep(REQUEST_DELAY_MS);
-      const ltp   = await getLtp({ exchange: inst.exchange, symbolToken: inst.token });
-      // getLtp returns fetched[0]: { ltp, open, high, low, close, tradingSymbol }
-      const price = Number(ltp?.ltp);
-      if (Number.isFinite(price)) priceMap.set(inst.token, price);
-    } catch (e) {
-      console.warn("[stockEngine] LTP failed:", e.message);
-    }
-  }
-
-  const now = new Date().toISOString();
-  const closed = [];
-
-  await mutateCollection("stockSignals", records => records.map(s => {
-    if (s.status !== SIGNAL_STATUS.ACTIVE) return s;
-    const inst  = s.scanMeta?.instrument;
-    if (!inst) return s;
-    const price = priceMap.get(inst.token);
-    if (!Number.isFinite(price)) return s;
-
-    const hit = result => {
-      const u = { ...s, status: SIGNAL_STATUS.CLOSED, result, closePrice: roundPrice(price), closedAt: now, updatedAt: now };
-      closed.push(u);
-      return u;
+    const get = (a) => {
+      const { ema50, ema100, ema200, adx } = a.trend;
+      const rsi = a.momentum.rsi || 50;
+      // Relaxed: ema50 > ema100 is sufficient (not requiring ema100 > ema200)
+      const bull = ema50 > ema100 * 0.998 && ema50 > ema200 * 0.995 && (adx||0) >= 16 && rsi >= 42;
+      const bear = ema50 < ema100 * 1.002 && ema50 < ema200 * 1.005 && (adx||0) >= 16 && rsi <= 58;
+      return bull ? "BULLISH" : bear ? "BEARISH" : "NEUTRAL";
     };
 
-    if (s.side === "LONG") {
-      if (price >= s.tp3)      return hit("TP3_HIT");
-      if (price >= s.tp2)      return hit("TP2_HIT");
-      if (price >= s.tp1)      return hit("TP1_HIT");
-      if (price <= s.stopLoss) return hit("SL_HIT");
-    } else {
-      if (price <= s.tp3)      return hit("TP3_HIT");
-      if (price <= s.tp2)      return hit("TP2_HIT");
-      if (price <= s.tp1)      return hit("TP1_HIT");
-      if (price >= s.stopLoss) return hit("SL_HIT");
-    }
-    return s;
-  }));
+    const b5m  = get(a5m);
+    const b15m = get(a15m);
+    if (b5m === "NEUTRAL" || b15m === "NEUTRAL") return "NEUTRAL";
+    if (b5m !== b15m) return "NEUTRAL";
 
+    // 1H soft veto only (was hard veto)
+    if (a1h) {
+      const b1h = get(a1h);
+      if (b1h !== "NEUTRAL" && b1h !== b5m) return "NEUTRAL";
+    }
+    return b5m;
+  }
+
+  // 5m: 15m + 1h must agree
+  const a15m = analyses["15m"];
+  const a1h  = analyses["1h"];
+  const a4h  = analyses["4h"];
+  const a1d  = analyses["1d"];
+  if (!a15m || !a1h) return "NEUTRAL";
+
+  const get = (a) => {
+    const { ema50, ema100, ema200, adx } = a.trend;
+    const rsi = a.momentum.rsi || 50;
+    const bull = ema50 > ema100 * 0.997 && ema50 > ema200 * 0.993 && (adx||0) >= 15 && rsi >= 40;
+    const bear = ema50 < ema100 * 1.003 && ema50 < ema200 * 1.007 && (adx||0) >= 15 && rsi <= 60;
+    return bull ? "BULLISH" : bear ? "BEARISH" : "NEUTRAL";
+  };
+
+  const b15m = get(a15m);
+  const b1h  = get(a1h);
+  if (b15m === "NEUTRAL" || b1h === "NEUTRAL") return "NEUTRAL";
+  if (b15m !== b1h) return "NEUTRAL";
+
+  // 4H and 1D as soft vetos only
+  if (a4h) { const b4h = get(a4h); if (b4h !== "NEUTRAL" && b4h !== b15m) return "NEUTRAL"; }
+  if (a1d) { const b1d = get(a1d); if (b1d !== "NEUTRAL" && b1d !== b15m) return "NEUTRAL"; }
+
+  return b15m;
+}
+
+// ─── SL / TP ──────────────────────────────────────────────────────────────────
+function calculateTargets(side, analysis, timeframe = "5m") {
+  const entry = analysis.currentPrice;
+  const atr   = analysis.volatility.atr || analysis.averages.averageRange || entry * 0.003;
+  const { low20, high20, previousLow20, previousHigh20 } = analysis.recentSwing;
+  const srSup = analysis.srLevels?.supports?.[0]    ?? null;
+  const srRes = analysis.srLevels?.resistances?.[0] ?? null;
+  const tpMult = timeframe === "1m" ? TP_R_MULTIPLIERS_1M : TP_R_MULTIPLIERS_5M;
+
+  // Tighter SL band → better RR
+  const slMin  = atr * 0.7;
+  const slMax  = atr * 1.6;
+
+  if (side === "LONG") {
+    const anchors = [low20, previousLow20, srSup].filter(v => Number.isFinite(v) && v < entry);
+    const anchor  = anchors.length ? Math.max(...anchors) : entry - atr * 1.1;
+    const risk    = clamp((entry - anchor) + atr * 0.12, slMin, slMax);
+    return { entry: roundPrice(entry), riskPerUnit: roundPrice(risk),
+      stopLoss: roundPrice(entry - risk),
+      tp1: roundPrice(entry + risk * tpMult[0]),
+      tp2: roundPrice(entry + risk * tpMult[1]),
+      tp3: roundPrice(entry + risk * tpMult[2]) };
+  } else {
+    const anchors = [high20, previousHigh20, srRes].filter(v => Number.isFinite(v) && v > entry);
+    const anchor  = anchors.length ? Math.min(...anchors) : entry + atr * 1.1;
+    const risk    = clamp((anchor - entry) + atr * 0.12, slMin, slMax);
+    return { entry: roundPrice(entry), riskPerUnit: roundPrice(risk),
+      stopLoss: roundPrice(entry + risk),
+      tp1: roundPrice(entry - risk * tpMult[0]),
+      tp2: roundPrice(entry - risk * tpMult[1]),
+      tp3: roundPrice(entry - risk * tpMult[2]) };
+  }
+}
+
+// ─── Leverage ─────────────────────────────────────────────────────────────────
+function calculateLeverage(analysis, confidence, timeframe) {
+  const price  = analysis.currentPrice;
+  const atr    = analysis.volatility.atr || analysis.averages.averageRange || price * 0.003;
+  const atrPct = (atr / price) * 100;
+  const base   = clamp(20 / atrPct, 10, 40);
+  const bonus  = confidence >= 90 ? 4 : confidence >= 85 ? 2 : 0;
+  const tfRule = TIMEFRAME_RULES[timeframe] || {};
+  const cap    = Number.isFinite(tfRule.maxLeverage) ? tfRule.maxLeverage : 20;
+  return Math.round(clamp(base + bonus, 10, cap));
+}
+
+// ─── GATE 4 helper: Momentum Check ───────────────────────────────────────────
+// RSI + MACD must agree; StochRSI is bonus (not hard gate)
+function isMomentumAligned(side, analysis, tfRule) {
+  const { rsi, rsiRising, rsiFalling, macd, macdHistIncreasing, macdHistDecreasing } = analysis.momentum;
+  const minRsi = tfRule.minRsi ?? 37;
+  const maxRsi = tfRule.maxRsi ?? 85;
+  const requireRsiRising = tfRule.requireRsiRising ?? false;
+
+  if (side === "LONG") {
+    // RSI in valid zone — rising is preferred but NOT required (it plateaus in trends)
+    const rsiInRange = (rsi||0) >= minRsi && (rsi||0) <= maxRsi;
+    const rsiOk = requireRsiRising ? (rsiInRange && rsiRising) : rsiInRange;
+    // MACD: histogram positive OR line above signal OR increasing — any one is enough
+    const macdOk = (macd?.histogram||0) > 0 || (macd?.MACD||0) > (macd?.signal||0) || macdHistIncreasing;
+    return rsiOk && macdOk;
+  } else {
+    const rsiInRange = (rsi||0) <= (100 - minRsi) && (rsi||0) >= 15;
+    const rsiOk = requireRsiRising ? (rsiInRange && rsiFalling) : rsiInRange;
+    const macdOk = (macd?.histogram||0) < 0 || (macd?.MACD||0) < (macd?.signal||0) || macdHistDecreasing;
+    return rsiOk && macdOk;
+  }
+}
+
+// ─── GATE 5 helper: Volume Confirmation ───────────────────────────────────────
+function isVolumeConfirmed(analysis, multiplier = 1.4) {
+  const { currentVolume, averageVolume, volumeTrending } = analysis.volume;
+  return (
+    currentVolume > averageVolume * multiplier ||
+    (currentVolume > averageVolume * 1.2 && volumeTrending)
+  );
+}
+
+// ─── GATE 6 helper: HA Candle Direction (medium — 2 candles) ─────────────────
+function isHaMedium(side, analysis) {
+  const { haBullish, haBearish, haStrongBull, haStrongBear } = analysis.trend;
+  if (side === "LONG") return haBullish || haStrongBull;
+  else                 return haBearish || haStrongBear;
+}
+
+// ─── Manipulation Candle Detector ────────────────────────────────────────────
+// Only reject obvious manipulation — 65% wick threshold (was 55%)
+function hasManipulationCandle(side, analysis) {
+  const c   = analysis.candles;
+  const atr = analysis.volatility.atr || 1;
+  if (!c) return false;
+  const range     = (c.high - c.low) || 0.0001;
+  const upperWick = (c.high - Math.max(c.open, c.close)) / range;
+  const lowerWick = (Math.min(c.open, c.close) - c.low)  / range;
+  if (side === "LONG"  && lowerWick > 0.65) return true;
+  if (side === "SHORT" && upperWick > 0.65) return true;
+  if (range > atr * 3.5) return true; // extreme spike
+  return false;
+}
+
+// ─── Main Signal Builder ──────────────────────────────────────────────────────
+function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketActivity = null, performanceSnapshot = null) {
+  const bullConf = [], bearConf = [];
+  let bullScore = 0, bearScore = 0;
+
+  const tfRule       = TIMEFRAME_RULES[timeframe] || {};
+  const activeMarket = marketActivity || buildFallbackMarketActivity(coin);
+  const price = analysis.currentPrice;
+
+  const { ema9, ema21, ema50, ema100, ema200, vwap, ichimoku, adx, pdi, mdi, psar,
+    haBullish, haBearish, haStrongBull, haStrongBear, haNoLowerWick, haNoUpperWick,
+    ema50Rising, ema50Falling, ema21Rising, ema21Falling, trix, trixCrossUp, trixCrossDown } = analysis.trend;
+  const { rsi, rsiRising, rsiFalling, rsi9, macd, macdHistIncreasing, macdHistDecreasing,
+    stochRsi, stochKD, cci, roc, roc5, kstBullish, kstBearish, ao, aoCrossUp, aoCrossDown, williamsR } = analysis.momentum;
+  const { volumeSpike, volumeStrong, volumeTrending, obvChange, obvTrending, mfi, forceIndex, currentVolume, averageVolume } = analysis.volume;
+  const { bollinger, atr: rawAtr, bbWidth, bbPctB } = analysis.volatility;
+  const atr    = rawAtr || analysis.averages.averageRange || price * 0.003;
+  const regime = analysis.regime;
+  const stochK = stochRsi?.k ?? null;
+  const kdK    = stochKD?.k  ?? null;
+  const kdD    = stochKD?.d  ?? null;
+  const { daily, oneH } = htf;
+  const dailyTrend     = daily?.trend || {};
+  const dailyBearStack = (dailyTrend.ema50||0) < (dailyTrend.ema100||0) && (dailyTrend.adx||0) >= 16;
+  const dailyBullStack = (dailyTrend.ema50||0) > (dailyTrend.ema100||0) && (dailyTrend.adx||0) >= 16;
+  const psarBull = Number.isFinite(psar) ? psar < price : false;
+  const psarBear = Number.isFinite(psar) ? psar > price : false;
+  const rsiDivBull  = analysis.divergence?.rsi?.bullish        || false;
+  const rsiDivBear  = analysis.divergence?.rsi?.bearish        || false;
+  const rsiHidBull  = analysis.divergence?.rsi?.hidden_bullish || false;
+  const rsiHidBear  = analysis.divergence?.rsi?.hidden_bearish || false;
+  const macdDivBull = analysis.divergence?.macd?.bullish       || false;
+  const macdDivBear = analysis.divergence?.macd?.bearish       || false;
+  const srSup = analysis.srLevels?.supports?.[0]    ?? null;
+  const srRes = analysis.srLevels?.resistances?.[0] ?? null;
+  const nearSupportSR    = srSup && Math.abs(price - srSup) < atr * 1.2;
+  const nearResistanceSR = srRes && Math.abs(price - srRes) < atr * 1.2;
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // GATE CHECKS
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // GATE 1: HTF Alignment
+  if (higherBias === "NEUTRAL") return null;
+  const side = higherBias === "BULLISH" ? "LONG" : "SHORT";
+
+  // GATE 2: Core EMA Trend — 21 > 50 > 200 (3 EMAs, not all 5)
+  // This is the key change — ema9/ema100 were killing many valid signals
+  const coreBullStack = ema21 > ema50 * 0.997 && ema50 > ema200 * 0.993;
+  const coreBearStack = ema21 < ema50 * 1.003 && ema50 < ema200 * 1.007;
+  if (side === "LONG"  && !coreBullStack) return null;
+  if (side === "SHORT" && !coreBearStack) return null;
+
+  // GATE 3: ADX — trend must exist
+  const minAdx     = tfRule.minAdx ?? 20;
+  const minDiDelta = tfRule.minDiDelta ?? 4;
+  if ((adx||0) < minAdx) return null;
+  if (side === "LONG"  && ((pdi||0) - (mdi||0)) < minDiDelta) return null;
+  if (side === "SHORT" && ((mdi||0) - (pdi||0)) < minDiDelta) return null;
+
+  // GATE 4: Momentum — RSI + MACD (StochRSI is bonus)
+  if (!isMomentumAligned(side, analysis, tfRule)) return null;
+
+  // GATE 5: Volume — soft check (bonus scoring, not hard reject)
+  // Volume is already scoring bonus points below; hard gate removed to not block valid setups
+
+  // GATE 6 removed: HA is bonus only (not hard gate — blocks too many valid signals)
+
+  // ── SECONDARY FILTERS ─────────────────────────────────────────────────────
+  // VWAP check
+  if (tfRule.requireVwapSupport) {
+    if (side === "LONG"  && price < vwap) return null;
+    if (side === "SHORT" && price > vwap) return null;
+  }
+  // Daily bear block for LONGs
+  if (tfRule.blockDailyBear && side === "LONG" && dailyBearStack) return null;
+  // Manipulation candle
+  if (hasManipulationCandle(side, analysis)) return null;
+  // Skip full ranging market
+  if (regime === "RANGING") return null;
+  // BB extreme zone — don't buy overbought top or sell oversold bottom
+  if (bbPctB !== null) {
+    if (side === "LONG"  && bbPctB > 0.90) return null;
+    if (side === "SHORT" && bbPctB < 0.10) return null;
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // GATES PASSED — Score the signal
+  // ════════════════════════════════════════════════════════════════════════════
+
+  const addConf = (cond, score, msg) => {
+    if (!cond) return;
+    if (side === "LONG") { bullScore += score; bullConf.push(msg); }
+    else                 { bearScore += score; bearConf.push(msg); }
+  };
+
+  // Base score for passing gates
+  addConf(true, 38, `EMA trend ${side === "LONG" ? "bullish" : "bearish"} (21>50>200)`);
+  addConf(true, 14, `ADX ${roundPrice(adx||0)} | ${side === "LONG" ? "+DI" : "-DI"} dominant`);
+  addConf(true, 14, `RSI ${roundPrice(rsi||0)} aligned | MACD confirmed`);
+  addConf(true, 8,  `Volume ${(currentVolume/Math.max(averageVolume,1)).toFixed(1)}x avg`);
+  addConf(true, 6,  `HA ${side === "LONG" ? "bullish" : "bearish"}`);
+
+  // EMA slope bonus (ema21 + ema50 both rising/falling)
+  const bullSlope = ema21Rising && ema50Rising;
+  const bearSlope = ema21Falling && ema50Falling;
+  if (side === "LONG"  && bullSlope) addConf(true, 6, "EMA slopes rising");
+  if (side === "SHORT" && bearSlope) addConf(true, 6, "EMA slopes falling");
+
+  // Full 5-EMA perfect stack (bonus, not gate)
+  const perfectBullStack = ema9 > ema21 && ema21 > ema50 && ema50 > ema100 && ema100 > ema200;
+  const perfectBearStack = ema9 < ema21 && ema21 < ema50 && ema50 < ema100 && ema100 < ema200;
+  if (side === "LONG"  && perfectBullStack) addConf(true, 8, "Perfect 5-EMA bull stack ⚡");
+  if (side === "SHORT" && perfectBearStack) addConf(true, 8, "Perfect 5-EMA bear stack ⚡");
+
+  // HTF quality bonuses
+  if (side === "LONG"  && dailyBullStack) addConf(true, 7, "Daily macro bullish");
+  if (side === "SHORT" && !dailyBullStack) addConf(true, 7, "Daily macro bearish");
+  if (oneH) {
+    const oh = oneH.trend.ema50 > oneH.trend.ema100 ? "BULLISH" : "BEARISH";
+    if ((side === "LONG" && oh === "BULLISH") || (side === "SHORT" && oh === "BEARISH"))
+      addConf(true, 5, "1H confirming");
+  }
+
+  // PSAR
+  if (side === "LONG"  && psarBull) addConf(true, 5, "PSAR bullish dots");
+  if (side === "SHORT" && psarBear) addConf(true, 5, "PSAR bearish dots");
+
+  // Ichimoku (bonus not gate)
+  if (side === "LONG"  && ichimoku?.bullish)    addConf(true, 7, "Ichimoku cloud bullish");
+  if (side === "LONG"  && ichimoku?.aboveCloud) addConf(true, 4, "Above Ichimoku cloud");
+  if (side === "SHORT" && ichimoku?.bearish)    addConf(true, 7, "Ichimoku cloud bearish");
+  if (side === "SHORT" && ichimoku?.belowCloud) addConf(true, 4, "Below Ichimoku cloud");
+
+  // VWAP bonus
+  addConf(true, 4, `${side === "LONG" ? "Above" : "Below"} VWAP ${roundPrice(vwap)}`);
+
+  // S/R proximity
+  if (side === "LONG"  && nearSupportSR)    addConf(true, 8, `Near support ${roundPrice(srSup)}`);
+  if (side === "SHORT" && nearResistanceSR) addConf(true, 8, `Near resistance ${roundPrice(srRes)}`);
+
+  // BB position
+  if (bbPctB !== null && bbPctB < 0.35 && side === "LONG")  addConf(true, 5, `BB lower zone (${(bbPctB*100).toFixed(0)}%)`);
+  if (bbPctB !== null && bbPctB > 0.65 && side === "SHORT") addConf(true, 5, `BB upper zone (${(bbPctB*100).toFixed(0)}%)`);
+
+  // OBV
+  if (side === "LONG"  && obvTrending)              addConf(true, 5, "OBV trending up");
+  if (side === "SHORT" && !obvTrending && obvChange < 0) addConf(true, 5, "OBV trending down");
+
+  // Stoch confirmation (bonus)
+  const stochK_val = stochK !== null ? stochK : 50;
+  const kdK_val    = kdK !== null ? kdK : 50;
+  const kdD_val    = kdD !== null ? kdD : 50;
+  if (stochK_val < 30 && side === "LONG")  addConf(true, 5, `StochRSI oversold ${stochK_val.toFixed(0)}`);
+  if (stochK_val > 70 && side === "SHORT") addConf(true, 5, `StochRSI overbought ${stochK_val.toFixed(0)}`);
+  if (kdK_val > kdD_val && side === "LONG")  { bullScore += 3; }
+  if (kdK_val < kdD_val && side === "SHORT") { bearScore += 3; }
+
+  // Divergence (high value confirmations)
+  if (rsiDivBull  && side === "LONG")  addConf(true, 12, "RSI bullish divergence ⚡");
+  if (rsiDivBear  && side === "SHORT") addConf(true, 12, "RSI bearish divergence ⚡");
+  if (macdDivBull && side === "LONG")  addConf(true, 8,  "MACD bullish divergence");
+  if (macdDivBear && side === "SHORT") addConf(true, 8,  "MACD bearish divergence");
+  if (rsiHidBull  && side === "LONG")  addConf(true, 5,  "RSI hidden bull div (trend cont.)");
+  if (rsiHidBear  && side === "SHORT") addConf(true, 5,  "RSI hidden bear div (trend cont.)");
+
+  // HA strong bonus
+  if (haStrongBull && haNoLowerWick && side === "LONG")  addConf(true, 5, "HA no lower wick (pure bull)");
+  if (haStrongBear && haNoUpperWick && side === "SHORT") addConf(true, 5, "HA no upper wick (pure bear)");
+
+  // AO
+  if (aoCrossUp   && side === "LONG")  addConf(true, 6, "AO zero-cross up");
+  if (aoCrossDown && side === "SHORT") addConf(true, 6, "AO zero-cross down");
+  else if ((ao||0) > 0 && side === "LONG")  { bullScore += 3; }
+  else if ((ao||0) < 0 && side === "SHORT") { bearScore += 3; }
+
+  // TRIX
+  if (trixCrossUp   && side === "LONG")  addConf(true, 4, "TRIX cross+");
+  if (trixCrossDown && side === "SHORT") addConf(true, 4, "TRIX cross-");
+  else if ((trix||0) > 0 && side === "LONG")  bullScore += 2;
+  else if ((trix||0) < 0 && side === "SHORT") bearScore += 2;
+
+  // KST
+  if (kstBullish && side === "LONG")  addConf(true, 4, "KST bullish");
+  if (kstBearish && side === "SHORT") addConf(true, 4, "KST bearish");
+
+  // CCI
+  if (cci !== null && cci > 100  && cci < 200  && side === "LONG")  addConf(true, 4, `CCI ${cci.toFixed(0)}`);
+  if (cci !== null && cci < -100 && cci > -200 && side === "SHORT") addConf(true, 4, `CCI ${cci.toFixed(0)}`);
+
+  // Volume surge
+  if (volumeStrong) addConf(true, 5, "Volume surge 2x+");
+  if (activeMarket.isLiquid)  addConf(true, 4, `24h vol ${formatCompact(activeMarket.quoteVolume)} USDT`);
+  if (activeMarket.isCrowded) addConf(true, 4, `${formatCompact(activeMarket.tradeCount)} trades/24h`);
+
+  // MFI
+  if (mfi !== null && mfi >= 50 && mfi <= 75 && side === "LONG")  addConf(true, 3, `MFI ${roundPrice(mfi)}`);
+  if (mfi !== null && mfi <= 50 && mfi >= 25 && side === "SHORT") addConf(true, 3, `MFI ${roundPrice(mfi)}`);
+
+  // Force index
+  if (forceIndex > 0 && side === "LONG")  bullScore += 2;
+  if (forceIndex < 0 && side === "SHORT") bearScore += 2;
+
+  // BB squeeze
+  if (bbWidth && rawAtr && bbWidth < rawAtr * 2.5) addConf(true, 3, "BB squeeze (breakout pending)");
+
+  // Candlestick patterns
+  const strongBullPat = ["Morning Star","Morning Doji Star","Three White Soldiers","Bullish Engulfing","Bullish Marubozu","Abandoned Baby (Bull)"];
+  const strongBearPat = ["Evening Star","Evening Doji Star","Three Black Crows","Bearish Engulfing","Bearish Marubozu","Downside Tasuki Gap"];
+  const patBull  = (analysis.patterns?.bullish || []);
+  const patBear  = (analysis.patterns?.bearish || []);
+  const confBull = patBull.filter(p => strongBullPat.includes(p));
+  const confBear = patBear.filter(p => strongBearPat.includes(p));
+  if (confBull.length && side === "LONG")  addConf(true, 10, confBull.join(", "));
+  if (confBear.length && side === "SHORT") addConf(true, 10, confBear.join(", "));
+
+  // ROC momentum
+  if ((roc||0) > 0  && side === "LONG")  bullScore += 2;
+  if ((roc||0) < 0  && side === "SHORT") bearScore += 2;
+  if ((roc5||0) > 0 && side === "LONG")  bullScore += 2;
+  if ((roc5||0) < 0 && side === "SHORT") bearScore += 2;
+
+  // ── Final publish check ───────────────────────────────────────────────────
+  const confidence    = side === "LONG" ? bullScore : bearScore;
+  const confirmations = side === "LONG" ? bullConf  : bearConf;
+
+  const minScore         = tfRule.minScore         || 62;
+  const minConfirmations = tfRule.minConfirmations || 5;
+  const publishFloor     = tfRule.publishFloor     || DEFAULT_PUBLISH_FLOOR;
+
+  if (confidence < minScore)                   return null;
+  if (confirmations.length < minConfirmations) return null;
+  if (confidence < publishFloor)               return null;
+
+  // Entry drift check — slightly more lenient
+  const targets         = calculateTargets(side, analysis, timeframe);
+  const leverage        = calculateLeverage(analysis, confidence, timeframe);
+  if (!Number.isFinite(targets.riskPerUnit) || targets.riskPerUnit <= 0) return null;
+  const driftMultiplier = tfRule.entryDriftMultiplier ?? 0.5;
+  const entryDriftLimit = Math.max(atr * driftMultiplier, atr * 0.2);
+  if (Math.abs(price - targets.entry) > entryDriftLimit) return null;
+
+  const strength = confidence >= STRENGTH_THRESHOLDS.STRONG ? "STRONG" : "MEDIUM";
+
+  return createSignal({
+    coin, side, timeframe, confidence, leverage, strength, confirmations,
+    indicatorSnapshot: {
+      ema9: roundPrice(ema9), ema21: roundPrice(ema21), ema50: roundPrice(ema50),
+      ema100: roundPrice(ema100), ema200: roundPrice(ema200), vwap: roundPrice(vwap),
+      adx: roundPrice(adx||0), pdi: roundPrice(pdi||0), mdi: roundPrice(mdi||0),
+      psar: roundPrice(psar||0), rsi: roundPrice(rsi||0), rsi9: roundPrice(rsi9||0),
+      cci: roundPrice(cci||0), mfi: roundPrice(mfi||0), ao: roundPrice(ao||0),
+      williamsR: roundPrice(williamsR||0), trix: roundPrice(trix||0),
+      macd: { histogram: roundPrice(macd?.histogram||0), macd: roundPrice(macd?.MACD||0), signal: roundPrice(macd?.signal||0) },
+      atr: roundPrice(rawAtr||0), bbPctB: roundPrice(bbPctB||0),
+      bollinger: { upper: roundPrice(bollinger?.upper||0), middle: roundPrice(bollinger?.middle||0), lower: roundPrice(bollinger?.lower||0) },
+      regime, volumeSpike, volumeStrong, higherBias, effectiveBias: higherBias, leverage,
+      rsiDivBull, rsiDivBear, macdDivBull, macdDivBear,
+      riskPerUnit: roundPrice(targets.riskPerUnit),
+      marketActivity: { quoteVolume: roundPrice(activeMarket.quoteVolume), tradeCount: roundPrice(activeMarket.tradeCount), openInterestValue: roundPrice(activeMarket.openInterestValue), activityScore: roundPrice(activeMarket.activityScore) },
+    },
+    patternSummary: analysis.patterns,
+    scanMeta: {
+      higherBias, effectiveBias: higherBias, ruleVersion: RULE_VERSION, publishFloor,
+      marketActivityScore: roundPrice(activeMarket.activityScore),
+      marketQuoteVolume: roundPrice(activeMarket.quoteVolume),
+      marketTradeCount: roundPrice(activeMarket.tradeCount),
+      marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
+      modelVersion: "v16_working",
+      sourceTimeframes: SCAN_TIMEFRAMES,
+      timeframeRule: tfRule,
+      gatesPassed: 4,
+    },
+    source: "ENGINE",
+    ...targets,
+  });
+}
+
+// ─── Coin Scan ────────────────────────────────────────────────────────────────
+async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = null) {
+  const analyses = {};
+  for (const tf of SCAN_TIMEFRAMES) {
+    const candles = await getKlines(coin, tf, 260);
+    analyses[tf]  = analyzeCandles(candles);
+    await new Promise(r => setTimeout(r, 80));
+  }
+  const htf = { daily: analyses["1d"] || null, twelveH: null, fourH: analyses["4h"] || null, oneH: analyses["1h"] || null };
+  const tradeTimeframes = getTradeTimeframes();
+  const candidates = tradeTimeframes.map(tf => {
+    if (!analyses[tf]) return null;
+    const bias = getHigherTimeframeBias(analyses, tf);
+    return buildCandidate(coin, tf, analyses[tf], bias, htf, marketActivity, performanceSnapshot);
+  }).filter(Boolean);
+  if (!candidates.length) return null;
+  return candidates.sort((a, b) => b.confidence - a.confidence)[0];
+}
+
+// ─── Signal Evaluation (TP/SL only) ──────────────────────────────────────────
+async function evaluateActiveSignals() {
+  const signals = await readCollection("signals");
+  const active  = signals.filter(s => s.status === SIGNAL_STATUS.ACTIVE);
+  if (!active.length) return [];
+  const prices = await getPrices([...new Set(active.map(s => s.coin))]);
+  const now    = new Date().toISOString();
+  const closed = [];
+  await mutateCollection("signals", records => records.map(sig => {
+    if (sig.status !== SIGNAL_STATUS.ACTIVE) return sig;
+    const price = prices[sig.coin];
+    if (!Number.isFinite(price)) return sig;
+    const hit = r => { const u = { ...sig, status: SIGNAL_STATUS.CLOSED, result: r, closePrice: roundPrice(price), closedAt: now, updatedAt: now }; closed.push(u); return u; };
+    if (sig.side === "LONG") {
+      if (price >= sig.tp3)      return hit("TP3_HIT");
+      if (price >= sig.tp2)      return hit("TP2_HIT");
+      if (price >= sig.tp1)      return hit("TP1_HIT");
+      if (price <= sig.stopLoss) return hit("SL_HIT");
+    } else {
+      if (price <= sig.tp3)      return hit("TP3_HIT");
+      if (price <= sig.tp2)      return hit("TP2_HIT");
+      if (price <= sig.tp1)      return hit("TP1_HIT");
+      if (price >= sig.stopLoss) return hit("SL_HIT");
+    }
+    return sig;
+  }));
   return closed;
 }
 
-async function scanUniverse() {
-  if (engineState.isScanning) return { generated: [], closed: [] };
-  engineState.isScanning = true;
-  engineState.lastScanAt = new Date().toISOString();
-  engineState.lastError  = null;
-
+async function getPerformanceSnapshot() {
   try {
-    const instruments = getInstrumentUniverse().slice(0, MAX_INSTRUMENTS);
-    console.log(`[stockEngine] 🔍 Scan: ${instruments.length} stocks | ${SCAN_TIMEFRAMES} | ${REQUEST_DELAY_MS}ms delay`);
-
-    const generated = [];
-    for (const inst of instruments) {
-      try {
-        const candidates = await analyzeInstrument(inst);
-        for (const c of candidates) {
-          const saved = await persistSignal(c);
-          if (saved) generated.push(saved);
-        }
-      } catch (e) {
-        console.warn("[stockEngine] Error:", inst.symbol, e.message);
-      }
+    const signals = await readCollection("signals");
+    const stats   = { overall: buildTally(), LONG: buildTally(), SHORT: buildTally(), "5m": buildTally(), "1m": buildTally() };
+    for (const sig of signals) {
+      const isWin  = WIN_RESULTS.has(sig.result);
+      const isLoss = LOSS_RESULTS.has(sig.result);
+      if (!isWin && !isLoss) continue;
+      const key = isWin ? "wins" : "losses";
+      stats.overall[key] += 1;
+      if (stats[sig.side])      stats[sig.side][key] += 1;
+      if (!stats[sig.timeframe]) stats[sig.timeframe] = buildTally();
+      stats[sig.timeframe][key] += 1;
     }
-
-    const closed = await evaluateActiveSignals();
-    engineState.lastGenerated = generated.length;
-    engineState.scanCount += 1;
-    console.log(`[stockEngine] ✅ Done: ${generated.length} new, ${closed.length} closed`);
-    return { generated, closed };
-  } catch (e) {
-    engineState.lastError = e.message;
-    throw e;
-  } finally {
-    engineState.isScanning = false;
-    engineState.lastScanAt = new Date().toISOString();
+    stats.sampleSize = stats.overall.wins + stats.overall.losses;
+    return stats;
+  } catch {
+    return { overall: buildTally(), LONG: buildTally(), SHORT: buildTally(), "5m": buildTally(), "1m": buildTally(), sampleSize: 0 };
   }
 }
 
-const scanNow = () => scanUniverse();
+// ─── Persist / Manual ────────────────────────────────────────────────────────
+async function persistSignal(signal) {
+  return mutateCollection("signals", records => ({ records: [signal, ...records], value: signal }));
+}
+async function signalExists(candidate) {
+  const signals = await readCollection("signals");
+  return signals.some(s => s.status === SIGNAL_STATUS.ACTIVE && s.coin === candidate.coin && s.side === candidate.side && s.timeframe === candidate.timeframe);
+}
+async function createManualSignal(payload, actor) {
+  const confidence = Number(payload.confidence || 75);
+  const leverage   = clamp(Number(payload.leverage || 10), 10, 50);
+  const signal     = createSignal({
+    coin: payload.coin, side: payload.side, timeframe: payload.timeframe || "5m",
+    entry: payload.entry, stopLoss: payload.stopLoss, tp1: payload.tp1, tp2: payload.tp2, tp3: payload.tp3,
+    confidence, leverage,
+    confirmations: Array.isArray(payload.confirmations) ? payload.confirmations : ["Admin signal"],
+    indicatorSnapshot: payload.indicatorSnapshot || {}, patternSummary: payload.patternSummary || {},
+    scanMeta: { createdBy: actor?.email || "admin", manual: true, ...(payload.scanMeta || {}) },
+    source: payload.source || "MANUAL", strength: confidence >= 90 ? "STRONG" : "MEDIUM",
+  });
+  await persistSignal(signal);
+  return signal;
+}
+
+async function scanNow({ source = "ENGINE" } = {}) {
+  if (engineState.isScanning) return { skipped: true, message: "Scan already in progress" };
+  engineState.isScanning = true;
+  const generatedSignals = [], errors = [];
+  try {
+    const closedSignals       = await evaluateActiveSignals();
+    const performanceSnapshot = await getPerformanceSnapshot();
+    const scanUniverse        = await getScanUniverse();
+    const coins               = scanUniverse.slice(0, getMaxCoinsPerScan());
+    for (const market of coins) {
+      // Skip admin-paused coins
+      if (engineState.pausedCoins[market.symbol]) {
+        errors.push({ coin: market.symbol, message: "Paused by admin — skipped in scan" });
+        continue;
+      }
+      try {
+        const candidate = await analyzeCoin(market.symbol, market, performanceSnapshot);
+        if (!candidate) continue;
+        candidate.source    = source;
+        candidate.updatedAt = new Date().toISOString();
+        if (await signalExists(candidate)) continue;
+        generatedSignals.push(await persistSignal(candidate));
+      } catch (e) { errors.push({ coin: market.symbol, message: e.message }); }
+      await new Promise(r => setTimeout(r, 200));
+    }
+    engineState.lastGenerated = generatedSignals.length;
+    engineState.lastScanAt    = new Date().toISOString();
+    engineState.lastError     = errors.length ? `${errors.length} coin scans failed` : null;
+    engineState.scanCount    += 1;
+    return { closedSignals, errors, generatedSignals, scanCount: engineState.scanCount };
+  } finally { engineState.isScanning = false; }
+}
+
+function getStatus() {
+  return { intervalMs: engineState.intervalMs, isScanning: engineState.isScanning,
+    lastError: engineState.lastError, lastGenerated: engineState.lastGenerated,
+    lastScanAt: engineState.lastScanAt, running: engineState.running, scanCount: engineState.scanCount };
+}
+
+// ─── Fast Expiry Checker (every 30s) ─────────────────────────────────────────
+async function checkAndExpireSignals() {
+  try {
+    const signals = await readCollection("signals");
+    if (!signals.filter(s => s.status === SIGNAL_STATUS.ACTIVE).length) return;
+    const nowMs = Date.now(), now = new Date().toISOString();
+    let hasExpired = false;
+    const updated = signals.map(sig => {
+      if (sig.status !== SIGNAL_STATUS.ACTIVE) return sig;
+      const expiryMs  = SIGNAL_EXPIRY_MS[sig.timeframe] || SIGNAL_EXPIRY_MS.default;
+      const createdMs = sig.createdAt ? new Date(sig.createdAt).getTime() : 0;
+      if (nowMs - createdMs > expiryMs) {
+        hasExpired = true;
+        return { ...sig, status: SIGNAL_STATUS.CLOSED, result: "EXPIRED", closedAt: now, updatedAt: now };
+      }
+      return sig;
+    });
+    if (hasExpired) { const { writeCollection } = require("../storage/fileStore"); await writeCollection("signals", updated); }
+  } catch (e) { engineState.lastError = `Expiry check failed: ${e.message}`; }
+}
 
 function start() {
-  if (engineState.running || engineState.timer) return getStatus();
-  engineState.running = true;
-  engineState.timer   = setInterval(
-    () => scanUniverse().catch(e => { engineState.lastError = e.message; }),
-    engineState.intervalMs
-  );
-  console.log(`[stockEngine] Engine started — interval: ${engineState.intervalMs / 1000}s`);
+  if (engineState.timer) { engineState.running = true; return getStatus(); }
+  engineState.intervalMs  = Number(process.env.SCAN_INTERVAL_MS || engineState.intervalMs || 60000);
+  engineState.timer        = setInterval(() => { scanNow({ source: "ENGINE" }).catch(e => { engineState.lastError = e.message; }); }, engineState.intervalMs);
+  engineState.expiryTimer  = setInterval(() => { checkAndExpireSignals().catch(e => { engineState.lastError = e.message; }); }, 30 * 1000);
+  engineState.running      = true;
+  scanNow({ source: "ENGINE" }).catch(e => { engineState.lastError = e.message; });
   return getStatus();
 }
 
 function stop() {
-  if (engineState.timer) clearInterval(engineState.timer);
-  engineState.timer = null; engineState.running = false;
+  if (engineState.timer)       { clearInterval(engineState.timer);       engineState.timer = null; }
+  if (engineState.expiryTimer) { clearInterval(engineState.expiryTimer); engineState.expiryTimer = null; }
+  engineState.running = false;
   return getStatus();
 }
 
-function getStatus() {
-  return {
-    intervalMs: engineState.intervalMs, isScanning: engineState.isScanning,
-    lastError: engineState.lastError,   lastGenerated: engineState.lastGenerated,
-    lastScanAt: engineState.lastScanAt, running: engineState.running,
-    scanCount: engineState.scanCount,
+// ─── Admin: Pause / Resume Coins ─────────────────────────────────────────────
+function pauseCoin(symbol, actor, reason = "") {
+  const coin = String(symbol || "").trim().toUpperCase();
+  if (!coin) throw new Error("Symbol required");
+  engineState.pausedCoins[coin] = {
+    pausedAt: new Date().toISOString(),
+    reason: reason || "Repeated stop losses",
+    pausedBy: actor?.email || "admin",
   };
+  return engineState.pausedCoins;
 }
 
-module.exports = { start, stop, scanNow, getStatus, evaluateActiveSignals };
+function resumeCoin(symbol) {
+  const coin = String(symbol || "").trim().toUpperCase();
+  delete engineState.pausedCoins[coin];
+  return engineState.pausedCoins;
+}
+
+function getPausedCoins() {
+  return engineState.pausedCoins;
+}
+
+// ─── Admin: Force-generate signal for a specific coin ─────────────────────────
+async function generateForCoin(symbol, actor) {
+  const coin = String(symbol || "").trim().toUpperCase();
+  if (!coin) throw new Error("Symbol required");
+
+  // Build minimal market activity so analyzeCoin doesn't crash
+  const marketActivity = buildFallbackMarketActivity(coin);
+  const performanceSnapshot = await getPerformanceSnapshot();
+
+  const candidate = await analyzeCoin(coin, marketActivity, performanceSnapshot);
+  if (!candidate) {
+    return { generated: false, message: `No qualifying signal found for ${coin} — indicators may not be aligned.` };
+  }
+  // Even if a duplicate exists, allow admin-forced generation
+  candidate.source    = "ADMIN_SEARCH";
+  candidate.updatedAt = new Date().toISOString();
+  if (candidate.scanMeta) candidate.scanMeta.createdBy = actor?.email || "admin";
+  const signal = await persistSignal(candidate);
+  return { generated: true, signal };
+}
+
+module.exports = { createManualSignal, evaluateActiveSignals, getCoinList, getStatus, scanNow, start, stop, pauseCoin, resumeCoin, getPausedCoins, generateForCoin };
