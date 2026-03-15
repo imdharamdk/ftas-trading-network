@@ -32,17 +32,19 @@ function formatCountdown(ms) {
   return `${min}:${sec.toString().padStart(2, "0")}`;
 }
 
-// ─── Countdown badge per signal ───────────────────────────────────────────────
-function ExpiryCountdown({ signal }) {
-  const [remaining, setRemaining] = useState(() => getRemainingMs(signal));
-
+// ─── Single global tick — ONE timer for the whole page ───────────────────────
+function useNow() {
+  const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    const id = setInterval(() => {
-      setRemaining(getRemainingMs(signal));
-    }, 1000);
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [signal.createdAt, signal.timeframe]);
+  }, []);
+  return now;
+}
 
+// ─── Countdown badge (receives now from parent — no own timer) ───────────────
+function ExpiryCountdown({ signal, now }) {
+  const remaining = Math.max(0, getExpiryMs(signal) - (now - new Date(signal.createdAt).getTime()));
   const pct = remaining / getExpiryMs(signal);
   const cls =
     remaining <= 0 ? "expiry-badge expiry-dead" :
@@ -56,6 +58,7 @@ function ExpiryCountdown({ signal }) {
 export default function Crypto() {
   const { user } = useSession();
   const isAdmin = user?.role === "ADMIN";
+  const now = useNow(); // single 1s tick for all countdowns
 
   const [activeSignals, setActiveSignals]   = useState([]);
   const [historySignals, setHistorySignals] = useState([]);
@@ -163,7 +166,7 @@ export default function Crypto() {
     }
     load();
     // Reload every 15s so newly expired signals appear quickly
-    const id = window.setInterval(load, 15000);
+    const id = window.setInterval(load, 30000);
     return () => { mounted = false; window.clearInterval(id); };
   }, []);
 
@@ -179,7 +182,7 @@ export default function Crypto() {
       } catch { /* keep stale */ }
     }
     refreshPrices();
-    const id = window.setInterval(refreshPrices, 5000);
+    const id = window.setInterval(refreshPrices, 12000);
     return () => { mounted = false; window.clearInterval(id); };
   }, [signalCoinsKey]);
 
@@ -488,7 +491,7 @@ export default function Crypto() {
                     <span className={`signal-timeframe-badge tf-badge-${s.timeframe}`}>{s.timeframe}</span>
                     <span style={{ fontWeight:600, color:"#e2e8f0" }}>{s.coin?.replace("USDT","")}</span>
                     <span className={`pill ${s.side === "LONG" ? "pill-success" : "pill-danger"}`} style={{fontSize:10}}>{s.side}</span>
-                    <ExpiryCountdown signal={s} />
+                    <ExpiryCountdown signal={s} now={now} />
                   </div>
                 ))}
               </div>
