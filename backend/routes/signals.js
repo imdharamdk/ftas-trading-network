@@ -5,7 +5,7 @@ const { mutateCollection, readCollection, writeCollection } = require("../storag
 const { getPrices } = require("../services/binanceService");
 const { getLtp } = require("../services/smartApiService");
 const { getInstrumentUniverse } = require("../services/smartInstrumentService");
-const { createManualSignal, getStatus, scanNow, start, stop } = require("../services/signalEngine");
+const { createManualSignal, generateForCoin, getPausedCoins, getStatus, pauseCoin, resumeCoin, scanNow, start, stop } = require("../services/signalEngine");
 
 const router = express.Router();
 
@@ -536,6 +536,47 @@ router.post("/engine/start", requireAuth, requireAdmin, (req, res) => {
   return res.json({
     engine: start(),
   });
+});
+
+// ─── Admin: Get paused coins list ─────────────────────────────────────────────
+router.get("/admin/paused-coins", requireAuth, requireAdmin, (req, res) => {
+  return res.json({ pausedCoins: getPausedCoins() });
+});
+
+// ─── Admin: Pause a coin ──────────────────────────────────────────────────────
+router.post("/admin/pause-coin", requireAuth, requireAdmin, (req, res) => {
+  try {
+    const { symbol, reason } = req.body || {};
+    if (!symbol) return res.status(400).json({ message: "symbol required" });
+    const pausedCoins = pauseCoin(symbol, req.user, reason);
+    return res.json({ success: true, pausedCoins });
+  } catch (e) {
+    return res.status(500).json({ message: e.message });
+  }
+});
+
+// ─── Admin: Resume a coin ─────────────────────────────────────────────────────
+router.post("/admin/resume-coin", requireAuth, requireAdmin, (req, res) => {
+  try {
+    const { symbol } = req.body || {};
+    if (!symbol) return res.status(400).json({ message: "symbol required" });
+    const pausedCoins = resumeCoin(symbol);
+    return res.json({ success: true, pausedCoins });
+  } catch (e) {
+    return res.status(500).json({ message: e.message });
+  }
+});
+
+// ─── Admin: Search & Force-Generate signal for a coin ─────────────────────────
+router.post("/admin/generate-for-coin", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { symbol } = req.body || {};
+    if (!symbol) return res.status(400).json({ message: "symbol required" });
+    const result = await generateForCoin(symbol, req.user);
+    return res.json(result);
+  } catch (e) {
+    return res.status(500).json({ message: e.message });
+  }
 });
 
 router.post("/engine/stop", requireAuth, requireAdmin, (req, res) => {
