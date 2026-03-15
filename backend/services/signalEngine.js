@@ -1,7 +1,7 @@
 const { SIGNAL_STATUS, createSignal } = require("../models/Signal");
 const { readCollection, mutateCollection } = require("../storage/fileStore");
 const { getKlines, getPrices, getAllFuturesCoins, getAllTickerStats } = require("./binanceService");
-const { analyzeCandles } = require("./indicatorEngine");
+const { analyzeCandles, computeFibonacci } = require("./indicatorEngine");
 
 // Fallback list if Binance exchangeInfo API fails
 const FALLBACK_COINS = [
@@ -111,9 +111,11 @@ function getPerformanceAdjustments(performanceSnapshot, timeframe, side) {
 }
 
 const engineState = {
-  intervalMs: Number(process.env.SCAN_INTERVAL_MS || 60000),
+  intervalMs: Number(process.env.SCAN_INTERVAL_MS || 300000), // 5 min default
   isScanning: false, lastError: null, lastGenerated: 0,
   lastScanAt: null, running: false, scanCount: 0, timer: null,
+  // Admin-controlled pause list: { [SYMBOL]: { pausedAt, reason, pausedBy } }
+  pausedCoins: {},
 };
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
@@ -1000,8 +1002,12 @@ async function scanNow({ source = "ENGINE" } = {}) {
     };
 
     for (const market of coins) {
+      if (engineState.pausedCoins[market.symbol]) {
+        errors.push({ coin: market.symbol, message: "Paused by admin" });
+        continue;
+      }
       await attempt(market);
-      await sleep(200); // 200ms between coins
+      await sleep(300); // 300ms between coins — reduced from 200ms to ease Bybit rate limits
     }
 
     if (!generatedSignals.length) {
@@ -1034,7 +1040,7 @@ function getStatus() {
 }
 function start() {
   if (engineState.timer) { engineState.running = true; return getStatus(); }
-  engineState.intervalMs = Number(process.env.SCAN_INTERVAL_MS || engineState.intervalMs || 60000);
+  engineState.intervalMs = Number(process.env.SCAN_INTERVAL_MS || engineState.intervalMs || 300000);
   engineState.timer = setInterval(() => { scanNow({ source:"ENGINE" }).catch(e => { engineState.lastError = e.message; }); }, engineState.intervalMs);
   engineState.running = true;
   scanNow({ source:"ENGINE" }).catch(e => { engineState.lastError = e.message; });
@@ -1045,4 +1051,144 @@ function stop() {
   engineState.running = false;
   return getStatus();
 }
-module.exports = { createManualSignal, evaluateActiveSignals, getCoinList, getStatus, scanNow, start, stop };
+// ─── Admin: Pause / Resume coins ─────────────────────────────────────────────
+function pauseCoin(symbol, actor, reason = "") {
+  const coin = String(symbol || "").trim().toUpperCase();
+  if (!coin) throw new Error("Symbol required");
+  engineState.pausedCoins[coin] = {
+    pausedAt: new Date().toISOString(),
+    reason:   reason || "Repeated stop losses",
+    pausedBy: actor?.email || "admin",
+  };
+  return engineState.pausedCoins;
+}
+
+function resumeCoin(symbol) {
+  const coin = String(symbol || "").trim().toUpperCase();
+  delete engineState.pausedCoins[coin];
+  return engineState.pausedCoins;
+}
+
+function getPausedCoins() {
+  return engineState.pausedCoins;
+}
+
+// ─── Admin: Force-generate signal for a specific coin ─────────────────────────
+// Uses relaxed thresholds + bypasses Fibonacci gate so admin always gets a result
+// Returns { generated, signal?, message, diagnostics }
+async function generateForCoin(symbol, actor) {
+  const coin = String(symbol || "").trim().toUpperCase();
+  if (!coin) throw new Error("Symbol required");
+
+  const marketActivity = buildFallbackMarketActivity(coin);
+  const { candidate, diagnostics } = await analyzeCoinForAdmin(coin, marketActivity);
+
+  if (!candidate) {
+    const reasons = Object.entries(diagnostics.gateResults || {})
+      .map(([tf, r]) => `[${tf}] ${typeof r === "object" ? r.verdict : r}`)
+      .join(" | ");
+    return {
+      generated: false,
+      message: `No signal for ${coin}. Gate results: ${reasons || "All timeframes failed"}`,
+      diagnostics,
+    };
+  }
+
+  candidate.source    = "ADMIN_SEARCH";
+  candidate.updatedAt = new Date().toISOString();
+  if (candidate.scanMeta) candidate.scanMeta.createdBy = actor?.email || "admin";
+  const signal = await persistSignal(candidate);
+  return { generated: true, signal, diagnostics };
+}
+
+// Relaxed analyzer: majority HTF agreement enough, Fib gate skipped, lower publishFloor
+async function analyzeCoinForAdmin(coin, marketActivity = null) {
+  const analyses  = {};
+  const diagnostics = { coin, timeframes: {}, gateResults: {} };
+
+  for (const tf of SCAN_TIMEFRAMES) {
+    try {
+      const candles = await getKlines(coin, tf, 260);
+      if (!candles || candles.length < 20) { diagnostics.timeframes[tf] = "NO_DATA"; continue; }
+      analyses[tf]  = analyzeCandles(candles);
+      diagnostics.timeframes[tf] = "OK";
+    } catch (e) { diagnostics.timeframes[tf] = `ERROR: ${e.message}`; }
+    await new Promise(r => setTimeout(r, 80));
+  }
+
+  const htf = {
+    daily:   analyses["1d"]  || null,
+    twelveH: analyses["12h"] || null,
+    fourH:   analyses["4h"]  || null,
+    oneH:    analyses["1h"]  || null,
+  };
+
+  for (const tf of getTradeTimeframes()) {
+    if (!analyses[tf]) { diagnostics.gateResults[tf] = "SKIP: no data"; continue; }
+
+    const analysis = analyses[tf];
+    const price    = analysis.currentPrice;
+    const gates    = {};
+
+    // GATE 1: HTF bias — try strict first, then relaxed majority vote
+    let bias = getHigherTimeframeBias(analyses);
+    if (bias === "NEUTRAL") {
+      // Relaxed: check 4h, 1h, 12h — majority wins
+      const pool = [analyses["4h"], analyses["1h"], analyses["12h"]].filter(Boolean);
+      const dirs = pool.map(a => {
+        const { ema50, ema100, adx } = a.trend;
+        const rsi = a.momentum?.rsi || 50;
+        if (ema50 > ema100 * 0.998 && (adx||0) >= 12 && rsi >= 33 && rsi <= 75) return "BULLISH";
+        if (ema50 < ema100 * 1.002 && (adx||0) >= 12 && rsi <= 67 && rsi >= 25) return "BEARISH";
+        return "NEUTRAL";
+      }).filter(d => d !== "NEUTRAL");
+      const bulls = dirs.filter(d => d === "BULLISH").length;
+      const bears = dirs.filter(d => d === "BEARISH").length;
+      if (bulls > bears) bias = "BULLISH";
+      else if (bears > bulls) bias = "BEARISH";
+    }
+    gates.htfBias = bias !== "NEUTRAL" ? `PASS (${bias})` : "FAIL";
+    if (bias === "NEUTRAL") { diagnostics.gateResults[tf] = { gates, verdict: "FAIL — HTF not aligned" }; continue; }
+    const side = bias === "BULLISH" ? "LONG" : "SHORT";
+
+    // GATE 2: EMA stack
+    const { ema21, ema50, ema200, adx, pdi, mdi } = analysis.trend;
+    const emaOk = side === "LONG"
+      ? (ema21||0) > (ema50||0) * 0.997 && (ema50||0) > (ema200||0) * 0.993
+      : (ema21||0) < (ema50||0) * 1.003 && (ema50||0) < (ema200||0) * 1.007;
+    gates.ema = emaOk ? "PASS" : `FAIL (EMA stack not aligned for ${side})`;
+    if (!emaOk) { diagnostics.gateResults[tf] = { side, gates, verdict: "FAIL — EMA trend" }; continue; }
+
+    // GATE 3: ADX (relaxed -20%)
+    const minAdxRelaxed = ((TIMEFRAME_RULES[tf]?.minAdx ?? 20) * 0.80);
+    const adxOk = (adx||0) >= minAdxRelaxed;
+    gates.adx = adxOk ? `PASS (ADX ${(adx||0).toFixed(1)})` : `FAIL (${(adx||0).toFixed(1)} < ${minAdxRelaxed.toFixed(0)})`;
+    if (!adxOk) { diagnostics.gateResults[tf] = { side, gates, verdict: "FAIL — ADX too weak" }; continue; }
+
+    // GATE 4: Not ranging
+    gates.regime = analysis.regime !== "RANGING" ? `PASS (${analysis.regime})` : "FAIL — RANGING market";
+    if (analysis.regime === "RANGING") { diagnostics.gateResults[tf] = { side, gates, verdict: "FAIL — ranging market" }; continue; }
+
+    // Build with relaxed floor (Fib gate skipped via options.skipFib)
+    const activity   = marketActivity || buildFallbackMarketActivity(coin);
+    const origRules  = { ...(TIMEFRAME_RULES[tf] || {}) };
+    TIMEFRAME_RULES[tf] = { ...origRules, publishFloor: 40, minScore: 35, minConfirmations: 2 };
+    let candidate;
+    try {
+      candidate = buildCandidate(coin, tf, analysis, bias, htf, activity, null, { skipFib: true });
+    } finally {
+      TIMEFRAME_RULES[tf] = origRules;
+    }
+
+    if (candidate) {
+      diagnostics.gateResults[tf] = { side, gates, verdict: "PASS ✅", confidence: candidate.confidence };
+      diagnostics.winner = tf;
+      return { candidate, diagnostics };
+    }
+    diagnostics.gateResults[tf] = { side, gates, verdict: "FAIL — score too low even relaxed" };
+  }
+
+  return { candidate: null, diagnostics };
+}
+
+module.exports = { createManualSignal, evaluateActiveSignals, getCoinList, getStatus, scanNow, start, stop, pauseCoin, resumeCoin, getPausedCoins, generateForCoin };
