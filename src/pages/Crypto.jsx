@@ -282,16 +282,52 @@ export default function Crypto() {
 
             {searchResult && (
               <div style={{
-                marginTop: 10, padding: "10px 14px", borderRadius: 10,
+                marginTop: 10, padding: "12px 14px", borderRadius: 10,
                 background: searchResult.generated
                   ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)",
                 border: `1px solid ${searchResult.generated ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)"}`,
-                color: searchResult.generated ? "#22c55e" : "#ef4444",
                 fontSize: 13,
               }}>
-                {searchResult.generated
-                  ? `✅ Signal generated! ${searchResult.signal?.coin} — ${searchResult.signal?.side} @ ${searchResult.signal?.entry} | Confidence: ${searchResult.signal?.confidence}%`
-                  : `⚠️ ${searchResult.message}`}
+                {searchResult.generated ? (
+                  <div style={{ color: "#22c55e" }}>
+                    ✅ Signal generated! <strong>{searchResult.signal?.coin}</strong> — {searchResult.signal?.side} @ {searchResult.signal?.entry} | Confidence: {searchResult.signal?.confidence}%
+                    {searchResult.diagnostics?.gateResults && (
+                      <div style={{ marginTop: 6, fontSize: 11, color: "#86efac" }}>
+                        Timeframe: {searchResult.diagnostics.winner?.toUpperCase()} | Fib: {Object.values(searchResult.diagnostics.gateResults).find(r => r?.gates?.fibonacci)?.gates?.fibonacci || "—"}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ color: "#ef4444", marginBottom: 8 }}>
+                      ⚠️ No signal generated for <strong>{searchCoin.trim().toUpperCase()}</strong>
+                    </div>
+                    {searchResult.diagnostics?.gateResults && (
+                      <div style={{ fontSize: 11, display: "flex", flexDirection: "column", gap: 4 }}>
+                        {Object.entries(searchResult.diagnostics.gateResults).map(([tf, r]) => {
+                          const verdict = typeof r === "object" ? r.verdict : r;
+                          const passed  = verdict?.includes("PASS");
+                          return (
+                            <div key={tf} style={{
+                              padding: "4px 8px", borderRadius: 6,
+                              background: passed ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+                              color: passed ? "#86efac" : "#fca5a5",
+                              display: "flex", gap: 8,
+                            }}>
+                              <span style={{ fontWeight: 700, minWidth: 28 }}>{tf.toUpperCase()}</span>
+                              <span>{verdict}</span>
+                              {typeof r === "object" && r.gates && (
+                                <span style={{ color: "#64748b", marginLeft: "auto" }}>
+                                  {Object.entries(r.gates).map(([g, v]) => `${g}:${v?.split(" ")[0]}`).join(" · ")}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
