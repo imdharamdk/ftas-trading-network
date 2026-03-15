@@ -3,6 +3,7 @@ import AppShell from "../components/AppShell";
 import SignalTable from "../components/SignalTable";
 import { apiFetch } from "../lib/api";
 import { getSignalCoins, mergeSignalLivePrices } from "../lib/liveSignalPrices";
+import { useSession } from "../context/useSession";
 
 // ─── Expiry config (must match backend SIGNAL_EXPIRY_MS) ─────────────────────
 const EXPIRY_MS = { "1m": 5 * 60 * 1000, "5m": 15 * 60 * 1000 };
@@ -47,12 +48,77 @@ function ExpiryCountdown({ signal }) {
 }
 
 export default function Crypto() {
+  const { user } = useSession();
+  const isAdmin = user?.role === "ADMIN";
+
   const [activeSignals, setActiveSignals]   = useState([]);
   const [historySignals, setHistorySignals] = useState([]);
   const [overview, setOverview]             = useState(null);
   const [loading, setLoading]               = useState(true);
   const [error, setError]                   = useState("");
   const [tab, setTab]                       = useState("active"); // "active" | "closed"
+
+  // ── Admin: coin search + paused coins ──────────────────────────────────────
+  const [searchCoin, setSearchCoin]         = useState("");
+  const [searchLoading, setSearchLoading]   = useState(false);
+  const [searchResult, setSearchResult]     = useState(null);
+  const [pausedCoins, setPausedCoins]       = useState({});
+  const [pauseReason, setPauseReason]       = useState("");
+
+  // ── Admin: load paused coins ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isAdmin) return;
+    apiFetch("/signals/admin/paused-coins")
+      .then((res) => setPausedCoins(res.pausedCoins || {}))
+      .catch(() => {});
+  }, [isAdmin]);
+
+  async function handleSearchGenerate() {
+    const coin = searchCoin.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!coin) return;
+    const symbol = coin.endsWith("USDT") ? coin : `${coin}USDT`;
+    setSearchLoading(true);
+    setSearchResult(null);
+    try {
+      const res = await apiFetch("/signals/admin/generate-for-coin", {
+        method: "POST",
+        body: { symbol },
+      });
+      setSearchResult(res);
+      if (res.generated) {
+        // Reload active signals after new signal generated
+        const activeRes = await apiFetch("/signals/active?limit=100");
+        const all = activeRes.signals || [];
+        setActiveSignals(all.filter(s => s.source !== "SMART_ENGINE" && ["1m","5m"].includes(s.timeframe)));
+        setTab("active");
+      }
+    } catch (e) {
+      setSearchResult({ generated: false, message: e.message });
+    } finally {
+      setSearchLoading(false);
+    }
+  }
+
+  async function handlePauseCoin(symbol) {
+    try {
+      const res = await apiFetch("/signals/admin/pause-coin", {
+        method: "POST",
+        body: { symbol, reason: pauseReason || "Repeated stop losses" },
+      });
+      setPausedCoins(res.pausedCoins || {});
+      setPauseReason("");
+    } catch (e) { alert(e.message); }
+  }
+
+  async function handleResumeCoin(symbol) {
+    try {
+      const res = await apiFetch("/signals/admin/resume-coin", {
+        method: "POST",
+        body: { symbol },
+      });
+      setPausedCoins(res.pausedCoins || {});
+    } catch (e) { alert(e.message); }
+  }
 
   const signalCoinsKey = getSignalCoins(activeSignals).join(",");
 
@@ -171,6 +237,147 @@ export default function Crypto() {
           <span className="metric-meta">Auto-closed (no hit)</span>
         </article>
       </section>
+
+      {/* ── ADMIN PANEL ─────────────────────────────────────────────────────── */}
+      {isAdmin && (
+        <section className="panel" style={{ marginBottom: 20 }}>
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Admin Controls</span>
+              <h2>🔧 Signal Management</h2>
+            </div>
+          </div>
+
+          {/* ── Coin Search & Force Generate ──────────────────────────────── */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#94a3b8", marginBottom: 8 }}>
+              🔍 Search Coin &amp; Generate Signal
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input
+                type="text"
+                value={searchCoin}
+                onChange={(e) => setSearchCoin(e.target.value.toUpperCase())}
+                onKeyDown={(e) => e.key === "Enter" && handleSearchGenerate()}
+                placeholder="e.g. BTC or BTCUSDT"
+                style={{
+                  background: "rgba(255,255,255,0.06)", border: "1px solid rgba(99,102,241,0.35)",
+                  borderRadius: 8, padding: "8px 14px", color: "#e2e8f0",
+                  fontSize: 13, outline: "none", width: 180,
+                }}
+              />
+              <button
+                onClick={handleSearchGenerate}
+                disabled={searchLoading || !searchCoin.trim()}
+                style={{
+                  background: "linear-gradient(135deg,#6366f1,#8b5cf6)",
+                  border: "none", borderRadius: 8, padding: "8px 18px",
+                  color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer",
+                  opacity: (searchLoading || !searchCoin.trim()) ? 0.5 : 1,
+                }}
+              >
+                {searchLoading ? "⏳ Scanning…" : "⚡ Generate Signal"}
+              </button>
+            </div>
+
+            {searchResult && (
+              <div style={{
+                marginTop: 10, padding: "10px 14px", borderRadius: 10,
+                background: searchResult.generated
+                  ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)",
+                border: `1px solid ${searchResult.generated ? "rgba(34,197,94,0.25)" : "rgba(239,68,68,0.25)"}`,
+                color: searchResult.generated ? "#22c55e" : "#ef4444",
+                fontSize: 13,
+              }}>
+                {searchResult.generated
+                  ? `✅ Signal generated! ${searchResult.signal?.coin} — ${searchResult.signal?.side} @ ${searchResult.signal?.entry} | Confidence: ${searchResult.signal?.confidence}%`
+                  : `⚠️ ${searchResult.message}`}
+              </div>
+            )}
+          </div>
+
+          {/* ── Paused Coins Manager ──────────────────────────────────────── */}
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#94a3b8", marginBottom: 10 }}>
+              🚫 Paused Coins (Removed from Scanner)
+            </div>
+
+            {/* Pause a coin */}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12, alignItems: "center" }}>
+              <input
+                type="text"
+                placeholder="Coin to pause, e.g. SOLUSDT"
+                id="pauseCoinInput"
+                style={{
+                  background: "rgba(255,255,255,0.06)", border: "1px solid rgba(239,68,68,0.35)",
+                  borderRadius: 8, padding: "8px 14px", color: "#e2e8f0",
+                  fontSize: 13, outline: "none", width: 180,
+                }}
+              />
+              <input
+                type="text"
+                value={pauseReason}
+                onChange={(e) => setPauseReason(e.target.value)}
+                placeholder="Reason (optional)"
+                style={{
+                  background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: 8, padding: "8px 14px", color: "#e2e8f0",
+                  fontSize: 13, outline: "none", width: 200,
+                }}
+              />
+              <button
+                onClick={() => {
+                  const sym = document.getElementById("pauseCoinInput").value.trim().toUpperCase();
+                  if (!sym) return;
+                  const symbol = sym.endsWith("USDT") ? sym : `${sym}USDT`;
+                  handlePauseCoin(symbol);
+                  document.getElementById("pauseCoinInput").value = "";
+                }}
+                style={{
+                  background: "rgba(239,68,68,0.2)", border: "1px solid rgba(239,68,68,0.4)",
+                  borderRadius: 8, padding: "8px 16px",
+                  color: "#ef4444", fontWeight: 700, fontSize: 13, cursor: "pointer",
+                }}
+              >
+                🚫 Pause Coin
+              </button>
+            </div>
+
+            {/* List of paused coins */}
+            {Object.keys(pausedCoins).length === 0 ? (
+              <div style={{ color: "#475569", fontSize: 13 }}>No coins are currently paused. ✅</div>
+            ) : (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {Object.entries(pausedCoins).map(([symbol, info]) => (
+                  <div key={symbol} style={{
+                    background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)",
+                    borderRadius: 10, padding: "8px 12px",
+                    display: "flex", alignItems: "center", gap: 10,
+                  }}>
+                    <div>
+                      <div style={{ fontWeight: 700, color: "#ef4444", fontSize: 13 }}>{symbol}</div>
+                      <div style={{ fontSize: 11, color: "#64748b" }}>{info.reason}</div>
+                      <div style={{ fontSize: 10, color: "#475569" }}>
+                        by {info.pausedBy} · {new Date(info.pausedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleResumeCoin(symbol)}
+                      style={{
+                        background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.3)",
+                        borderRadius: 7, padding: "5px 12px",
+                        color: "#22c55e", fontWeight: 700, fontSize: 12, cursor: "pointer",
+                      }}
+                    >
+                      ▶ Resume
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Tab switcher */}
       <div className="tab-bar">
