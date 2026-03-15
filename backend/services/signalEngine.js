@@ -103,6 +103,8 @@ const engineState = {
   isScanning: false, lastError: null, lastGenerated: 0,
   lastScanAt: null, running: false, scanCount: 0,
   timer: null, expiryTimer: null,
+  // Admin-controlled coin pause list: { [SYMBOL]: { pausedAt, reason, pausedBy } }
+  pausedCoins: {},
 };
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
@@ -708,6 +710,11 @@ async function scanNow({ source = "ENGINE" } = {}) {
     const scanUniverse        = await getScanUniverse();
     const coins               = scanUniverse.slice(0, getMaxCoinsPerScan());
     for (const market of coins) {
+      // Skip admin-paused coins
+      if (engineState.pausedCoins[market.symbol]) {
+        errors.push({ coin: market.symbol, message: "Paused by admin — skipped in scan" });
+        continue;
+      }
       try {
         const candidate = await analyzeCoin(market.symbol, market, performanceSnapshot);
         if (!candidate) continue;
@@ -770,4 +777,47 @@ function stop() {
   return getStatus();
 }
 
-module.exports = { createManualSignal, evaluateActiveSignals, getCoinList, getStatus, scanNow, start, stop };
+// ─── Admin: Pause / Resume Coins ─────────────────────────────────────────────
+function pauseCoin(symbol, actor, reason = "") {
+  const coin = String(symbol || "").trim().toUpperCase();
+  if (!coin) throw new Error("Symbol required");
+  engineState.pausedCoins[coin] = {
+    pausedAt: new Date().toISOString(),
+    reason: reason || "Repeated stop losses",
+    pausedBy: actor?.email || "admin",
+  };
+  return engineState.pausedCoins;
+}
+
+function resumeCoin(symbol) {
+  const coin = String(symbol || "").trim().toUpperCase();
+  delete engineState.pausedCoins[coin];
+  return engineState.pausedCoins;
+}
+
+function getPausedCoins() {
+  return engineState.pausedCoins;
+}
+
+// ─── Admin: Force-generate signal for a specific coin ─────────────────────────
+async function generateForCoin(symbol, actor) {
+  const coin = String(symbol || "").trim().toUpperCase();
+  if (!coin) throw new Error("Symbol required");
+
+  // Build minimal market activity so analyzeCoin doesn't crash
+  const marketActivity = buildFallbackMarketActivity(coin);
+  const performanceSnapshot = await getPerformanceSnapshot();
+
+  const candidate = await analyzeCoin(coin, marketActivity, performanceSnapshot);
+  if (!candidate) {
+    return { generated: false, message: `No qualifying signal found for ${coin} — indicators may not be aligned.` };
+  }
+  // Even if a duplicate exists, allow admin-forced generation
+  candidate.source    = "ADMIN_SEARCH";
+  candidate.updatedAt = new Date().toISOString();
+  if (candidate.scanMeta) candidate.scanMeta.createdBy = actor?.email || "admin";
+  const signal = await persistSignal(candidate);
+  return { generated: true, signal };
+}
+
+module.exports = { createManualSignal, evaluateActiveSignals, getCoinList, getStatus, scanNow, start, stop, pauseCoin, resumeCoin, getPausedCoins, generateForCoin };
