@@ -56,7 +56,9 @@ export default function ChatBox() {
   useEffect(() => {
     if (!user) return;
     fetchMessages(true);
-    pollRef.current = setInterval(() => fetchMessages(open), 5000);
+    // Only poll when chat panel is open — saves API calls when closed
+    if (!open) return;
+    pollRef.current = setInterval(() => fetchMessages(true), 8000); // 8s when open
     return () => clearInterval(pollRef.current);
   }, [user, open]);
 
