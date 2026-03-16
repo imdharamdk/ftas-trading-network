@@ -274,8 +274,13 @@ async function attachLivePrices(signals) {
         const universe = getInstrumentUniverse();
         const tokenMap = {};
         for (const inst of universe) {
-          const key = (inst.symbol || inst.tradingSymbol || "").toUpperCase();
-          if (key) tokenMap[key] = { exchange: inst.exchange, token: String(inst.token) };
+          const tradingKey = (inst.tradingSymbol || "").toUpperCase().trim();
+          const symbolKey  = (inst.symbol || "").toUpperCase().trim();
+          const bareKey = symbolKey.includes(":") ? symbolKey.split(":")[1] : symbolKey;
+          const entry = { exchange: inst.exchange, token: String(inst.token) };
+          if (tradingKey) tokenMap[tradingKey] = entry;
+          if (bareKey && bareKey !== tradingKey) tokenMap[bareKey] = entry;
+          if (symbolKey && symbolKey !== tradingKey && symbolKey !== bareKey) tokenMap[symbolKey] = entry;
         }
         const byExchange = {};
         for (const coin of stockCoins) {
@@ -412,8 +417,13 @@ router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) =>
         const universe = getInstrumentUniverse();
         const tokenMap = {};
         for (const inst of universe) {
-          const key = (inst.symbol || inst.tradingSymbol || "").toUpperCase();
-          if (key) tokenMap[key] = { exchange: inst.exchange, token: String(inst.token) };
+          const tradingKey = (inst.tradingSymbol || "").toUpperCase().trim();
+          const symbolKey  = (inst.symbol || "").toUpperCase().trim();
+          const bareKey = symbolKey.includes(":") ? symbolKey.split(":")[1] : symbolKey;
+          const entry = { exchange: inst.exchange, token: String(inst.token) };
+          if (tradingKey) tokenMap[tradingKey] = entry;
+          if (bareKey && bareKey !== tradingKey) tokenMap[bareKey] = entry;
+          if (symbolKey && symbolKey !== tradingKey && symbolKey !== bareKey) tokenMap[symbolKey] = entry;
         }
 
         // Batch into groups of 50 (Angel One quote API limit)
