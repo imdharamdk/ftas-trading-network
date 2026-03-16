@@ -2,6 +2,11 @@ const { SIGNAL_STATUS, createSignal } = require("../models/Signal");
 const { readCollection, mutateCollection } = require("../storage/fileStore");
 const { getKlines, getPrices, getAllFuturesCoins, getAllTickerStats } = require("./binanceService");
 const { analyzeCandles } = require("./indicatorEngine");
+const { ensureSession } = require("./smartApiService");
+const { getInstrumentUniverse } = require("./smartInstrumentService");
+
+// ─── STOCK COLLECTION NAME ────────────────────────────────────────────────────
+const STOCK_COLLECTION = "stockSignals";
 
 // ─── BALANCED ACCURACY MODE ───────────────────────────────────────────────────
 // Philosophy: "Achhe signals aayein, TP bhi hit ho — balance between frequency & accuracy"
@@ -626,15 +631,64 @@ async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = nu
   return candidates.sort((a, b) => b.confidence - a.confidence)[0];
 }
 
+// ─── Angel One batch price fetch for stock signals ────────────────────────────
+async function fetchStockPrices(coins) {
+  if (!coins.length) return {};
+  try {
+    const universe = getInstrumentUniverse();
+    const tokenMap = {};
+    for (const inst of universe) {
+      const key = (inst.symbol || inst.tradingSymbol || "").toUpperCase();
+      if (key) tokenMap[key] = { exchange: inst.exchange, token: String(inst.token) };
+    }
+    const byExchange = {};
+    const tokenToCoin = {};
+    for (const coin of coins) {
+      const info = tokenMap[coin];
+      if (!info) continue;
+      if (!byExchange[info.exchange]) byExchange[info.exchange] = [];
+      byExchange[info.exchange].push(info.token);
+      tokenToCoin[info.token] = coin;
+    }
+    if (!Object.keys(byExchange).length) return {};
+    const axios  = require("axios");
+    const token  = await ensureSession();
+    const baseUrl = process.env.SMART_API_BASE_URL || "https://apiconnect.angelone.in";
+    const resp   = await axios.post(
+      `${baseUrl}/rest/secure/angelbroking/market/v1/quote/`,
+      { mode: "LTP", exchangeTokens: byExchange },
+      {
+        headers: {
+          "Content-Type": "application/json", Accept: "application/json",
+          "X-PrivateKey": process.env.SMART_API_KEY,
+          "X-UserType": "USER", "X-SourceID": "WEB",
+          Authorization: `Bearer ${token}`,
+        },
+        timeout: 8000,
+      }
+    );
+    const priceMap = {};
+    for (const item of resp.data?.data?.fetched || []) {
+      const coinName = tokenToCoin[String(item.symbolToken)];
+      const price = Number(item.ltp) || Number(item.close);
+      if (coinName && Number.isFinite(price) && price > 0) priceMap[coinName] = price;
+    }
+    return priceMap;
+  } catch (e) {
+    console.error("[stockEngine/fetchStockPrices] Error:", e.message);
+    return {};
+  }
+}
+
 // ─── Signal Evaluation (TP/SL only) ──────────────────────────────────────────
 async function evaluateActiveSignals() {
-  const signals = await readCollection("signals");
+  const signals = await readCollection(STOCK_COLLECTION);
   const active  = signals.filter(s => s.status === SIGNAL_STATUS.ACTIVE);
   if (!active.length) return [];
-  const prices = await getPrices([...new Set(active.map(s => s.coin))]);
+  const prices = await fetchStockPrices([...new Set(active.map(s => s.coin))]);
   const now    = new Date().toISOString();
   const closed = [];
-  await mutateCollection("signals", records => records.map(sig => {
+  await mutateCollection(STOCK_COLLECTION, records => records.map(sig => {
     if (sig.status !== SIGNAL_STATUS.ACTIVE) return sig;
     const price = prices[sig.coin];
     if (!Number.isFinite(price)) return sig;
@@ -657,7 +711,7 @@ async function evaluateActiveSignals() {
 
 async function getPerformanceSnapshot() {
   try {
-    const signals = await readCollection("signals");
+    const signals = await readCollection(STOCK_COLLECTION);
     const stats   = { overall: buildTally(), LONG: buildTally(), SHORT: buildTally(), "5m": buildTally(), "1m": buildTally() };
     for (const sig of signals) {
       const isWin  = WIN_RESULTS.has(sig.result);
@@ -678,10 +732,10 @@ async function getPerformanceSnapshot() {
 
 // ─── Persist / Manual ────────────────────────────────────────────────────────
 async function persistSignal(signal) {
-  return mutateCollection("signals", records => ({ records: [signal, ...records], value: signal }));
+  return mutateCollection(STOCK_COLLECTION, records => ({ records: [signal, ...records], value: signal }));
 }
 async function signalExists(candidate) {
-  const signals = await readCollection("signals");
+  const signals = await readCollection(STOCK_COLLECTION);
   return signals.some(s => s.status === SIGNAL_STATUS.ACTIVE && s.coin === candidate.coin && s.side === candidate.side && s.timeframe === candidate.timeframe);
 }
 async function createManualSignal(payload, actor) {
@@ -742,7 +796,7 @@ function getStatus() {
 // ─── Fast Expiry Checker (every 30s) ─────────────────────────────────────────
 async function checkAndExpireSignals() {
   try {
-    const signals = await readCollection("signals");
+    const signals = await readCollection(STOCK_COLLECTION);
     if (!signals.filter(s => s.status === SIGNAL_STATUS.ACTIVE).length) return;
     const nowMs = Date.now(), now = new Date().toISOString();
     let hasExpired = false;
@@ -756,7 +810,7 @@ async function checkAndExpireSignals() {
       }
       return sig;
     });
-    if (hasExpired) { const { writeCollection } = require("../storage/fileStore"); await writeCollection("signals", updated); }
+    if (hasExpired) { const { writeCollection } = require("../storage/fileStore"); await writeCollection(STOCK_COLLECTION, updated); }
   } catch (e) { engineState.lastError = `Expiry check failed: ${e.message}`; }
 }
 
