@@ -67,6 +67,7 @@ export default function Crypto() {
   const [error, setError]                   = useState("");
   const [tab, setTab]                       = useState("active"); // "active" | "closed"
   const [tfFilter, setTfFilter]             = useState("ALL"); // "ALL"|"1m"|"5m"|"15m"|"30m"|"1h"
+  const [historyLimit, setHistoryLimit]     = useState(50); // show 50 at a time, load more on demand
 
   // ── Admin: coin search + paused coins ──────────────────────────────────────
   const [searchCoin, setSearchCoin]         = useState("");
@@ -141,7 +142,7 @@ export default function Crypto() {
         const [overviewRes, activeRes, historyRes] = await Promise.allSettled([
           apiFetch("/signals/stats/overview"),
           apiFetch("/signals/active?limit=100"),
-          apiFetch("/signals/history?limit=100"),
+          apiFetch("/signals/history?limit=500"),
         ]);
         if (!mounted) return;
 
@@ -195,7 +196,8 @@ export default function Crypto() {
 
   // TF-filtered views
   const filteredActive  = tfFilter === "ALL" ? activeSignals  : activeSignals.filter(s => s.timeframe === tfFilter);
-  const filteredHistory = tfFilter === "ALL" ? historySignals : historySignals.filter(s => s.timeframe === tfFilter);
+  const filteredHistory = (tfFilter === "ALL" ? historySignals : historySignals.filter(s => s.timeframe === tfFilter));
+  const visibleHistory  = filteredHistory.slice(0, historyLimit);
 
   return (
     <AppShell subtitle="Bybit Futures — Multi-timeframe signals (1m · 5m · 15m · 30m · 1h)" title="Crypto Signals">
@@ -447,7 +449,7 @@ export default function Crypto() {
       <div className="tf-filter-bar">
         <span style={{ fontSize: 11, color: "#475569", fontWeight: 600 }}>TIMEFRAME:</span>
         {["ALL","1m","5m","15m","30m","1h"].map(tf => (
-          <button key={tf} className={`tf-btn${tfFilter === tf ? " active" : ""}`} onClick={() => setTfFilter(tf)}>
+          <button key={tf} className={`tf-btn${tfFilter === tf ? " active" : ""}`} onClick={() => { setTfFilter(tf); setHistoryLimit(50); }}>
             {tf}
             {tf !== "ALL" && activeSignals.filter(s => s.timeframe === tf).length > 0 && (
               <span style={{ marginLeft: 4, background: "rgba(99,102,241,0.3)", borderRadius: 8, padding: "0 4px", fontSize: 10 }}>
@@ -530,8 +532,27 @@ export default function Crypto() {
           <SignalTable
             compact
             emptyLabel="No closed signals yet."
-            signals={filteredHistory}
+            signals={visibleHistory}
           />
+          {filteredHistory.length > historyLimit && (
+            <div style={{ textAlign:"center", padding:"16px 0 4px" }}>
+              <button
+                onClick={() => setHistoryLimit(l => l + 50)}
+                style={{
+                  background:"rgba(99,102,241,0.15)", color:"#818cf8",
+                  border:"1px solid rgba(99,102,241,0.3)", borderRadius:8,
+                  padding:"8px 24px", cursor:"pointer", fontSize:13, fontWeight:600,
+                }}
+              >
+                Load More ({historyLimit}/{filteredHistory.length} showing)
+              </button>
+            </div>
+          )}
+          {filteredHistory.length > 0 && filteredHistory.length <= historyLimit && (
+            <p style={{ textAlign:"center", fontSize:12, color:"#475569", padding:"12px 0 0" }}>
+              All {filteredHistory.length} signals loaded
+            </p>
+          )}
         </section>
       )}
     </AppShell>
