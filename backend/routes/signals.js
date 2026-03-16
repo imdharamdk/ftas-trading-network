@@ -348,7 +348,7 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   const filtered = sortByCreatedAtDesc(signals)
     .filter((signal) => signal.status !== SIGNAL_STATUS.ACTIVE)
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
-  const responseSignals = await attachLivePrices(filtered.slice(0, Number(req.query.limit || 100)));
+  const responseSignals = await attachLivePrices(filtered.slice(0, Number(req.query.limit || 500)));
 
   return res.json({
     signals: responseSignals,
