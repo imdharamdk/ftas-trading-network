@@ -1,8 +1,7 @@
 const { SIGNAL_STATUS, createSignal } = require("../models/Signal");
 const { readCollection, mutateCollection } = require("../storage/fileStore");
-const { getKlines, getPrices, getAllFuturesCoins, getAllTickerStats } = require("./binanceService");
 const { analyzeCandles } = require("./indicatorEngine");
-const { ensureSession } = require("./smartApiService");
+const { ensureSession, getCandles: smartGetCandles } = require("./smartApiService");
 const { getInstrumentUniverse } = require("./smartInstrumentService");
 
 // ─── STOCK COLLECTION NAME ────────────────────────────────────────────────────
@@ -23,11 +22,12 @@ const STOCK_COLLECTION = "stockSignals";
 // RESULT: ~8-15 signals per day, ~70-75% TP1 hit rate
 // ─────────────────────────────────────────────────────────────────────────────
 
-const FALLBACK_COINS = [
-  "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
-  "ADAUSDT","DOGEUSDT","AVAXUSDT","LINKUSDT","DOTUSDT",
-  "MATICUSDT","TRXUSDT","LTCUSDT","ATOMUSDT","APTUSDT",
-  "NEARUSDT","ARBUSDT","OPUSDT","SUIUSDT","INJUSDT",
+// Stock engine scans Angel One instruments — NOT crypto coins
+// FALLBACK_STOCKS is used only if instrument universe fails to load
+const FALLBACK_STOCKS = [
+  "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK",
+  "HINDUNILVR","SBIN","BAJFINANCE","KOTAKBANK","LT",
+  "AXISBANK","ASIANPAINT","MARUTI","TITAN","SUNPHARMA",
 ];
 
 const SCAN_TIMEFRAMES          = ["1m","5m","15m","1h","4h","1d"];
@@ -152,25 +152,39 @@ function buildMarketActivitySnapshot(ticker = {}) {
     relaxThresholds: isLiquid && (isCrowded || quoteVolume >= 50_000_000) };
 }
 function getMaxCoinsPerScan() {
-  return clamp(Number(process.env.SCAN_MAX_COINS || DEFAULT_MAX_COINS_PER_SCAN), 5, MAX_COINS_PER_SCAN_CAP);
+  return clamp(Number(process.env.STOCK_SCAN_MAX_COINS || DEFAULT_MAX_COINS_PER_SCAN), 5, MAX_COINS_PER_SCAN_CAP);
 }
-async function getScanUniverse() {
-  const env = String(process.env.SCAN_COINS || "").split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
-  if (env.length) return env.map(buildFallbackMarketActivity);
+
+// ─── Stock Scan Universe — Angel One instruments only ─────────────────────────
+// Returns an array of { symbol } objects from the SmartAPI instrument universe.
+// Falls back to FALLBACK_STOCKS if instrument list is empty.
+function getScanUniverse() {
   try {
-    const ranked = (await getAllTickerStats())
-      .map(buildMarketActivitySnapshot).filter(m => m.symbol.endsWith("USDT"))
-      .sort((a, b) => b.activityScore - a.activityScore || b.quoteVolume - a.quoteVolume || a.symbol.localeCompare(b.symbol));
-    const filtered = ranked.filter(m => m.passesFloor);
-    if (filtered.length) return filtered;
-    if (ranked.length)   return ranked;
-  } catch {}
-  try {
-    const c = await getAllFuturesCoins();
-    return (c.length ? c : FALLBACK_COINS).map(buildFallbackMarketActivity);
-  } catch { return FALLBACK_COINS.map(buildFallbackMarketActivity); }
+    const instruments = getInstrumentUniverse({ limit: MAX_COINS_PER_SCAN_CAP });
+    if (instruments.length) {
+      return instruments.map(inst => ({
+        symbol: (inst.tradingSymbol || inst.symbol || "").toUpperCase(),
+        exchange: inst.exchange,
+        token: inst.token,
+        instrumentType: inst.instrumentType,
+        // satisfy buildMarketActivitySnapshot shape (not used for stocks but prevents crashes)
+        quoteVolume: 0, volume: 0, tradeCount: 0, openInterestValue: 0,
+        activityScore: 0, isLiquid: false, isCrowded: false,
+        passesFloor: true, relaxThresholds: false,
+      })).filter(m => m.symbol);
+    }
+  } catch (e) {
+    console.error("[stockEngine/getScanUniverse] Instrument load failed:", e.message);
+  }
+  // Fallback: use hardcoded NSE equity list
+  return FALLBACK_STOCKS.map(sym => ({
+    symbol: sym, exchange: "NSE", token: null, instrumentType: "EQ",
+    quoteVolume: 0, volume: 0, tradeCount: 0, openInterestValue: 0,
+    activityScore: 0, isLiquid: false, isCrowded: false,
+    passesFloor: true, relaxThresholds: false,
+  }));
 }
-async function getCoinList() { return (await getScanUniverse()).map(m => m.symbol); }
+function getCoinList() { return getScanUniverse().map(m => m.symbol); }
 function getTradeTimeframes() {
   const r = String(process.env.TRADE_TIMEFRAMES || "").split(",").map(s => s.trim()).filter(Boolean);
   return r.length ? r : DEFAULT_TRADE_TIMEFRAMES;
@@ -612,13 +626,52 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   });
 }
 
+// ─── Angel One candle fetch (timeframe mapping) ───────────────────────────────
+const SMART_INTERVAL_MAP = {
+  "1m": "ONE_MINUTE", "3m": "THREE_MINUTE", "5m": "FIVE_MINUTE",
+  "10m": "TEN_MINUTE", "15m": "FIFTEEN_MINUTE", "30m": "THIRTY_MINUTE",
+  "1h": "ONE_HOUR", "4h": "FOUR_HOUR", "1d": "ONE_DAY",
+};
+const TF_LOOKBACK_DAYS = { "1m": 1, "5m": 3, "15m": 7, "1h": 30, "4h": 60, "1d": 365 };
+
+async function fetchStockCandles(symbol, tf, exchange, token) {
+  const smartInterval = SMART_INTERVAL_MAP[tf] || "FIFTEEN_MINUTE";
+  const lookbackDays  = TF_LOOKBACK_DAYS[tf] || 14;
+  const to   = new Date();
+  const from = new Date(to.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
+  try {
+    const raw = await smartGetCandles({ exchange: exchange || "NSE", symbolToken: String(token), interval: smartInterval, from, to });
+    // Angel One format: [[timestamp, open, high, low, close, volume], ...]
+    return raw.map(row => ({
+      openTime: new Date(row[0]).getTime(),
+      open: Number(row[1]), high: Number(row[2]),
+      low: Number(row[3]),  close: Number(row[4]),
+      volume: Number(row[5] || 0),
+    })).filter(c => Number.isFinite(c.open) && c.open > 0);
+  } catch (e) {
+    console.error(`[stockEngine/fetchStockCandles] ${symbol} ${tf}:`, e.message);
+    return [];
+  }
+}
+
 // ─── Coin Scan ────────────────────────────────────────────────────────────────
 async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = null) {
+  // Resolve exchange + token from instrument universe
+  const universe = getInstrumentUniverse({ limit: 5000 });
+  const inst = universe.find(i => (i.tradingSymbol || i.symbol || "").toUpperCase() === coin);
+  const exchange = marketActivity?.exchange || inst?.exchange || "NSE";
+  const token    = marketActivity?.token    || inst?.token    || null;
+
+  if (!token) {
+    console.warn(`[stockEngine/analyzeCoin] No token found for ${coin} — skipping`);
+    return null;
+  }
+
   const analyses = {};
   for (const tf of SCAN_TIMEFRAMES) {
-    const candles = await getKlines(coin, tf, 260);
-    analyses[tf]  = analyzeCandles(candles);
-    await new Promise(r => setTimeout(r, 80));
+    const candles = await fetchStockCandles(coin, tf, exchange, token);
+    if (candles.length >= 20) analyses[tf] = analyzeCandles(candles);
+    await new Promise(r => setTimeout(r, 150)); // Angel One rate limit buffer
   }
   const htf = { daily: analyses["1d"] || null, twelveH: null, fourH: analyses["4h"] || null, oneH: analyses["1h"] || null };
   const tradeTimeframes = getTradeTimeframes();
@@ -761,7 +814,7 @@ async function scanNow({ source = "ENGINE" } = {}) {
   try {
     const closedSignals       = await evaluateActiveSignals();
     const performanceSnapshot = await getPerformanceSnapshot();
-    const scanUniverse        = await getScanUniverse();
+    const scanUniverse        = getScanUniverse();
     const coins               = scanUniverse.slice(0, getMaxCoinsPerScan());
     for (const market of coins) {
       // Skip admin-paused coins
