@@ -149,10 +149,18 @@ function buildPerformance(signals) {
   };
 }
 
+// ─── Crypto filter — stockSignals collection mein kabhi crypto nahi dikhna chahiye ──
+// Crypto coins USDT mein end hote hain (BTCUSDT, ETHUSDT etc.)
+// Stock symbols kabhi USDT mein end nahi hote
+function isCryptoCoin(coin) {
+  return String(coin || "").toUpperCase().endsWith("USDT");
+}
+
 router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
   const signals = await readCollection("stockSignals");
   const filtered = sortByCreatedAtDesc(signals)
     .filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE)
+    .filter((signal) => !isCryptoCoin(signal.coin))   // ← block crypto
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
 
   return res.json({
@@ -164,6 +172,7 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   const signals = await readCollection("stockSignals");
   const filtered = sortByCreatedAtDesc(signals)
     .filter((signal) => signal.status !== SIGNAL_STATUS.ACTIVE)
+    .filter((signal) => !isCryptoCoin(signal.coin))   // ← block crypto
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
 
   return res.json({
@@ -171,22 +180,41 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   });
 });
 
+// ─── Admin: purge crypto signals from stockSignals collection ─────────────────
+router.post("/admin/purge-crypto", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { mutateCollection } = require("../storage/fileStore");
+    let removed = 0;
+    await mutateCollection("stockSignals", (records) => {
+      const clean = records.filter((s) => !isCryptoCoin(s.coin));
+      removed = records.length - clean.length;
+      return clean;
+    });
+    return res.json({ success: true, removed, message: `Removed ${removed} crypto signal(s) from stockSignals collection` });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+});
+
 router.get("/stats/overview", requireAuth, async (req, res) => {
-  const signals = await readCollection("stockSignals");
+  const raw = await readCollection("stockSignals");
+  const signals = raw.filter((s) => !isCryptoCoin(s.coin));
   return res.json({
     stats: buildOverview(signals),
   });
 });
 
 router.get("/stats/analytics", requireAuth, async (req, res) => {
-  const signals = await readCollection("stockSignals");
+  const raw = await readCollection("stockSignals");
+  const signals = raw.filter((s) => !isCryptoCoin(s.coin));
   return res.json({
     analytics: buildAnalytics(signals),
   });
 });
 
 router.get("/stats/performance", requireAuth, async (req, res) => {
-  const signals = await readCollection("stockSignals");
+  const raw = await readCollection("stockSignals");
+  const signals = raw.filter((s) => !isCryptoCoin(s.coin));
   return res.json({
     performance: buildPerformance(signals),
   });
