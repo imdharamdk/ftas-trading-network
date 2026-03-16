@@ -139,34 +139,31 @@ export default function Crypto() {
     let mounted = true;
     async function load() {
       try {
-        const [overviewRes, activeRes, historyRes] = await Promise.allSettled([
+        // Phase 1: Load overview + active signals FAST (no price attachment on backend)
+        const [overviewRes, activeRes] = await Promise.allSettled([
           apiFetch("/signals/stats/overview"),
           apiFetch("/signals/active?limit=100"),
-          apiFetch("/signals/history?limit=500"),
         ]);
         if (!mounted) return;
 
         setOverview(overviewRes.status === "fulfilled" ? overviewRes.value.stats : null);
 
-        const allActive  = activeRes.status  === "fulfilled" ? (activeRes.value.signals  || []) : [];
-        const allHistory = historyRes.status === "fulfilled" ? (historyRes.value.signals || []) : [];
-
         const ALL_TF = ["1m","5m","15m","30m","1h"];
-        // Only crypto engine signals (not stock SMART_ENGINE)
-        setActiveSignals(
-          allActive.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe))
-        );
-        setHistorySignals(
-          allHistory.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe))
-        );
+        const allActive = activeRes.status === "fulfilled" ? (activeRes.value.signals || []) : [];
+        setActiveSignals(allActive.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe)));
+        setLoading(false); // ← show page immediately after active signals load
+
+        // Phase 2: Load history in background (doesn't block initial render)
+        const historyRes = await apiFetch("/signals/history?limit=500").catch(() => ({ signals: [] }));
+        if (!mounted) return;
+        const allHistory = historyRes.signals || [];
+        setHistorySignals(allHistory.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe)));
       } catch (e) {
-        if (mounted) setError(e.message);
-      } finally {
-        if (mounted) setLoading(false);
+        if (mounted) { setError(e.message); setLoading(false); }
       }
     }
     load();
-    // Reload every 15s so newly expired signals appear quickly
+    // Reload every 30s
     const id = window.setInterval(load, 30000);
     return () => { mounted = false; window.clearInterval(id); };
   }, []);
