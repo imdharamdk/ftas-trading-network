@@ -173,69 +173,71 @@ export default function Dashboard() {
   }, [availablePaymentMethods, availablePaymentSettings, availablePlans]);
 
   const loadPublicData = useCallback(async () => {
-    const results = await Promise.allSettled([
-      apiFetch("/signals/active?limit=200"),
-      apiFetch("/signals/history?limit=500"),
-      apiFetch("/stocks/active?limit=200"),
-      apiFetch("/stocks/history?limit=500"),
-      apiFetch("/signals/stats/analytics"),
-      apiFetch("/signals/stats/performance"),
-      apiFetch("/signals/engine/status"),
+    // Phase 1: Load only stats endpoints FAST (small payloads) — show page immediately
+    const [analyticsRes, performanceRes, engineRes] = await Promise.all([
+      apiFetch("/signals/stats/analytics").catch(() => null),
+      apiFetch("/signals/stats/performance").catch(() => null),
+      apiFetch("/signals/engine/status").catch(() => null),
     ]);
-    const [cryptoActiveRes, cryptoHistoryRes, stockActiveRes, stockHistoryRes, analyticsRes, performanceRes, engineRes] = results;
 
-    // Crypto: same filter as Crypto.jsx — 1m/5m, non-SMART_ENGINE only
-    const cryptoActive  = cryptoActiveRes.status  === "fulfilled" ? (cryptoActiveRes.value.signals  || []) : null;
-    const cryptoHistory = cryptoHistoryRes.status === "fulfilled" ? (cryptoHistoryRes.value.signals || []) : null;
-    if (cryptoActive !== null && cryptoHistory !== null) {
-      const filteredActive  = cryptoActive.filter(s => s.source !== "SMART_ENGINE" && ["1m","5m"].includes(s.timeframe));
-      const filteredHistory = cryptoHistory.filter(s => s.source !== "SMART_ENGINE" && ["1m","5m"].includes(s.timeframe));
-      const expiredC  = filteredHistory.filter(s => s.result === "EXPIRED").length;
-      const winsC     = filteredHistory.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result)).length;
-      const lossesC   = filteredHistory.filter(s => s.result === "SL_HIT").length;
-      const resolvedC = filteredHistory.length - expiredC;
-      setOverview({
-        activeSignals:     filteredActive.length,
-        closedSignals:     resolvedC,
-        expiredSignals:    expiredC,
-        totalSignals:      filteredActive.length + filteredHistory.length,
-        totalWins:         winsC,
-        totalLosses:       lossesC,
-        winRate:           resolvedC > 0 ? Number(((winsC / resolvedC) * 100).toFixed(1)) : 0,
-        averageConfidence: filteredActive.length
-          ? Number((filteredActive.reduce((s, x) => s + Number(x.confidence || 0), 0) / filteredActive.length).toFixed(1))
-          : 0,
-      });
-    }
+    if (analyticsRes) setAnalytics(analyticsRes.analytics ?? null);
+    if (performanceRes) setPerformance(performanceRes.performance ?? null);
+    if (engineRes) setEngine(engineRes.engine ?? null);
 
-    // Stocks: same logic as Stocks.jsx — all stockSignals, no timeframe filter
-    const stockActive  = stockActiveRes.status  === "fulfilled" ? (stockActiveRes.value.signals  || []) : null;
-    const stockHistory = stockHistoryRes.status === "fulfilled" ? (stockHistoryRes.value.signals || []) : null;
-    if (stockActive !== null && stockHistory !== null) {
-      const expiredS  = stockHistory.filter(s => s.result === "EXPIRED").length;
-      const winsS     = stockHistory.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result)).length;
-      const lossesS   = stockHistory.filter(s => s.result === "SL_HIT").length;
-      const resolvedS = stockHistory.length - expiredS;
-      setStockOverview({
-        activeSignals:     stockActive.length,
-        closedSignals:     resolvedS,
-        expiredSignals:    expiredS,
-        totalSignals:      stockActive.length + stockHistory.length,
-        totalWins:         winsS,
-        totalLosses:       lossesS,
-        winRate:           resolvedS > 0 ? Number(((winsS / resolvedS) * 100).toFixed(1)) : 0,
-        averageConfidence: stockActive.length
-          ? Number((stockActive.reduce((s, x) => s + Number(x.confidence || 0), 0) / stockActive.length).toFixed(1))
-          : 0,
-      });
-    }
+    // Show page now — don't wait for signal lists
+    setLoading(false);
 
-    if (analyticsRes.status === "fulfilled") setAnalytics(analyticsRes.value.analytics ?? null);
-    if (performanceRes.status === "fulfilled") setPerformance(performanceRes.value.performance ?? null);
-    if (engineRes.status === "fulfilled") setEngine(engineRes.value.engine ?? null);
+    // Phase 2: Load signal lists in background (large payloads)
+    const [cryptoActiveRes, cryptoHistoryRes, stockActiveRes, stockHistoryRes] = await Promise.all([
+      apiFetch("/signals/active?limit=100").catch(() => null),
+      apiFetch("/signals/history?limit=200").catch(() => null),   // reduced from 500
+      apiFetch("/stocks/active?limit=100").catch(() => null),
+      apiFetch("/stocks/history?limit=200").catch(() => null),    // reduced from 500
+    ]);
 
-    const rejected = results.find((r) => r.status === "rejected");
-    return rejected ? rejected.reason : null;
+    // Crypto overview
+    const cryptoActive  = cryptoActiveRes?.signals  || [];
+    const cryptoHistory = cryptoHistoryRes?.signals || [];
+    const filteredActive  = cryptoActive.filter(s => s.source !== "SMART_ENGINE" && ["1m","5m","15m","30m","1h"].includes(s.timeframe));
+    const filteredHistory = cryptoHistory.filter(s => s.source !== "SMART_ENGINE" && ["1m","5m","15m","30m","1h"].includes(s.timeframe));
+    const expiredC  = filteredHistory.filter(s => s.result === "EXPIRED").length;
+    const winsC     = filteredHistory.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result)).length;
+    const lossesC   = filteredHistory.filter(s => s.result === "SL_HIT").length;
+    const resolvedC = filteredHistory.length - expiredC;
+    setOverview({
+      activeSignals:     filteredActive.length,
+      closedSignals:     resolvedC,
+      expiredSignals:    expiredC,
+      totalSignals:      filteredActive.length + filteredHistory.length,
+      totalWins:         winsC,
+      totalLosses:       lossesC,
+      winRate:           resolvedC > 0 ? Number(((winsC / resolvedC) * 100).toFixed(1)) : 0,
+      averageConfidence: filteredActive.length
+        ? Number((filteredActive.reduce((s, x) => s + Number(x.confidence || 0), 0) / filteredActive.length).toFixed(1))
+        : 0,
+    });
+
+    // Stock overview
+    const stockActive  = stockActiveRes?.signals  || [];
+    const stockHistory = stockHistoryRes?.signals || [];
+    const expiredS  = stockHistory.filter(s => s.result === "EXPIRED").length;
+    const winsS     = stockHistory.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result)).length;
+    const lossesS   = stockHistory.filter(s => s.result === "SL_HIT").length;
+    const resolvedS = stockHistory.length - expiredS;
+    setStockOverview({
+      activeSignals:     stockActive.length,
+      closedSignals:     resolvedS,
+      expiredSignals:    expiredS,
+      totalSignals:      stockActive.length + stockHistory.length,
+      totalWins:         winsS,
+      totalLosses:       lossesS,
+      winRate:           resolvedS > 0 ? Number(((winsS / resolvedS) * 100).toFixed(1)) : 0,
+      averageConfidence: stockActive.length
+        ? Number((stockActive.reduce((s, x) => s + Number(x.confidence || 0), 0) / stockActive.length).toFixed(1))
+        : 0,
+    });
+
+    return null;
   }, []);
 
   const loadPrivateData = useCallback(async () => {
@@ -264,20 +266,17 @@ export default function Dashboard() {
     async function loadData() {
       if (!active) return;
       try {
-        const pubErr = await loadPublicData();
-        if (!active) return;
-        const privErr = await loadPrivateData();
-        if (active) setError(pubErr?.message || privErr?.message || "");
+        // Run public and private data in parallel — don't wait for one to finish before the other
+        await Promise.all([
+          loadPublicData().catch(e => { if (active) setError(e?.message || ""); }),
+          loadPrivateData().catch(() => {}),
+        ]);
       } catch (e) {
         if (active) setError(e.message);
-      } finally {
-        if (active) setLoading(false);
       }
     }
-    // Initial load
     loadData();
-    // Poll every 30 seconds for live updates
-    const id = window.setInterval(loadData, 30000);
+    const id = window.setInterval(loadData, 60000); // was 30s — reduce poll frequency
     // Also refresh instantly when user comes back to this tab
     function onVisible() {
       if (document.visibilityState === "visible" && active) loadData();
