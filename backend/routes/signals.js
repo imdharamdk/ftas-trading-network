@@ -335,10 +335,10 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
   const filtered = sortByCreatedAtDesc(signals)
     .filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE)
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
-  const responseSignals = await attachLivePrices(filtered.slice(0, Number(req.query.limit || 50)));
 
+  // Return signals directly — frontend fetches live prices separately via /live-prices
   return res.json({
-    signals: responseSignals,
+    signals: filtered.slice(0, Number(req.query.limit || 50)),
   });
 });
 
@@ -348,10 +348,10 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   const filtered = sortByCreatedAtDesc(signals)
     .filter((signal) => signal.status !== SIGNAL_STATUS.ACTIVE)
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
-  const responseSignals = await attachLivePrices(filtered.slice(0, Number(req.query.limit || 500)));
 
+  // No live price attachment for history — closed signals don't need live prices
   return res.json({
-    signals: responseSignals,
+    signals: req.query.limit ? filtered.slice(0, Number(req.query.limit)) : filtered,
   });
 });
 
