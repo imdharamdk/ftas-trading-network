@@ -30,8 +30,8 @@ const FALLBACK_STOCKS = [
   "AXISBANK","ASIANPAINT","MARUTI","TITAN","SUNPHARMA",
 ];
 
-const SCAN_TIMEFRAMES          = ["1m","5m","15m","1h","4h","1d"];
-const DEFAULT_TRADE_TIMEFRAMES = ["1m","5m"];
+const SCAN_TIMEFRAMES          = ["15m","1h","4h","1d"];
+const DEFAULT_TRADE_TIMEFRAMES = ["15m","1h"];
 const DEFAULT_MAX_COINS_PER_SCAN = 50;
 const MAX_COINS_PER_SCAN_CAP     = 70;
 
@@ -39,51 +39,33 @@ const MIN_SCAN_QUOTE_VOLUME_USDT  = 15_000_000;   // was 25M — include more li
 const MIN_SCAN_TRADE_COUNT_24H    = 20_000;        // was 30K
 const MIN_SCAN_OPEN_INTEREST_USDT = 5_000_000;    // was 8M
 
-const RULE_VERSION = "v16_working";
-const DEFAULT_PUBLISH_FLOOR = 82;                 // was 92 — realistic floor
-const STRENGTH_THRESHOLDS   = { STRONG: 90, MEDIUM: 82 };
+const RULE_VERSION = "v17_stocks_working";
+const DEFAULT_PUBLISH_FLOOR = 76;
+const STRENGTH_THRESHOLDS   = { STRONG: 88, MEDIUM: 76 };
 
 // ── Per-Timeframe Rules ────────────────────────────────────────────────────────
 const TIMEFRAME_RULES = {
-  "1m": {
-    minScore: 58,
-    minConfirmations: 4,
-    publishFloor: 78,
-    requireHigherBias: true,
-    minAdx: 18,
-    minRsi: 38,
-    maxRsi: 85,
-    requireRsiRising: false,      // RSI rising NOT required — in-range is enough
-    minDiDelta: 3,
-    requireVwapSupport: true,
-    requireIchimoku: false,
-    requireHaStrong: false,
-    requireHaMedium: false,       // HA is bonus only, not gate
-    requireVolumeConfirm: false,  // Volume is bonus only
-    volumeMultiplier: 1.3,
-    blockDailyBear: true,
-    entryDriftMultiplier: 0.6,
+  "15m": {
+    minScore: 55,
+    minConfirmations: 3,
+    publishFloor: 76,
+    minAdx: 14,
+    minDiDelta: 2,
+    requireVwapSupport: false,
+    blockDailyBear: false,
+    entryDriftMultiplier: 0.8,
     maxLeverage: 10,
   },
-  "5m": {
-    minScore: 60,
-    minConfirmations: 4,
-    publishFloor: 79,
-    requireHigherBias: true,
-    minAdx: 18,
-    minRsi: 37,
-    maxRsi: 85,
-    requireRsiRising: false,
-    minDiDelta: 3,
-    requireVwapSupport: true,
-    requireIchimoku: false,
-    requireHaStrong: false,
-    requireHaMedium: false,       // HA is bonus only
-    requireVolumeConfirm: false,  // Volume is bonus only
-    volumeMultiplier: 1.3,
-    blockDailyBear: true,
-    entryDriftMultiplier: 0.6,
-    maxLeverage: 15,
+  "1h": {
+    minScore: 52,
+    minConfirmations: 3,
+    publishFloor: 74,
+    minAdx: 14,
+    minDiDelta: 2,
+    requireVwapSupport: false,
+    blockDailyBear: false,
+    entryDriftMultiplier: 1.2,
+    maxLeverage: 10,
   },
 };
 
@@ -191,61 +173,39 @@ function getTradeTimeframes() {
 }
 
 // ─── GATE 1: HTF Bias ─────────────────────────────────────────────────────────
-// Balanced: 2 timeframes must agree (was requiring both 4H + 1D which killed many valid signals)
-function getHigherTimeframeBias(analyses, tradeTimeframe = "5m") {
-  if (tradeTimeframe === "1m") {
-    const a5m  = analyses["5m"];
-    const a15m = analyses["15m"];
-    const a1h  = analyses["1h"];
-    if (!a5m || !a15m) return "NEUTRAL";
+// Stocks: 1h EMA direction is primary anchor.
+// 4H as soft confirmation. 1D as veto only if strongly opposite.
+// Much more relaxed than crypto — Indian stocks trend at 1h level.
+function getHigherTimeframeBias(analyses, tradeTimeframe = "15m") {
+  const a1h = analyses["1h"];
+  const a4h = analyses["4h"];
+  const a1d = analyses["1d"];
 
-    const get = (a) => {
-      const { ema50, ema100, ema200, adx } = a.trend;
-      const rsi = a.momentum.rsi || 50;
-      // Relaxed: ema50 > ema100 is sufficient (not requiring ema100 > ema200)
-      const bull = ema50 > ema100 * 0.998 && ema50 > ema200 * 0.995 && (adx||0) >= 16 && rsi >= 42;
-      const bear = ema50 < ema100 * 1.002 && ema50 < ema200 * 1.005 && (adx||0) >= 16 && rsi <= 58;
-      return bull ? "BULLISH" : bear ? "BEARISH" : "NEUTRAL";
-    };
+  // Primary: 1H EMA direction
+  const primary = a1h || a4h;
+  if (!primary) return "NEUTRAL";
 
-    const b5m  = get(a5m);
-    const b15m = get(a15m);
-    if (b5m === "NEUTRAL" || b15m === "NEUTRAL") return "NEUTRAL";
-    if (b5m !== b15m) return "NEUTRAL";
+  const { ema50, ema100, adx } = primary.trend;
+  const rsi = primary.momentum?.rsi || 50;
 
-    // 1H soft veto only (was hard veto)
-    if (a1h) {
-      const b1h = get(a1h);
-      if (b1h !== "NEUTRAL" && b1h !== b5m) return "NEUTRAL";
-    }
-    return b5m;
+  // Relaxed thresholds for stocks — ADX 14+ is enough, RSI 35-65 range
+  const bull = ema50 > ema100 * 0.996 && (adx||0) >= 14 && rsi >= 35 && rsi <= 75;
+  const bear = ema50 < ema100 * 1.004 && (adx||0) >= 14 && rsi <= 65 && rsi >= 25;
+
+  if (!bull && !bear) return "NEUTRAL";
+
+  // 1D soft veto — only block if strongly opposite (ADX 20+)
+  if (a1d) {
+    const dAdx = a1d.trend.adx || 0;
+    const dBull = a1d.trend.ema50 > a1d.trend.ema100 && dAdx >= 20;
+    const dBear = a1d.trend.ema50 < a1d.trend.ema100 && dAdx >= 20;
+    if (bull && dBear) return "NEUTRAL";
+    if (bear && dBull) return "NEUTRAL";
   }
 
-  // 5m: 15m + 1h must agree
-  const a15m = analyses["15m"];
-  const a1h  = analyses["1h"];
-  const a4h  = analyses["4h"];
-  const a1d  = analyses["1d"];
-  if (!a15m || !a1h) return "NEUTRAL";
-
-  const get = (a) => {
-    const { ema50, ema100, ema200, adx } = a.trend;
-    const rsi = a.momentum.rsi || 50;
-    const bull = ema50 > ema100 * 0.997 && ema50 > ema200 * 0.993 && (adx||0) >= 15 && rsi >= 40;
-    const bear = ema50 < ema100 * 1.003 && ema50 < ema200 * 1.007 && (adx||0) >= 15 && rsi <= 60;
-    return bull ? "BULLISH" : bear ? "BEARISH" : "NEUTRAL";
-  };
-
-  const b15m = get(a15m);
-  const b1h  = get(a1h);
-  if (b15m === "NEUTRAL" || b1h === "NEUTRAL") return "NEUTRAL";
-  if (b15m !== b1h) return "NEUTRAL";
-
-  // 4H and 1D as soft vetos only
-  if (a4h) { const b4h = get(a4h); if (b4h !== "NEUTRAL" && b4h !== b15m) return "NEUTRAL"; }
-  if (a1d) { const b1d = get(a1d); if (b1d !== "NEUTRAL" && b1d !== b15m) return "NEUTRAL"; }
-
-  return b15m;
+  if (bull) return "BULLISH";
+  if (bear) return "BEARISH";
+  return "NEUTRAL";
 }
 
 // ─── SL / TP ──────────────────────────────────────────────────────────────────
@@ -394,10 +354,10 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   if (higherBias === "NEUTRAL") return null;
   const side = higherBias === "BULLISH" ? "LONG" : "SHORT";
 
-  // GATE 2: Core EMA Trend — 21 > 50 > 200 (3 EMAs, not all 5)
-  // This is the key change — ema9/ema100 were killing many valid signals
-  const coreBullStack = ema21 > ema50 * 0.997 && ema50 > ema200 * 0.993;
-  const coreBearStack = ema21 < ema50 * 1.003 && ema50 < ema200 * 1.007;
+  // GATE 2: Core EMA Trend — ema50 > ema100 required; ema200 alignment is bonus not gate
+  // Indian stocks have slower EMA convergence — requiring ema100>ema200 blocks too many valid setups
+  const coreBullStack = ema50 > ema100 * 0.997;
+  const coreBearStack = ema50 < ema100 * 1.003;
   if (side === "LONG"  && !coreBullStack) return null;
   if (side === "SHORT" && !coreBearStack) return null;
 
@@ -426,12 +386,11 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   if (tfRule.blockDailyBear && side === "LONG" && dailyBearStack) return null;
   // Manipulation candle
   if (hasManipulationCandle(side, analysis)) return null;
-  // Skip full ranging market
-  if (regime === "RANGING") return null;
+  // REMOVED: regime === "RANGING" block — Indian stocks are often range-bound
   // BB extreme zone — don't buy overbought top or sell oversold bottom
   if (bbPctB !== null) {
-    if (side === "LONG"  && bbPctB > 0.90) return null;
-    if (side === "SHORT" && bbPctB < 0.10) return null;
+    if (side === "LONG"  && bbPctB > 0.92) return null;
+    if (side === "SHORT" && bbPctB < 0.08) return null;
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -640,6 +599,7 @@ async function fetchStockCandles(symbol, tf, exchange, token) {
   const to   = new Date();
   const from = new Date(to.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
   try {
+    await ensureSession(); // Ensure Angel One session is live before fetching
     const raw = await smartGetCandles({ exchange: exchange || "NSE", symbolToken: String(token), interval: smartInterval, from, to });
     // Angel One format: [[timestamp, open, high, low, close, volume], ...]
     return raw.map(row => ({
