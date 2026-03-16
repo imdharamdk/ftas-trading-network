@@ -254,8 +254,17 @@ async function fetchStockLivePrices(coins) {
   const universe = getInstrumentUniverse();
   const tokenMap = {};
   for (const inst of universe) {
-    const key = (inst.symbol || inst.tradingSymbol || "").toUpperCase();
-    if (key) tokenMap[key] = { exchange: inst.exchange, token: String(inst.token) };
+    // inst.symbol may be "NSE:RELIANCE", inst.tradingSymbol may be "RELIANCE"
+    // Build map entries for BOTH so signal.coin always matches
+    const tradingKey = (inst.tradingSymbol || "").toUpperCase().trim();
+    const symbolKey  = (inst.symbol || "").toUpperCase().trim();
+    // Strip exchange prefix if present (e.g. "NSE:RELIANCE" → "RELIANCE")
+    const bareKey = symbolKey.includes(":") ? symbolKey.split(":")[1] : symbolKey;
+
+    const entry = { exchange: inst.exchange, token: String(inst.token) };
+    if (tradingKey) tokenMap[tradingKey] = entry;
+    if (bareKey && bareKey !== tradingKey) tokenMap[bareKey] = entry;
+    if (symbolKey && symbolKey !== tradingKey && symbolKey !== bareKey) tokenMap[symbolKey] = entry;
   }
 
   // Group by exchange
