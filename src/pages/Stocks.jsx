@@ -5,6 +5,11 @@ import { useSession } from "../context/useSession";
 import { apiFetch } from "../lib/api";
 import { getSignalCoins, mergeSignalLivePrices } from "../lib/liveSignalPrices";
 
+// Crypto coins USDT mein end hote hain — stock page pe kabhi nahi dikhne chahiye
+function isCryptoCoin(coin) {
+  return String(coin || "").toUpperCase().endsWith("USDT");
+}
+
 export default function Stocks() {
   const { user } = useSession();
   const isAdmin = user?.role === "ADMIN";
@@ -17,6 +22,7 @@ export default function Stocks() {
   const [error, setError]                   = useState("");
   const [actionBusy, setActionBusy]         = useState("");
   const [tab, setTab]                       = useState("active"); // "active" | "closed"
+  const [purgeMsg, setPurgeMsg]             = useState("");
 
   // ── Data loader ────────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
@@ -29,8 +35,11 @@ export default function Stocks() {
     ]);
     const [overviewRes, activeRes, historyRes, engineRes] = responses;
     setOverview(overviewRes.status   === "fulfilled" ? overviewRes.value.stats        : null);
-    setActiveSignals(activeRes.status   === "fulfilled" ? activeRes.value.signals  || [] : []);
-    setHistorySignals(historyRes.status === "fulfilled" ? historyRes.value.signals || [] : []);
+    // Frontend safety filter — strip any crypto signals that slipped through
+    const rawActive  = activeRes.status  === "fulfilled" ? activeRes.value.signals  || [] : [];
+    const rawHistory = historyRes.status === "fulfilled" ? historyRes.value.signals || [] : [];
+    setActiveSignals(rawActive.filter(s  => !isCryptoCoin(s.coin)));
+    setHistorySignals(rawHistory.filter(s => !isCryptoCoin(s.coin)));
     setEngine(engineRes.status          === "fulfilled" ? engineRes.value.engine        : null);
     const failed = responses.find(r => r.status === "rejected");
     if (failed) setError(failed.reason?.message || "Failed to load SmartAPI signals");
@@ -68,6 +77,21 @@ export default function Stocks() {
       if (action === "start")     { const r = await apiFetch("/stocks/engine/start", { method: "POST" }); setEngine(r.engine); }
       else if (action === "stop") { const r = await apiFetch("/stocks/engine/stop",  { method: "POST" }); setEngine(r.engine); }
       else if (action === "scan") { await apiFetch("/stocks/scan", { method: "POST" }); }
+      await loadData();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  // ── Purge crypto signals from stockSignals DB ──────────────────────────────
+  async function handlePurgeCrypto() {
+    if (!window.confirm("stockSignals collection se saare crypto (USDT) signals delete ho jaayenge. Continue?")) return;
+    setActionBusy("purge");
+    try {
+      const res = await apiFetch("/stocks/admin/purge-crypto", { method: "POST" });
+      setPurgeMsg(res.message || "Done");
       await loadData();
     } catch (e) {
       setError(e.message);
@@ -140,10 +164,17 @@ export default function Stocks() {
             <div><span className="detail-label">Last scan</span><strong>{engine?.lastScanAt ? new Date(engine.lastScanAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }) : "Never"}</strong></div>
           </div>
           {isAdmin ? (
-            <div className="button-row">
+            <div className="button-row" style={{ flexWrap: "wrap", gap: 8 }}>
               <button className="button button-primary"   disabled={actionBusy === "start"} onClick={() => handleEngineAction("start")} type="button">Start engine</button>
               <button className="button button-ghost"     disabled={actionBusy === "stop"}  onClick={() => handleEngineAction("stop")}  type="button">Stop engine</button>
               <button className="button button-secondary" disabled={actionBusy === "scan"}  onClick={() => handleEngineAction("scan")}  type="button">Run scan now</button>
+              <button
+                disabled={actionBusy === "purge"}
+                onClick={handlePurgeCrypto}
+                type="button"
+                style={{ background: "rgba(239,68,68,0.15)", color: "#f87171", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, padding: "6px 14px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+              >{actionBusy === "purge" ? "Purging..." : "🧹 Purge crypto signals"}</button>
+              {purgeMsg && <span style={{ fontSize: 12, color: "#4ade80" }}>✅ {purgeMsg}</span>}
             </div>
           ) : (
             <p className="panel-note">Engine controls are restricted to admins.</p>
