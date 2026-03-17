@@ -411,7 +411,7 @@ router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
 });
 
 router.get("/stats/overview", requireAuth, async (req, res) => {
-  // Use ALL signals including EXPIRED — buildOverview handles EXPIRED separately
+  await expireStaleActives("signals"); // ensure stale actives are marked expired before counting
   const signals = await readCollection("signals");
   return res.json({
     stats: buildOverview(signals),
