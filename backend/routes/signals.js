@@ -17,6 +17,44 @@ function dropExpiredSignals(signals) {
   return source.filter((signal) => signal.result !== "EXPIRED");
 }
 
+// ─── Time-based expiry config (must match signalEngine values) ────────────────
+const SIGNAL_EXPIRY_MS = {
+  "1m":  8  * 60 * 1000,
+  "5m":  25 * 60 * 1000,
+  "15m": 90 * 60 * 1000,
+  "30m": 3  * 60 * 60 * 1000,
+  "1h":  6  * 60 * 60 * 1000,
+  "4h":  24 * 60 * 60 * 1000,
+  default: 6 * 60 * 60 * 1000,
+};
+
+function getExpiryMs(timeframe) {
+  return SIGNAL_EXPIRY_MS[timeframe] || SIGNAL_EXPIRY_MS.default;
+}
+
+function isTimeExpired(signal) {
+  if (!signal.createdAt) return false;
+  const age = Date.now() - new Date(signal.createdAt).getTime();
+  return age > getExpiryMs(signal.timeframe);
+}
+
+// Expire any ACTIVE signals that have passed their time limit in DB
+// Called on every /active and /expired request so display is always fresh
+async function expireStaleActives(collectionName) {
+  const now = new Date().toISOString();
+  let hadChanges = false;
+  await mutateCollection(collectionName, (records) => {
+    const updated = records.map((sig) => {
+      if (sig.status !== SIGNAL_STATUS.ACTIVE) return sig;
+      if (!isTimeExpired(sig)) return sig;
+      hadChanges = true;
+      return { ...sig, status: SIGNAL_STATUS.CLOSED, result: "EXPIRED", closedAt: now, updatedAt: now };
+    });
+    return updated;
+  });
+  return hadChanges;
+}
+
 function isWinningResult(result) {
   return ["TP1_HIT", "TP2_HIT", "TP3_HIT"].includes(result);
 }
@@ -335,13 +373,13 @@ async function attachLivePrices(signals) {
 }
 
 router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
+  // Expire any stale signals first, then return only truly active ones
+  await expireStaleActives("signals");
   const rawSignals = await readCollection("signals");
-  const signals = dropExpiredSignals(rawSignals);
-  const filtered = sortByCreatedAtDesc(signals)
+  const filtered = sortByCreatedAtDesc(rawSignals)
     .filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE)
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
 
-  // Return signals directly — frontend fetches live prices separately via /live-prices
   return res.json({
     signals: filtered.slice(0, Number(req.query.limit || 50)),
   });
@@ -349,12 +387,24 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
 
 router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   const rawSignals = await readCollection("signals");
-  const signals = dropExpiredSignals(rawSignals);
-  const filtered = sortByCreatedAtDesc(signals)
-    .filter((signal) => signal.status !== SIGNAL_STATUS.ACTIVE)
+  // History = closed signals that hit TP or SL (NOT expired)
+  const filtered = sortByCreatedAtDesc(rawSignals)
+    .filter((signal) => signal.status === SIGNAL_STATUS.CLOSED && signal.result !== "EXPIRED")
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
 
-  // No live price attachment for history — closed signals don't need live prices
+  return res.json({
+    signals: req.query.limit ? filtered.slice(0, Number(req.query.limit)) : filtered,
+  });
+});
+
+router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
+  // Expire any stale actives first so this list is always up-to-date
+  await expireStaleActives("signals");
+  const rawSignals = await readCollection("signals");
+  const filtered = sortByCreatedAtDesc(rawSignals)
+    .filter((signal) => signal.result === "EXPIRED")
+    .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
+
   return res.json({
     signals: req.query.limit ? filtered.slice(0, Number(req.query.limit)) : filtered,
   });
