@@ -79,7 +79,6 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
 
       <main className="main">
         <div className="mobile-topbar">
-          <button aria-label="Open menu" className="hamburger" onClick={toggle} type="button">☰</button>
           <span className="brand-mark" style={{ fontSize: "1.35rem" }}>FTAS</span>
           <div className="topbar-live">LIVE</div>
         </div>
