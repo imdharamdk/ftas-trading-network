@@ -173,70 +173,22 @@ export default function Dashboard() {
   }, [availablePaymentMethods, availablePaymentSettings, availablePlans]);
 
   const loadPublicData = useCallback(async () => {
-    // Phase 1: Load only stats endpoints FAST (small payloads) — show page immediately
-    const [analyticsRes, performanceRes, engineRes] = await Promise.all([
+    // Fetch all stats endpoints in parallel — small payloads, fast
+    const [overviewRes, stockOverviewRes, analyticsRes, performanceRes, engineRes] = await Promise.all([
+      apiFetch("/signals/stats/overview").catch(() => null),
+      apiFetch("/stocks/stats/overview").catch(() => null),
       apiFetch("/signals/stats/analytics").catch(() => null),
       apiFetch("/signals/stats/performance").catch(() => null),
       apiFetch("/signals/engine/status").catch(() => null),
     ]);
 
-    if (analyticsRes) setAnalytics(analyticsRes.analytics ?? null);
-    if (performanceRes) setPerformance(performanceRes.performance ?? null);
-    if (engineRes) setEngine(engineRes.engine ?? null);
+    if (overviewRes?.stats)      setOverview(overviewRes.stats);
+    if (stockOverviewRes?.stats) setStockOverview(stockOverviewRes.stats);
+    if (analyticsRes?.analytics) setAnalytics(analyticsRes.analytics);
+    if (performanceRes?.performance) setPerformance(performanceRes.performance);
+    if (engineRes?.engine)       setEngine(engineRes.engine);
 
-    // Show page now — don't wait for signal lists
     setLoading(false);
-
-    // Phase 2: Load signal lists in background (large payloads)
-    const [cryptoActiveRes, cryptoHistoryRes, stockActiveRes, stockHistoryRes] = await Promise.all([
-      apiFetch("/signals/active?limit=100").catch(() => null),
-      apiFetch("/signals/history?limit=200").catch(() => null),   // reduced from 500
-      apiFetch("/stocks/active?limit=100").catch(() => null),
-      apiFetch("/stocks/history?limit=200").catch(() => null),    // reduced from 500
-    ]);
-
-    // Crypto overview
-    const cryptoActive  = cryptoActiveRes?.signals  || [];
-    const cryptoHistory = cryptoHistoryRes?.signals || [];
-    const filteredActive  = cryptoActive.filter(s => s.source !== "SMART_ENGINE" && ["1m","5m","15m","30m","1h"].includes(s.timeframe));
-    const filteredHistory = cryptoHistory.filter(s => s.source !== "SMART_ENGINE" && ["1m","5m","15m","30m","1h"].includes(s.timeframe));
-    const expiredC  = filteredHistory.filter(s => s.result === "EXPIRED").length;
-    const winsC     = filteredHistory.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result)).length;
-    const lossesC   = filteredHistory.filter(s => s.result === "SL_HIT").length;
-    const resolvedC = filteredHistory.length - expiredC;
-    setOverview({
-      activeSignals:     filteredActive.length,
-      closedSignals:     resolvedC,
-      expiredSignals:    expiredC,
-      totalSignals:      filteredActive.length + filteredHistory.length,
-      totalWins:         winsC,
-      totalLosses:       lossesC,
-      winRate:           resolvedC > 0 ? Number(((winsC / resolvedC) * 100).toFixed(1)) : 0,
-      averageConfidence: filteredActive.length
-        ? Number((filteredActive.reduce((s, x) => s + Number(x.confidence || 0), 0) / filteredActive.length).toFixed(1))
-        : 0,
-    });
-
-    // Stock overview
-    const stockActive  = stockActiveRes?.signals  || [];
-    const stockHistory = stockHistoryRes?.signals || [];
-    const expiredS  = stockHistory.filter(s => s.result === "EXPIRED").length;
-    const winsS     = stockHistory.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result)).length;
-    const lossesS   = stockHistory.filter(s => s.result === "SL_HIT").length;
-    const resolvedS = stockHistory.length - expiredS;
-    setStockOverview({
-      activeSignals:     stockActive.length,
-      closedSignals:     resolvedS,
-      expiredSignals:    expiredS,
-      totalSignals:      stockActive.length + stockHistory.length,
-      totalWins:         winsS,
-      totalLosses:       lossesS,
-      winRate:           resolvedS > 0 ? Number(((winsS / resolvedS) * 100).toFixed(1)) : 0,
-      averageConfidence: stockActive.length
-        ? Number((stockActive.reduce((s, x) => s + Number(x.confidence || 0), 0) / stockActive.length).toFixed(1))
-        : 0,
-    });
-
     return null;
   }, []);
 
