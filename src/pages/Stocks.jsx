@@ -21,7 +21,9 @@ export default function Stocks() {
   const [loading, setLoading]               = useState(true);
   const [error, setError]                   = useState("");
   const [actionBusy, setActionBusy]         = useState("");
-  const [tab, setTab]                       = useState("active"); // "active" | "closed"
+  const [tab, setTab]                       = useState("active"); // "active" | "closed" | "expired"
+  const [historyLimit, setHistoryLimit]     = useState(50);
+  const [expiredLimit, setExpiredLimit]     = useState(50);
   const [purgeMsg, setPurgeMsg]             = useState("");
 
   // ── Data loader ────────────────────────────────────────────────────────────
@@ -101,11 +103,15 @@ export default function Stocks() {
   }
 
   // ── Derived stats ──────────────────────────────────────────────────────────
-  const closedCount   = historySignals.length;
-  const expiredCount  = historySignals.filter(s => s.result === "EXPIRED").length;
-  const winCount      = historySignals.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result)).length;
-  const resolvedCount = closedCount - expiredCount;
-  const winRate       = resolvedCount > 0 ? ((winCount / resolvedCount) * 100).toFixed(1) : "—";
+  const closedSignals  = historySignals.filter(s => s.result !== "EXPIRED");
+  const expiredSignals = historySignals.filter(s => s.result === "EXPIRED");
+  const closedCount    = closedSignals.length;
+  const expiredCount   = expiredSignals.length;
+  const winCount       = closedSignals.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result)).length;
+  const resolvedCount  = closedCount;
+  const winRate        = resolvedCount > 0 ? ((winCount / resolvedCount) * 100).toFixed(1) : "—";
+  const visibleClosed  = closedSignals.slice(0, historyLimit);
+  const visibleExpired = expiredSignals.slice(0, expiredLimit);
 
   return (
     <AppShell
@@ -203,9 +209,15 @@ export default function Stocks() {
         </button>
         <button
           className={`tab-btn${tab === "closed" ? " active" : ""}`}
-          onClick={() => setTab("closed")}
+          onClick={() => { setTab("closed"); setHistoryLimit(50); }}
         >
-          📋 Closed Signals {closedCount > 0 ? `(${closedCount})` : ""}
+          ✅ Closed Signals {closedCount > 0 ? `(${closedCount})` : ""}
+        </button>
+        <button
+          className={`tab-btn${tab === "expired" ? " active" : ""}`}
+          onClick={() => { setTab("expired"); setExpiredLimit(50); }}
+        >
+          ⏰ Expired {expiredCount > 0 ? `(${expiredCount})` : ""}
         </button>
       </div>
 
@@ -240,20 +252,60 @@ export default function Stocks() {
               <span className="eyebrow">History</span>
               <h2>Closed Stock Signals</h2>
               <p style={{ fontSize: 12, color: "#64748b", margin: "4px 0 0" }}>
-                TP/SL hits + auto-expired signals
+                TP1 / TP2 / TP3 hits &amp; Stop Loss hits only
               </p>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <span className="pill pill-success">{winCount} wins</span>
               <span className="pill pill-danger">{resolvedCount - winCount} SL</span>
-              <span className="pill pill-neutral">{expiredCount} expired</span>
             </div>
           </div>
           <SignalTable
             compact
-            signals={historySignals}
+            signals={visibleClosed}
             emptyLabel={loading ? "Loading SmartAPI history..." : "No closed trades yet."}
           />
+          {closedSignals.length > historyLimit && (
+            <div style={{ textAlign: "center", padding: "16px 0 4px" }}>
+              <button
+                onClick={() => setHistoryLimit(l => l + 50)}
+                style={{ background: "rgba(99,102,241,0.15)", color: "#818cf8", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 8, padding: "8px 24px", cursor: "pointer", fontSize: 13, fontWeight: 600 }}
+              >
+                Load More ({historyLimit}/{closedSignals.length} showing)
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* ── EXPIRED TAB ── */}
+      {tab === "expired" && (
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Expired</span>
+              <h2>Expired Stock Signals</h2>
+              <p style={{ fontSize: 12, color: "#64748b", margin: "4px 0 0" }}>
+                Signals that timed out without hitting TP or SL
+              </p>
+            </div>
+            <span className="pill pill-neutral">{expiredCount} expired</span>
+          </div>
+          <SignalTable
+            compact
+            signals={visibleExpired}
+            emptyLabel={loading ? "Loading..." : "No expired signals yet."}
+          />
+          {expiredSignals.length > expiredLimit && (
+            <div style={{ textAlign: "center", padding: "16px 0 4px" }}>
+              <button
+                onClick={() => setExpiredLimit(l => l + 50)}
+                style={{ background: "rgba(107,114,128,0.15)", color: "#9ca3af", border: "1px solid rgba(107,114,128,0.3)", borderRadius: 8, padding: "8px 24px", cursor: "pointer", fontSize: 13, fontWeight: 600 }}
+              >
+                Load More ({expiredLimit}/{expiredSignals.length} showing)
+              </button>
+            </div>
+          )}
         </section>
       )}
     </AppShell>
