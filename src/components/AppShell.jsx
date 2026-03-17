@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import { useSession } from "../context/useSession";
 import ChatBox from "./ChatBox";
 
@@ -14,60 +14,46 @@ function fmtExpiry(value) {
   return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" }).format(d);
 }
 
+const NAV_ITEMS = [
+  { to: "/dashboard", icon: "📊", label: "Dashboard" },
+  { to: "/market",    icon: "🔍", label: "Scanner"   },
+  { to: "/crypto",    icon: "💹", label: "Crypto"    },
+  { to: "/stocks",    icon: "🇮🇳", label: "Stocks"    },
+  { to: "/news",      icon: "📰", label: "News"      },
+];
+
 export default function AppShell({ actions = null, children, subtitle, title }) {
   const { logout, user } = useSession();
+  const location = useLocation();
   const [open, setOpen] = useState(false);
   const planEnd = fmtExpiry(user?.subscriptionEndsAt);
   const showPlanEnd = user?.role !== "ADMIN" && planEnd;
 
-  const close = () => setOpen(false);
+  const close  = () => setOpen(false);
   const toggle = () => setOpen(o => !o);
 
   return (
     <div className="shell">
 
-      {/* ── SIDEBAR (off-canvas on mobile, sticky on desktop) ── */}
       <aside className={`sidebar${open ? " sidebar-open" : ""}`}>
         <div className="sidebar-top">
-
-          {/* Brand row + close button */}
           <div className="sidebar-brand-row">
             <div className="brand-block">
               <span className="brand-mark">FTAS</span>
-              <p className="brand-copy">Fintech automated solutions for futures signals, payments, and scanner control.</p>
+              <p className="brand-copy">AI-powered signals for crypto, Indian equities, F&O and commodities.</p>
             </div>
-            {/* Close button inside sidebar (mobile) */}
-            <button
-              aria-label="Close menu"
-              className="hamburger"
-              onClick={toggle}
-              type="button"
-            >
-              {open ? "✕" : "☰"}
-            </button>
+            <button aria-label="Close menu" className="hamburger" onClick={toggle} type="button">✕</button>
           </div>
 
-          {/* Nav links */}
           <nav aria-label="Main navigation" className="nav-list">
-            <NavLink className={navCls} onClick={close} to="/dashboard">
-              📊 Dashboard
-            </NavLink>
-            <NavLink className={navCls} onClick={close} to="/market">
-              🔍 Scanner
-            </NavLink>
-            <NavLink className={navCls} onClick={close} to="/crypto">
-              💹 Crypto
-            </NavLink>
-            <NavLink className={navCls} onClick={close} to="/stocks">
-              🇮🇳 Stocks
-            </NavLink>
-            <NavLink className={navCls} onClick={close} to="/news">
-              📰 News
-            </NavLink>
+            {NAV_ITEMS.map(item => (
+              <NavLink key={item.to} className={navCls} onClick={close} to={item.to}>
+                {item.icon} {item.label}
+              </NavLink>
+            ))}
           </nav>
         </div>
 
-        {/* Profile + logout */}
         <div className="sidebar-footer">
           <div className="profile-card">
             <div className="profile-row">
@@ -83,43 +69,21 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
               {showPlanEnd ? ` · valid till ${planEnd}` : ""}
             </span>
           </div>
-          <button
-            className="button button-ghost"
-            onClick={logout}
-            style={{ width: "100%" }}
-            type="button"
-          >
+          <button className="button button-ghost" onClick={logout} style={{ width: "100%" }} type="button">
             Logout
           </button>
         </div>
       </aside>
 
-      {/* ── OVERLAY (mobile only, tap to close) ── */}
-      {open && (
-        <div
-          aria-hidden="true"
-          className="sidebar-overlay"
-          onClick={close}
-        />
-      )}
+      {open && <div aria-hidden="true" className="sidebar-overlay" onClick={close} />}
 
-      {/* ── MAIN ── */}
       <main className="main">
-
-        {/* Mobile sticky topbar — shown only on mobile via CSS */}
         <div className="mobile-topbar">
-          <span className="brand-mark" style={{ fontSize: "1.4rem" }}>FTAS</span>
-          <button
-            aria-label={open ? "Close menu" : "Open menu"}
-            className="hamburger"
-            onClick={toggle}
-            type="button"
-          >
-            {open ? "✕" : "☰"}
-          </button>
+          <button aria-label="Open menu" className="hamburger" onClick={toggle} type="button">☰</button>
+          <span className="brand-mark" style={{ fontSize: "1.35rem" }}>FTAS</span>
+          <div className="topbar-live">LIVE</div>
         </div>
 
-        {/* Page header */}
         <header className="page-header">
           <div>
             <span className="eyebrow">Fintech Automated Solutions</span>
@@ -129,9 +93,22 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
           {actions ? <div className="page-actions">{actions}</div> : null}
         </header>
 
-        {/* Page content */}
         {children}
       </main>
+
+      <nav className="bottom-nav" aria-label="Mobile navigation">
+        {NAV_ITEMS.map(item => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            className={({ isActive }) => `bottom-nav-item${isActive ? " active" : ""}`}
+          >
+            <span className="nav-icon">{item.icon}</span>
+            <span>{item.label}</span>
+          </NavLink>
+        ))}
+      </nav>
+
       <ChatBox />
     </div>
   );
