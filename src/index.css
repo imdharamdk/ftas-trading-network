@@ -271,7 +271,7 @@ h1, h2, h3 { letter-spacing: -0.03em; line-height: 1.2; }
   display: flex;
   height: var(--topbar-h);
   justify-content: space-between;
-  padding: 0 var(--s4);
+  padding: 0 var(--s5);
   position: sticky;
   top: 0;
   z-index: 50;
@@ -1157,4 +1157,9 @@ h1, h2, h3 { letter-spacing: -0.03em; line-height: 1.2; }
   .detail-grid { grid-template-columns: 1fr; }
   .signal-card-prices { grid-template-columns: 1fr 1px 1fr; }
   .signal-card-tp-row { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ─── ChatBox: desktop override — reset bottom position since no bottom nav ── */
+@media (min-width: 1024px) {
+  :root { --bottom-nav-h: 0px; }
 }
