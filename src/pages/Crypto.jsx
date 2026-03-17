@@ -62,6 +62,7 @@ export default function Crypto() {
 
   const [activeSignals, setActiveSignals]   = useState([]);
   const [historySignals, setHistorySignals] = useState([]);
+  const [expiredSignals, setExpiredSignals] = useState([]);
   const [overview, setOverview]             = useState(null);
   const [loading, setLoading]               = useState(true);
   const [error, setError]                   = useState("");
@@ -140,7 +141,7 @@ export default function Crypto() {
     let mounted = true;
     async function load() {
       try {
-        // Phase 1: Load overview + active signals FAST (no price attachment on backend)
+        // Phase 1: active signals — backend expires stale ones first
         const [overviewRes, activeRes] = await Promise.allSettled([
           apiFetch("/signals/stats/overview"),
           apiFetch("/signals/active?limit=100"),
@@ -152,19 +153,24 @@ export default function Crypto() {
         const ALL_TF = ["1m","5m","15m","30m","1h"];
         const allActive = activeRes.status === "fulfilled" ? (activeRes.value.signals || []) : [];
         setActiveSignals(allActive.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe)));
-        setLoading(false); // ← show page immediately after active signals load
+        setLoading(false); // show page immediately
 
-        // Phase 2: Load history in background (doesn't block initial render)
-        const historyRes = await apiFetch("/signals/history?limit=500").catch(() => ({ signals: [] }));
+        // Phase 2: history (TP/SL only) + expired — parallel, background
+        const [historyRes, expiredRes] = await Promise.allSettled([
+          apiFetch("/signals/history?limit=500"),
+          apiFetch("/signals/expired?limit=500"),
+        ]);
         if (!mounted) return;
-        const allHistory = historyRes.signals || [];
+
+        const allHistory = historyRes.status === "fulfilled" ? (historyRes.value.signals || []) : [];
+        const allExpired = expiredRes.status === "fulfilled" ? (expiredRes.value.signals || []) : [];
         setHistorySignals(allHistory.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe)));
+        setExpiredSignals(allExpired.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe)));
       } catch (e) {
         if (mounted) { setError(e.message); setLoading(false); }
       }
     }
     load();
-    // Reload every 30s
     const id = window.setInterval(load, 30000);
     return () => { mounted = false; window.clearInterval(id); };
   }, []);
@@ -186,8 +192,7 @@ export default function Crypto() {
   }, [signalCoinsKey]);
 
   // ── Stats ──────────────────────────────────────────────────────────────────
-  const closedSignals  = historySignals.filter(s => s.result !== "EXPIRED");
-  const expiredSignals = historySignals.filter(s => s.result === "EXPIRED");
+  const closedSignals  = historySignals; // historySignals already = TP/SL only from backend
   const closedCount    = closedSignals.length;
   const expiredCount   = expiredSignals.length;
   const winCount       = closedSignals.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result)).length;
@@ -196,8 +201,8 @@ export default function Crypto() {
 
   // TF-filtered views
   const filteredActive   = tfFilter === "ALL" ? activeSignals  : activeSignals.filter(s => s.timeframe === tfFilter);
-  const filteredClosed   = (tfFilter === "ALL" ? closedSignals  : closedSignals.filter(s => s.timeframe === tfFilter));
-  const filteredExpired  = (tfFilter === "ALL" ? expiredSignals : expiredSignals.filter(s => s.timeframe === tfFilter));
+  const filteredClosed   = tfFilter === "ALL" ? closedSignals  : closedSignals.filter(s => s.timeframe === tfFilter);
+  const filteredExpired  = tfFilter === "ALL" ? expiredSignals : expiredSignals.filter(s => s.timeframe === tfFilter);
   const visibleHistory   = filteredClosed.slice(0, historyLimit);
   const visibleExpired   = filteredExpired.slice(0, expiredLimit);
 
