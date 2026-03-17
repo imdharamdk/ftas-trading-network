@@ -4,7 +4,7 @@ import TradingViewModal from "./TradingViewModal";
 
 function formatPrice(value) {
   const n = Number(value);
-  if (!Number.isFinite(n)) return "-";
+  if (!Number.isFinite(n)) return "—";
   if (Math.abs(n) >= 10000) return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   if (Math.abs(n) >= 1000)  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
   if (Math.abs(n) >= 1)     return n.toFixed(4);
@@ -13,7 +13,7 @@ function formatPrice(value) {
 }
 
 function formatDate(value) {
-  if (!value) return "-";
+  if (!value) return "—";
   return new Intl.DateTimeFormat("en-IN", {
     day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
     timeZone: "Asia/Kolkata",
@@ -26,13 +26,11 @@ function formatSignedPct(value) {
   return `${n > 0 ? "+" : ""}${n.toFixed(2)}%`;
 }
 
-function sideClass(side) {
-  return side === "LONG" ? "pill-success" : "pill-danger";
-}
-
+function sideClass(side) { return side === "LONG" ? "pill-success" : "pill-danger"; }
 function statusClass(status, result) {
   if (status === "ACTIVE")   return "pill-warning";
   if (result === "SL_HIT")   return "pill-danger";
+  if (result === "EXPIRED")  return "pill-neutral";
   return "pill-success";
 }
 
@@ -42,140 +40,111 @@ function formatDisplaySymbol(signal) {
     const detailParts = [];
     if (instrument.exchange) detailParts.push(instrument.exchange);
     if (instrument.segment && instrument.segment !== instrument.exchange) detailParts.push(instrument.segment);
-    return {
-      label: instrument.tradingSymbol,
-      detail: detailParts.join(" • "),
-    };
+    return { label: instrument.tradingSymbol, detail: detailParts.join(" · ") };
   }
   const coin = String(signal.coin || "").toUpperCase();
-  if (!coin) return { label: "-", detail: "" };
-  if (coin.endsWith("USDT")) {
-    return { label: coin.replace("USDT", ""), detail: "/USDT" };
-  }
+  if (!coin) return { label: "—", detail: "" };
+  if (coin.endsWith("USDT")) return { label: coin.replace("USDT", ""), detail: "/USDT" };
   return { label: coin, detail: "" };
 }
 
-/* ─── Leverage badge ───────────────────────────────────────────────────────── */
 function LeverageBadge({ leverage }) {
   const lev = Number(leverage);
-  if (!Number.isFinite(lev) || lev <= 0) return <span style={{ opacity: 0.4 }}>—</span>;
+  if (!Number.isFinite(lev) || lev <= 0) return <span style={{ opacity: 0.35 }}>—</span>;
   const cls = lev >= 40 ? "pill-danger" : lev >= 25 ? "pill-warning" : "pill-success";
   return <span className={`pill ${cls}`}>{lev}×</span>;
 }
 
-/* ─── Confidence badge ─────────────────────────────────────────────────────── */
 function ConfBadge({ confidence }) {
   const cls = confidence >= 85 ? "pill-success" : confidence >= 70 ? "pill-warning" : "pill-neutral";
   return <span className={`pill ${cls}`}>{confidence}%</span>;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   MOBILE SIGNAL CARD — shown when screen width < 640px
+   MOBILE SIGNAL CARD — redesigned for clarity and visual appeal
 ══════════════════════════════════════════════════════════════════════════════ */
 function SignalCard({ signal, onChartOpen }) {
-  const move = Number(signal.signalMovePercent);
-  const hasMove = Number.isFinite(move);
-  const livePrice = formatPrice(signal.livePrice ?? signal.closePrice);
-  const confirmations = Array.isArray(signal.confirmations)
-    ? signal.confirmations.slice(0, 4).join(" · ")
-    : "";
-  const symbolDisplay = formatDisplaySymbol(signal);
-
-  const isStock = signal.source === "SMART_ENGINE";
+  const move      = Number(signal.signalMovePercent);
+  const hasMove   = Number.isFinite(move);
+  const livePrice = signal.livePrice ?? signal.closePrice;
+  const sym       = formatDisplaySymbol(signal);
+  const isStock   = signal.source === "SMART_ENGINE";
+  const isClosed  = signal.status !== "ACTIVE";
+  const result    = signal.result || signal.status;
 
   return (
-    <article className="signal-card">
-      {/* Top row: coin + side + status */}
+    <article className="signal-card" data-side={signal.side}>
+      {/* ── Header ── */}
       <div className="signal-card-header">
         <button
           className="signal-card-coin"
           onClick={() => onChartOpen(signal)}
-          title={`View ${symbolDisplay.label} chart`}
+          title={`View ${sym.label} chart`}
           type="button"
         >
-          <span style={{ fontWeight: 600 }}>{symbolDisplay.label}</span>
-          {symbolDisplay.detail ? (
-            <span style={{ opacity: 0.55, fontSize: "0.75em" }}>{symbolDisplay.detail}</span>
-          ) : null}
-          <span style={{ fontSize: "0.75em", opacity: 0.55, marginLeft: "4px" }}>{isStock ? "📊" : "📈"}</span>
+          <span>{sym.label}</span>
+          {sym.detail && <span style={{ opacity: 0.45, fontSize: "0.72em" }}>{sym.detail}</span>}
+          <span style={{ fontSize: "0.75em", opacity: 0.5 }}>{isStock ? "📊" : "📈"}</span>
         </button>
-        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+
+        <div className="signal-card-tags">
           <span className={`pill ${sideClass(signal.side)}`}>{signal.side}</span>
-          <span className={`pill ${statusClass(signal.status, signal.result)}`}>
-            {signal.result || signal.status}
-          </span>
+          <span className="signal-timeframe-badge">{signal.timeframe}</span>
+          <ConfBadge confidence={signal.confidence} />
         </div>
       </div>
 
-      {/* Price grid */}
-      <div className="signal-card-grid">
-        <div className="signal-card-row">
-          <span className="signal-card-label">Entry</span>
-          <span className="signal-card-value">{formatPrice(signal.entry)}</span>
+      {/* ── Price strip: Entry | Live | SL ── */}
+      <div className="signal-card-prices">
+        <div className="signal-price-cell">
+          <span className="signal-price-label">Entry</span>
+          <span className="signal-price-value">{formatPrice(signal.entry)}</span>
         </div>
-
-        <div className="signal-card-row">
-          <span className="signal-card-label">Live Price</span>
-          <span className="signal-card-value">
-            {livePrice}
+        <div className="signal-price-divider" />
+        <div className="signal-price-cell">
+          <span className="signal-price-label">{isClosed ? "Close" : "Live"}</span>
+          <span className="signal-price-value" style={{ color: hasMove ? (move >= 0 ? "var(--c-green)" : "var(--c-red)") : undefined }}>
+            {formatPrice(livePrice)}
             {hasMove && (
-              <span
-                className={`pill ${move >= 0 ? "pill-success" : "pill-danger"}`}
-                style={{ marginLeft: "5px", fontSize: "0.65rem" }}
-              >
-                {formatSignedPct(move)}
+              <span style={{ fontSize: "0.70em", marginLeft: 4, opacity: 0.8 }}>
+                ({formatSignedPct(move)})
               </span>
             )}
           </span>
         </div>
-
-        <div className="signal-card-row">
-          <span className="signal-card-label">Stop Loss</span>
-          <span className="signal-card-value" style={{ color: "#ffd2d8" }}>{formatPrice(signal.stopLoss)}</span>
-        </div>
-
-        <div className="signal-card-row">
-          <span className="signal-card-label">TP1</span>
-          <span className="signal-card-value" style={{ color: "#c9ffe5" }}>{formatPrice(signal.tp1)}</span>
-        </div>
-
-        <div className="signal-card-row">
-          <span className="signal-card-label">TP2</span>
-          <span className="signal-card-value" style={{ color: "#c9ffe5" }}>{formatPrice(signal.tp2)}</span>
-        </div>
-
-        <div className="signal-card-row">
-          <span className="signal-card-label">TP3</span>
-          <span className="signal-card-value" style={{ color: "#c9ffe5" }}>{formatPrice(signal.tp3)}</span>
-        </div>
-
-        <div className="signal-card-row">
-          <span className="signal-card-label">Confidence</span>
-          <span className="signal-card-value"><ConfBadge confidence={signal.confidence} /></span>
-        </div>
-
-        <div className="signal-card-row">
-          <span className="signal-card-label">Leverage</span>
-          <span className="signal-card-value">
-            <LeverageBadge leverage={signal.leverage ?? signal.indicatorSnapshot?.leverage} />
-          </span>
-        </div>
-
-        <div className="signal-card-row">
-          <span className="signal-card-label">Timeframe</span>
-          <span className="signal-card-value">{signal.timeframe}</span>
+        <div className="signal-price-divider" />
+        <div className="signal-price-cell">
+          <span className="signal-price-label">Stop Loss</span>
+          <span className="signal-price-value" style={{ color: "var(--c-red)" }}>{formatPrice(signal.stopLoss)}</span>
         </div>
       </div>
 
-      {/* Confirmations */}
-      {confirmations ? (
-        <p className="signal-card-confirmations">{confirmations}</p>
-      ) : null}
-
-      {/* Created */}
-      <div style={{ color: "var(--c-muted)", fontSize: "0.72rem", marginTop: "2px" }}>
-        Created {formatDate(signal.createdAt)}
+      {/* ── TP targets ── */}
+      <div className="signal-card-tp-row">
+        {[["TP1", signal.tp1], ["TP2", signal.tp2], ["TP3", signal.tp3]].map(([label, val]) => (
+          <div key={label} className="signal-tp-cell">
+            <span className="signal-tp-label">{label}</span>
+            <span className="signal-tp-value">{formatPrice(val)}</span>
+          </div>
+        ))}
       </div>
+
+      {/* ── Meta: leverage + status + time ── */}
+      <div className="signal-card-meta">
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <LeverageBadge leverage={signal.leverage ?? signal.indicatorSnapshot?.leverage} />
+          <span className={`pill ${statusClass(signal.status, signal.result)}`}>{result}</span>
+        </div>
+        <span className="signal-card-time">{formatDate(signal.createdAt)}</span>
+      </div>
+
+      {/* ── Confirmations (collapsed, subtle) ── */}
+      {Array.isArray(signal.confirmations) && signal.confirmations.length > 0 && (
+        <p className="signal-card-confirmations">
+          {signal.confirmations.slice(0, 3).join(" · ")}
+          {signal.confirmations.length > 3 && ` +${signal.confirmations.length - 3} more`}
+        </p>
+      )}
     </article>
   );
 }
@@ -184,25 +153,17 @@ function SignalCard({ signal, onChartOpen }) {
    DESKTOP TABLE ROW
 ══════════════════════════════════════════════════════════════════════════════ */
 function TableRow({ signal, onChartOpen }) {
-  const symbolDisplay = formatDisplaySymbol(signal);
+  const sym     = formatDisplaySymbol(signal);
   const isStock = signal.source === "SMART_ENGINE";
   return (
     <tr>
       <td>
-        <button
-          className="coin-chart-btn"
-          onClick={() => onChartOpen(signal)}
-          title={`View ${symbolDisplay.label} chart`}
-          type="button"
-        >
-          <strong>{symbolDisplay.label}</strong>
-          {symbolDisplay.detail ? (
-            <span style={{ opacity: 0.6, fontSize: "0.75em", marginLeft: "6px" }}>{symbolDisplay.detail}</span>
-          ) : null}
+        <button className="coin-chart-btn" onClick={() => onChartOpen(signal)} title={`View ${sym.label} chart`} type="button">
+          <strong>{sym.label}</strong>
+          {sym.detail && <span style={{ opacity: 0.55, fontSize: "0.74em", marginLeft: 5 }}>{sym.detail}</span>}
           <span className="coin-chart-icon">{isStock ? "📊" : "📈"}</span>
         </button>
       </td>
-
       <td><span className={`pill ${sideClass(signal.side)}`}>{signal.side}</span></td>
       <td>{signal.timeframe}</td>
       <td>{formatPrice(signal.entry)}</td>
@@ -236,18 +197,14 @@ function TableRow({ signal, onChartOpen }) {
    MAIN EXPORT
 ══════════════════════════════════════════════════════════════════════════════ */
 export default function SignalTable({ compact = false, emptyLabel, signals }) {
-  const [chartCoin, setChartCoin]   = useState(null);
-  const [chartTf, setChartTf]       = useState("15m");
-  const [chartSignal, setChartSignal] = useState(null);
-  const [tvSignal, setTvSignal]     = useState(null);
+  const [chartCoin, setChartCoin]       = useState(null);
+  const [chartTf, setChartTf]           = useState("15m");
+  const [chartSignal, setChartSignal]   = useState(null);
+  const [tvSignal, setTvSignal]         = useState(null);
 
   function openChart(signal) {
-    // All signals now use CandlestickChart:
-    // - Crypto → /market/klines (Bybit)
-    // - Stock (SMART_ENGINE) → /stocks/candles (SmartAPI) if instrument token available
-    //   fallback to TradingView if token missing
     if (signal.source === "SMART_ENGINE" && !signal.scanMeta?.instrument?.token) {
-      setTvSignal(signal); // fallback
+      setTvSignal(signal);
     } else {
       setChartSignal(signal);
       setChartCoin(signal.coin);
@@ -255,58 +212,36 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
     }
   }
 
-  const colCount = 13;
-
   return (
     <>
-      {/* ── MOBILE CARD VIEW ── */}
+      {/* ── MOBILE CARDS ── */}
       <div className="signal-view-mobile">
         {signals.length ? (
           <div className="signal-cards">
-            {signals.map(signal => (
-              <SignalCard key={signal.id} signal={signal} onChartOpen={openChart} />
-            ))}
+            {signals.map(s => <SignalCard key={s.id} signal={s} onChartOpen={openChart} />)}
           </div>
         ) : (
-          <div className="empty-state" style={{ padding: "16px 0" }}>{emptyLabel}</div>
+          <div className="empty-state" style={{ padding: "20px 0", textAlign: "center" }}>{emptyLabel}</div>
         )}
       </div>
 
-      {/* ── DESKTOP TABLE VIEW ── */}
+      {/* ── DESKTOP TABLE ── */}
       <div className="signal-view-desktop">
         <div className="table-card">
           <div className="table-wrap">
             <table className={`signal-table${compact ? " signal-table-compact" : ""}`}>
               <thead>
                 <tr>
-                  <th>Coin</th>
-                  <th>Side</th>
-                  <th>TF</th>
-                  <th>Entry</th>
-                  <th>Live Price</th>
-                  <th>SL</th>
-                  <th>TP1</th>
-                  <th>TP2</th>
-                  <th>TP3</th>
-                  <th>Confidence</th>
-                  <th>Leverage</th>
-                  <th>Status</th>
-                  <th>Created</th>
+                  <th>Coin</th><th>Side</th><th>TF</th><th>Entry</th>
+                  <th>Live Price</th><th>SL</th><th>TP1</th><th>TP2</th><th>TP3</th>
+                  <th>Confidence</th><th>Leverage</th><th>Status</th><th>Created</th>
                 </tr>
               </thead>
               <tbody>
                 {signals.length ? (
-                  signals.map(signal => (
-                    <TableRow
-                      key={signal.id}
-                      signal={signal}
-                      onChartOpen={openChart}
-                    />
-                  ))
+                  signals.map(s => <TableRow key={s.id} signal={s} onChartOpen={openChart} />)
                 ) : (
-                  <tr>
-                    <td className="empty-row" colSpan={colCount}>{emptyLabel}</td>
-                  </tr>
+                  <tr><td className="empty-row" colSpan={13}>{emptyLabel}</td></tr>
                 )}
               </tbody>
             </table>
@@ -314,7 +249,6 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
         </div>
       </div>
 
-      {/* Crypto candlestick chart modal */}
       {chartCoin && (
         <CandlestickChart
           coin={chartCoin}
@@ -324,7 +258,6 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
         />
       )}
 
-      {/* Indian stock TradingView chart modal */}
       {tvSignal && (
         <TradingViewModal
           coin={tvSignal.coin || tvSignal.scanMeta?.instrument?.tradingSymbol || ""}
