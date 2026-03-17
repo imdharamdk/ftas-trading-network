@@ -108,13 +108,16 @@ export default function ChatBox() {
       <button
         onClick={() => setOpen((o) => !o)}
         style={{
-          position: "fixed", bottom: 24, right: 24, zIndex: 1000,
-          width: 56, height: 56, borderRadius: "50%",
+          position: "fixed",
+          bottom: "calc(var(--bottom-nav-h, 64px) + 16px)", // above bottom nav on mobile
+          right: 16,
+          zIndex: 1000,
+          width: 50, height: 50, borderRadius: "50%",
           background: "linear-gradient(135deg, #6366f1, #8b5cf6)",
           border: "none", cursor: "pointer",
           boxShadow: "0 4px 20px rgba(99,102,241,0.5)",
           display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 24, transition: "transform 0.2s",
+          fontSize: 22, transition: "transform 0.2s",
         }}
         title="Community Chat"
       >
@@ -135,8 +138,11 @@ export default function ChatBox() {
       {/* ── Chat Panel ────────────────────────────────────────────────────────── */}
       {open && (
         <div style={{
-          position: "fixed", bottom: 90, right: 24, zIndex: 999,
-          width: 360, maxWidth: "calc(100vw - 48px)",
+          position: "fixed",
+          bottom: "calc(var(--bottom-nav-h, 64px) + 72px)", // above button + bottom nav
+          right: 16,
+          zIndex: 999,
+          width: 360, maxWidth: "calc(100vw - 32px)",
           height: 480, display: "flex", flexDirection: "column",
           background: "#0f172a",
           border: "1px solid rgba(99,102,241,0.25)",
