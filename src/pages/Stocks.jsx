@@ -17,6 +17,7 @@ export default function Stocks() {
   const [overview, setOverview]             = useState(null);
   const [activeSignals, setActiveSignals]   = useState([]);
   const [historySignals, setHistorySignals] = useState([]);
+  const [expiredSignals, setExpiredSignals] = useState([]);
   const [engine, setEngine]                 = useState(null);
   const [loading, setLoading]               = useState(true);
   const [error, setError]                   = useState("");
@@ -29,23 +30,27 @@ export default function Stocks() {
   // ── Data loader ────────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
     setError("");
-    const responses = await Promise.allSettled([
+    // Phase 1: active + engine status (fast)
+    const [overviewRes, activeRes, engineRes] = await Promise.allSettled([
       apiFetch("/stocks/stats/overview"),
       apiFetch("/stocks/active?limit=40"),
-      apiFetch("/stocks/history?limit=5000"),
       apiFetch("/stocks/engine/status"),
     ]);
-    const [overviewRes, activeRes, historyRes, engineRes] = responses;
-    setOverview(overviewRes.status   === "fulfilled" ? overviewRes.value.stats        : null);
-    // Frontend safety filter — strip any crypto signals that slipped through
-    const rawActive  = activeRes.status  === "fulfilled" ? activeRes.value.signals  || [] : [];
-    const rawHistory = historyRes.status === "fulfilled" ? historyRes.value.signals || [] : [];
-    setActiveSignals(rawActive.filter(s  => !isCryptoCoin(s.coin)));
-    setHistorySignals(rawHistory.filter(s => !isCryptoCoin(s.coin)));
-    setEngine(engineRes.status          === "fulfilled" ? engineRes.value.engine        : null);
-    const failed = responses.find(r => r.status === "rejected");
-    if (failed) setError(failed.reason?.message || "Failed to load SmartAPI signals");
+    setOverview(overviewRes.status === "fulfilled" ? overviewRes.value.stats : null);
+    const rawActive = activeRes.status === "fulfilled" ? activeRes.value.signals || [] : [];
+    setActiveSignals(rawActive.filter(s => !isCryptoCoin(s.coin)));
+    setEngine(engineRes.status === "fulfilled" ? engineRes.value.engine : null);
     setLoading(false);
+
+    // Phase 2: history + expired in background
+    const [historyRes, expiredRes] = await Promise.allSettled([
+      apiFetch("/stocks/history?limit=500"),
+      apiFetch("/stocks/expired?limit=500"),
+    ]);
+    const rawHistory = historyRes.status === "fulfilled" ? historyRes.value.signals || [] : [];
+    const rawExpired = expiredRes.status === "fulfilled" ? expiredRes.value.signals || [] : [];
+    setHistorySignals(rawHistory.filter(s => !isCryptoCoin(s.coin)));
+    setExpiredSignals(rawExpired.filter(s => !isCryptoCoin(s.coin)));
   }, []);
 
   useEffect(() => {
@@ -103,8 +108,7 @@ export default function Stocks() {
   }
 
   // ── Derived stats ──────────────────────────────────────────────────────────
-  const closedSignals  = historySignals.filter(s => s.result !== "EXPIRED");
-  const expiredSignals = historySignals.filter(s => s.result === "EXPIRED");
+  const closedSignals  = historySignals; // TP/SL hits only from backend
   const closedCount    = closedSignals.length;
   const expiredCount   = expiredSignals.length;
   const winCount       = closedSignals.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result)).length;
