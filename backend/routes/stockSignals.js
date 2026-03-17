@@ -2,12 +2,39 @@ const express = require("express");
 const axios = require("axios");
 const { requireAdmin, requireAuth, requireSignalAccess } = require("../middleware/auth");
 const { SIGNAL_STATUS } = require("../models/Signal");
-const { readCollection } = require("../storage/fileStore");
+const { readCollection, mutateCollection } = require("../storage/fileStore");
 const stockEngine = require("../services/stockSignalEngine");
 const { ensureSession } = require("../services/smartApiService");
 const { getInstrumentUniverse } = require("../services/smartInstrumentService");
 
 const router = express.Router();
+
+// ─── Stock signal expiry config ───────────────────────────────────────────────
+const SIGNAL_EXPIRY_MS = {
+  "1m":  8  * 60 * 1000,
+  "5m":  25 * 60 * 1000,
+  "15m": 90 * 60 * 1000,
+  "30m": 3  * 60 * 60 * 1000,
+  "1h":  6  * 60 * 60 * 1000,
+  "4h":  24 * 60 * 60 * 1000,
+  default: 6 * 60 * 60 * 1000,
+};
+
+function isTimeExpired(signal) {
+  if (!signal.createdAt) return false;
+  const age = Date.now() - new Date(signal.createdAt).getTime();
+  return age > (SIGNAL_EXPIRY_MS[signal.timeframe] || SIGNAL_EXPIRY_MS.default);
+}
+
+async function expireStaleActives() {
+  const now = new Date().toISOString();
+  await mutateCollection("stockSignals", (records) =>
+    records.map((sig) => {
+      if (sig.status !== SIGNAL_STATUS.ACTIVE || !isTimeExpired(sig)) return sig;
+      return { ...sig, status: SIGNAL_STATUS.CLOSED, result: "EXPIRED", closedAt: now, updatedAt: now };
+    })
+  );
+}
 
 function isWinningResult(result) {
   return ["TP1_HIT", "TP2_HIT", "TP3_HIT"].includes(result);
@@ -157,10 +184,11 @@ function isCryptoCoin(coin) {
 }
 
 router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
+  await expireStaleActives();
   const signals = await readCollection("stockSignals");
   const filtered = sortByCreatedAtDesc(signals)
     .filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE)
-    .filter((signal) => !isCryptoCoin(signal.coin))   // ← block crypto
+    .filter((signal) => !isCryptoCoin(signal.coin))
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
 
   return res.json({
@@ -170,9 +198,23 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
 
 router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   const signals = await readCollection("stockSignals");
+  // History = TP/SL hits only — no expired
   const filtered = sortByCreatedAtDesc(signals)
-    .filter((signal) => signal.status !== SIGNAL_STATUS.ACTIVE)
-    .filter((signal) => !isCryptoCoin(signal.coin))   // ← block crypto
+    .filter((signal) => signal.status === SIGNAL_STATUS.CLOSED && signal.result !== "EXPIRED")
+    .filter((signal) => !isCryptoCoin(signal.coin))
+    .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
+
+  return res.json({
+    signals: req.query.limit ? filtered.slice(0, Number(req.query.limit)) : filtered,
+  });
+});
+
+router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
+  await expireStaleActives();
+  const signals = await readCollection("stockSignals");
+  const filtered = sortByCreatedAtDesc(signals)
+    .filter((signal) => signal.result === "EXPIRED")
+    .filter((signal) => !isCryptoCoin(signal.coin))
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
 
   return res.json({
@@ -183,7 +225,6 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
 // ─── Admin: purge crypto signals from stockSignals collection ─────────────────
 router.post("/admin/purge-crypto", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { mutateCollection } = require("../storage/fileStore");
     let removed = 0;
     await mutateCollection("stockSignals", (records) => {
       const clean = records.filter((s) => !isCryptoCoin(s.coin));
