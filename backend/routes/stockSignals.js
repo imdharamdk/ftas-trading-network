@@ -238,6 +238,7 @@ router.post("/admin/purge-crypto", requireAuth, requireAdmin, async (req, res) =
 });
 
 router.get("/stats/overview", requireAuth, async (req, res) => {
+  await expireStaleActives(); // ensure stale actives are marked expired before counting
   const raw = await readCollection("stockSignals");
   const signals = raw.filter((s) => !isCryptoCoin(s.coin));
   return res.json({
