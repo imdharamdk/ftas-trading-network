@@ -3,6 +3,7 @@ require("dotenv").config();
 const express = require("express");
 const cors    = require("cors");
 const fs      = require("fs");
+const http    = require("http");
 const path    = require("path");
 
 const chatRoutes        = require("./routes/chat");
@@ -13,7 +14,8 @@ const paymentRoutes     = require("./routes/payments");
 const signalRoutes      = require("./routes/signals");
 const stockSignalRoutes = require("./routes/stockSignals");
 const { getStatus, start } = require("./services/signalEngine");
-const stockSignalEngine = require("./services/stockSignalEngine");
+const stockSignalEngine    = require("./services/stockSignalEngine");
+const { createWsServer, getConnectedCount } = require("./services/wsServer");
 
 const PORT     = Number(process.env.PORT || 5000);
 const distPath = path.join(__dirname, "..", "dist");
@@ -175,10 +177,15 @@ function createApp() {
 async function startServer(port = PORT) {
   await maybeBootstrapAdmin();
 
-  const app = createApp();
+  const app    = createApp();
+  const server = http.createServer(app);
 
-  app.listen(port, () => {
+  // Attach WebSocket server to same HTTP server
+  createWsServer(server);
+
+  server.listen(port, () => {
     console.log(`FTAS backend running on port ${port}`);
+    console.log(`WS ready at ws://localhost:${port}/ws`);
     console.log("Engine:", JSON.stringify(getStatus()));
 
     if (String(process.env.AUTO_START_ENGINE || "").toLowerCase() === "true") {
