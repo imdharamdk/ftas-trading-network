@@ -177,11 +177,13 @@ function createApp() {
     message:                { message: "Too many auth attempts, try again later." },
   });
 
-  // Signal scan endpoint (admin only but still limit)
+  // Signal scan endpoint — only the manual scan trigger, not all signal routes
   const scanLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max:      5,
+    max:      10,
     message:  { message: "Scan rate limit exceeded." },
+    // Only limit manual scan trigger POST requests — not signal reads or price fetches
+    skip: (req) => !(req.method === "POST" && req.path === "/scan"),
   });
 
   app.use(globalLimiter);
@@ -213,7 +215,7 @@ function createApp() {
   app.use("/api/news",          newsRoutes);
   app.use("/api/market",        marketRoutes);
   app.use("/api/payments",      paymentRoutes);
-  app.use("/api/signals",       scanLimiter, signalRoutes);
+  app.use("/api/signals",       signalRoutes);       // scanLimiter applied inside route for /scan only
   app.use("/api/stocks",        stockSignalRoutes);
   app.use("/api/notifications", notificationRoutes);
   app.use("/api/telegram",      telegramRoutes);
