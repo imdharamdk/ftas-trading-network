@@ -6,11 +6,12 @@ const { mutateCollection, readCollection, writeCollection } = require("../storag
 const { getPrices } = require("../services/binanceService");
 
 // Rate limit only manual scan triggers — not signal reads
+const { ipKeyGenerator } = require("express-rate-limit");
 const scanLimiter = rateLimit({
   windowMs: 60 * 1000,
   max:      10,
   message:  { message: "Too many scan requests. Wait a minute before scanning again." },
-  keyGenerator: (req) => req.userId || req.ip,
+  keyGenerator: (req) => req.userId || ipKeyGenerator(req),
 });
 const { getLtp } = require("../services/smartApiService");
 const { getInstrumentUniverse } = require("../services/smartInstrumentService");
