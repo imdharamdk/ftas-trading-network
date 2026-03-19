@@ -5,12 +5,16 @@ const MONGODB_URI = process.env.MONGODB_URI || "";
 const DB_NAME     = process.env.MONGODB_DB  || "ftas";
 
 const COLLECTION_FILES = {
-  payments:        "payments.json",
-  paymentSettings: "payment-settings.json",
-  signals:         "signals.json",
-  signalsArchive:  "signals-archive.json",
-  stockSignals:    "stock-signals.json",
-  users:           "users.json",
+  payments:          "payments.json",
+  paymentSettings:   "payment-settings.json",
+  signals:           "signals.json",
+  signalsArchive:    "signals-archive.json",
+  stockSignals:      "stock-signals.json",
+  users:             "users.json",
+  pushSubscriptions: "push-subscriptions.json",
+  priceAlerts:       "price-alerts.json",
+  telegramSubs:      "telegram-subs.json",
+  chat_messages:     "chat-messages.json",
 };
 const LEGACY_COLLECTION_FILES = {
   users: ["user.json"],
