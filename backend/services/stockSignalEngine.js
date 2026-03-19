@@ -4,6 +4,8 @@ const { analyzeCandles } = require("./indicatorEngine");
 const { ensureSession, getCandles: smartGetCandles } = require("./smartApiService");
 const { getInstrumentUniverse } = require("./smartInstrumentService");
 
+function ws() { try { return require("./wsServer"); } catch { return null; } }
+
 // ─── STOCK COLLECTION NAME ────────────────────────────────────────────────────
 const STOCK_COLLECTION = "stockSignals";
 
@@ -719,6 +721,7 @@ async function evaluateActiveSignals() {
     }
     return sig;
   }));
+  closed.forEach(s => { try { ws()?.broadcastStockSignalClosed(s); } catch {} });
   return closed;
 }
 
@@ -745,7 +748,9 @@ async function getPerformanceSnapshot() {
 
 // ─── Persist / Manual ────────────────────────────────────────────────────────
 async function persistSignal(signal) {
-  return mutateCollection(STOCK_COLLECTION, records => ({ records: [signal, ...records], value: signal }));
+  const result = await mutateCollection(STOCK_COLLECTION, records => ({ records: [signal, ...records], value: signal }));
+  try { ws()?.broadcastNewStockSignal(signal); } catch {}
+  return result;
 }
 async function signalExists(candidate) {
   const signals = await readCollection(STOCK_COLLECTION);
