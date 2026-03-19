@@ -16,6 +16,9 @@ const newsRoutes        = require("./routes/news");
 const paymentRoutes     = require("./routes/payments");
 const signalRoutes      = require("./routes/signals");
 const stockSignalRoutes = require("./routes/stockSignals");
+const { router: notificationRoutes } = require("./routes/notifications");
+const telegramRoutes    = require("./routes/telegram");
+const priceAlertRoutes  = require("./routes/priceAlerts");
 const { getStatus, start } = require("./services/signalEngine");
 const stockSignalEngine    = require("./services/stockSignalEngine");
 const { createWsServer, getConnectedCount } = require("./services/wsServer");
@@ -204,13 +207,16 @@ function createApp() {
   app.get("/api/signals/stream", sseManager.handleConnection);
 
   // ── Routes ──────────────────────────────────────────────────────────────────
-  app.use("/api/auth",     authLimiter, authRoutes);
-  app.use("/api/chat",     chatRoutes);
-  app.use("/api/news",     newsRoutes);
-  app.use("/api/market",   marketRoutes);
-  app.use("/api/payments", paymentRoutes);
-  app.use("/api/signals",  scanLimiter, signalRoutes);
-  app.use("/api/stocks",   stockSignalRoutes);
+  app.use("/api/auth",          authLimiter, authRoutes);
+  app.use("/api/chat",          chatRoutes);
+  app.use("/api/news",          newsRoutes);
+  app.use("/api/market",        marketRoutes);
+  app.use("/api/payments",      paymentRoutes);
+  app.use("/api/signals",       scanLimiter, signalRoutes);
+  app.use("/api/stocks",        stockSignalRoutes);
+  app.use("/api/notifications", notificationRoutes);
+  app.use("/api/telegram",      telegramRoutes);
+  app.use("/api/price-alerts",  priceAlertRoutes);
 
   if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
