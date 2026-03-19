@@ -48,6 +48,9 @@ router.post("/messages", requireAuth, async (req, res) => {
       return { records: updated, value: message };
     });
 
+    // Broadcast to all connected WS clients instantly
+    try { require("../services/wsServer").broadcastChatMessage(message); } catch {}
+
     return res.status(201).json({ message });
   } catch (e) {
     return res.status(500).json({ message: e.message });
