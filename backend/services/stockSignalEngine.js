@@ -4,7 +4,8 @@ const { analyzeCandles } = require("./indicatorEngine");
 const { ensureSession, getCandles: smartGetCandles } = require("./smartApiService");
 const { getInstrumentUniverse } = require("./smartInstrumentService");
 
-function ws() { try { return require("./wsServer"); } catch { return null; } }
+function ws()  { try { return require("./wsServer");  } catch { return null; } }
+function sse() { try { return require("./sseManager"); } catch { return null; } }
 
 // ─── STOCK COLLECTION NAME ────────────────────────────────────────────────────
 const STOCK_COLLECTION = "stockSignals";
@@ -721,7 +722,10 @@ async function evaluateActiveSignals() {
     }
     return sig;
   }));
-  closed.forEach(s => { try { ws()?.broadcastStockSignalClosed(s); } catch {} });
+  closed.forEach(s => {
+    try { ws()?.broadcastStockSignalClosed(s);   } catch {}
+    try { sse()?.broadcastSignalClosed(s, true); } catch {}
+  });
   return closed;
 }
 
@@ -749,7 +753,8 @@ async function getPerformanceSnapshot() {
 // ─── Persist / Manual ────────────────────────────────────────────────────────
 async function persistSignal(signal) {
   const result = await mutateCollection(STOCK_COLLECTION, records => ({ records: [signal, ...records], value: signal }));
-  try { ws()?.broadcastNewStockSignal(signal); } catch {}
+  try { ws()?.broadcastNewStockSignal(signal);   } catch {}
+  try { sse()?.broadcastNewSignal(signal, true); } catch {}
   return result;
 }
 async function signalExists(candidate) {
