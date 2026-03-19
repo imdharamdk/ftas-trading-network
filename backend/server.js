@@ -169,11 +169,12 @@ function createApp() {
 
   // Auth endpoints: tighter — 20 req / 15 min (brute-force protection)
   const authLimiter = rateLimit({
-    windowMs:        15 * 60 * 1000,
-    max:             20,
-    standardHeaders: true,
-    legacyHeaders:   false,
-    message:         { message: "Too many auth attempts, try again later." },
+    windowMs:               15 * 60 * 1000,
+    max:                    50,
+    standardHeaders:        true,
+    legacyHeaders:          false,
+    skipSuccessfulRequests: true,       // successful logins don't count toward limit
+    message:                { message: "Too many auth attempts, try again later." },
   });
 
   // Signal scan endpoint (admin only but still limit)
