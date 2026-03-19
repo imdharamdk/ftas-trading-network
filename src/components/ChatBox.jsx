@@ -1,6 +1,7 @@
-import { useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { SessionContext } from "../context/sessionContext";
 import { apiFetch } from "../lib/api";
+import { useWebSocket } from "../lib/useWebSocket";
 
 const MAX_CHARS = 500;
 
@@ -42,25 +43,36 @@ export default function ChatBox() {
   const [error, setError]     = useState("");
   const [unread, setUnread]   = useState(0);
   const bottomRef = useRef(null);
-  const pollRef   = useRef(null);
 
-  // ── Fetch messages ──────────────────────────────────────────────────────────
+  // ── WebSocket: receive new chat messages instantly ─────────────────────────
+  const onChatMessage = useCallback((msg) => {
+    setMessages(prev => {
+      if (prev.some(m => m.id === msg.id)) return prev; // deduplicate
+      if (!open) setUnread(u => u + 1);
+      return [...prev, msg];
+    });
+  }, [open]);
+
+  const { connected: wsConnected } = useWebSocket({ onChatMessage });
+
+  // ── Initial load + fallback poll when WS not connected ─────────────────────
   async function fetchMessages(quiet = false) {
     try {
       const res = await apiFetch("/chat/messages");
       setMessages(res.messages || []);
-      if (!open && !quiet) setUnread((u) => u + 1);
+      if (!open && !quiet) setUnread(u => u + 1);
     } catch { /* silent */ }
   }
 
   useEffect(() => {
     if (!user) return;
-    fetchMessages(true);
-    // Only poll when chat panel is open — saves API calls when closed
+    fetchMessages(true); // always load on mount
+    if (wsConnected) return; // WS handles live updates — no polling needed
+    // Fallback poll only when WS is disconnected
     if (!open) return;
-    pollRef.current = setInterval(() => fetchMessages(true), 8000); // 8s when open
-    return () => clearInterval(pollRef.current);
-  }, [user, open]);
+    const id = setInterval(() => fetchMessages(true), 10_000);
+    return () => clearInterval(id);
+  }, [user, open, wsConnected]);
 
   useEffect(() => {
     if (open) {
