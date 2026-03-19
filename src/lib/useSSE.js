@@ -2,16 +2,15 @@
  * useSSE — FTAS Server-Sent Events hook (Vercel frontend compatible)
  *
  * Connects to Render backend SSE endpoint via EventSource.
- * Auto-reconnects with backoff. Complements useWebSocket as fallback.
+ * Never use on Vercel server-side — client-only.
  *
- * Usage:
- *   const { connected } = useSSE({
- *     onSignalNew:    (signal) => ...,
- *     onSignalClosed: (signal) => ...,
- *     onPriceUpdate:  (prices) => ...,
- *     onStatsUpdate:  ({ crypto, stocks }) => ...,
- *     onChatMessage:  (msg) => ...,
- *   });
+ * Improvements over naive implementations:
+ *  - unmounted guard prevents setState after component destroy
+ *  - duplicate connection guard (esRef check before new EventSource)
+ *  - exponential backoff capped at 30s
+ *  - visibility reconnect resets backoff counter
+ *  - all 8 FTAS event types handled
+ *  - getStoredToken() uses app's actual token key (not hardcoded localStorage)
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -20,9 +19,9 @@ import { getStoredToken } from "./api";
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/$/, "");
 const SSE_URL  = `${API_BASE}/signals/stream`;
 
-const RECONNECT_BASE_MS = 3_000;
-const RECONNECT_MAX_MS  = 30_000;
-const RECONNECT_FACTOR  = 1.8;
+const BACKOFF_BASE_MS = 2_000;   // 2s first retry
+const BACKOFF_MAX_MS  = 30_000;  // 30s max
+const BACKOFF_FACTOR  = 2;       // doubles each retry: 2s, 4s, 8s, 16s, 30s
 
 export function useSSE({
   onSignalNew,
@@ -35,79 +34,61 @@ export function useSSE({
   onEngineStatus,
 } = {}) {
   const [connected, setConnected] = useState(false);
-  const esRef      = useRef(null);
-  const retryDelay = useRef(RECONNECT_BASE_MS);
-  const retryTimer = useRef(null);
-  const unmounted  = useRef(false);
+  const esRef       = useRef(null);
+  const retryCount  = useRef(0);
+  const retryTimer  = useRef(null);
+  const unmounted   = useRef(false);
 
   const connect = useCallback(() => {
     if (unmounted.current) return;
-    const token = getStoredToken();
-    if (!token) return;
+    if (esRef.current) return;           // ← prevent double connection
 
-    // Close existing connection
-    if (esRef.current) {
-      esRef.current.close();
-      esRef.current = null;
-    }
+    const token = getStoredToken();
+    if (!token) return;                  // not logged in — skip
 
     const url = `${SSE_URL}?token=${encodeURIComponent(token)}`;
     const es  = new EventSource(url);
     esRef.current = es;
 
+    // ── Server confirmed connection ──────────────────────────────────────────
     es.addEventListener("connected", () => {
+      if (unmounted.current) return;
       setConnected(true);
-      retryDelay.current = RECONNECT_BASE_MS; // reset backoff
-      console.log("[sse] Connected");
+      retryCount.current = 0; // reset backoff on successful connect
+      console.log("[sse] ✅ Connected");
     });
 
-    es.addEventListener("heartbeat", () => {
-      // Server keepalive — no action needed
-    });
+    es.addEventListener("heartbeat", () => { /* keepalive — no action */ });
 
-    es.addEventListener("signal:new", (e) => {
-      try { onSignalNew?.(JSON.parse(e.data).signal); } catch {}
-    });
+    // ── Signal events ────────────────────────────────────────────────────────
+    es.addEventListener("signal:new",    (e) => { try { onSignalNew?.(JSON.parse(e.data).signal);   } catch {} });
+    es.addEventListener("signal:closed", (e) => { try { onSignalClosed?.(JSON.parse(e.data).signal); } catch {} });
+    es.addEventListener("stock:new",     (e) => { try { onStockNew?.(JSON.parse(e.data).signal);    } catch {} });
+    es.addEventListener("stock:closed",  (e) => { try { onStockClosed?.(JSON.parse(e.data).signal); } catch {} });
 
-    es.addEventListener("signal:closed", (e) => {
-      try { onSignalClosed?.(JSON.parse(e.data).signal); } catch {}
-    });
-
-    es.addEventListener("stock:new", (e) => {
-      try { onStockNew?.(JSON.parse(e.data).signal); } catch {}
-    });
-
-    es.addEventListener("stock:closed", (e) => {
-      try { onStockClosed?.(JSON.parse(e.data).signal); } catch {}
-    });
-
-    es.addEventListener("price:update", (e) => {
-      try { onPriceUpdate?.(JSON.parse(e.data).prices); } catch {}
-    });
-
-    es.addEventListener("stats:update", (e) => {
+    // ── Price + stats ────────────────────────────────────────────────────────
+    es.addEventListener("price:update",  (e) => { try { onPriceUpdate?.(JSON.parse(e.data).prices); } catch {} });
+    es.addEventListener("stats:update",  (e) => {
       try {
         const d = JSON.parse(e.data);
         onStatsUpdate?.({ crypto: d.crypto, stocks: d.stocks });
       } catch {}
     });
 
-    es.addEventListener("chat:message", (e) => {
-      try { onChatMessage?.(JSON.parse(e.data).message); } catch {}
-    });
+    // ── Chat + Engine ────────────────────────────────────────────────────────
+    es.addEventListener("chat:message",  (e) => { try { onChatMessage?.(JSON.parse(e.data).message); } catch {} });
+    es.addEventListener("engine:status", (e) => { try { onEngineStatus?.(JSON.parse(e.data).engine); } catch {} });
 
-    es.addEventListener("engine:status", (e) => {
-      try { onEngineStatus?.(JSON.parse(e.data).engine); } catch {}
-    });
-
+    // ── Error → reconnect with exponential backoff ───────────────────────────
     es.onerror = () => {
+      if (unmounted.current) return;
       setConnected(false);
       es.close();
       esRef.current = null;
-      if (unmounted.current) return;
-      const delay = retryDelay.current;
-      retryDelay.current = Math.min(delay * RECONNECT_FACTOR, RECONNECT_MAX_MS);
-      console.log(`[sse] Reconnecting in ${Math.round(delay / 1000)}s`);
+
+      const delay = Math.min(BACKOFF_BASE_MS * Math.pow(BACKOFF_FACTOR, retryCount.current), BACKOFF_MAX_MS);
+      retryCount.current++;
+      console.log(`[sse] ❌ Error — retry #${retryCount.current} in ${Math.round(delay / 1000)}s`);
       retryTimer.current = setTimeout(connect, delay);
     };
   }, [onSignalNew, onSignalClosed, onStockNew, onStockClosed, onPriceUpdate, onStatsUpdate, onChatMessage, onEngineStatus]);
@@ -116,11 +97,11 @@ export function useSSE({
     unmounted.current = false;
     connect();
 
-    // Reconnect on tab visibility
+    // Reconnect when user switches back to the tab
     function onVisible() {
       if (document.visibilityState === "visible" && !esRef.current) {
         clearTimeout(retryTimer.current);
-        retryDelay.current = RECONNECT_BASE_MS;
+        retryCount.current = 0; // reset backoff for manual reconnect
         connect();
       }
     }
@@ -132,7 +113,6 @@ export function useSSE({
       document.removeEventListener("visibilitychange", onVisible);
       esRef.current?.close();
       esRef.current = null;
-      setConnected(false);
     };
   }, [connect]);
 
