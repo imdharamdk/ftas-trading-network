@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AppShell from "../components/AppShell";
 import SignalTable from "../components/SignalTable";
 import { apiFetch } from "../lib/api";
 import { getSignalCoins, mergeSignalLivePrices } from "../lib/liveSignalPrices";
 import { useSession } from "../context/useSession";
+import { useWebSocket } from "../lib/useWebSocket";
 
 // ─── Expiry config (must match backend SIGNAL_EXPIRY_MS) ─────────────────────
 const EXPIRY_MS = {
@@ -70,6 +71,52 @@ export default function Crypto() {
   const [tfFilter, setTfFilter]             = useState("ALL"); // "ALL"|"1m"|"5m"|"15m"|"30m"|"1h"
   const [historyLimit, setHistoryLimit]     = useState(50);
   const [expiredLimit, setExpiredLimit]     = useState(50);
+
+  const ALL_TF = ["1m","5m","15m","30m","1h"];
+
+  // ── WebSocket handlers ─────────────────────────────────────────────────────
+  const onSignalNew = useCallback((signal) => {
+    if (signal.source === "SMART_ENGINE") return; // stock signal — ignore
+    if (!ALL_TF.includes(signal.timeframe)) return;
+    setActiveSignals(prev => {
+      // Avoid duplicate
+      if (prev.some(s => s.id === signal.id)) return prev;
+      return [signal, ...prev];
+    });
+  }, []);
+
+  const onSignalClosed = useCallback((signal) => {
+    if (signal.source === "SMART_ENGINE") return;
+    // Remove from active
+    setActiveSignals(prev => prev.filter(s => s.id !== signal.id));
+    // Add to correct bucket
+    if (signal.result === "EXPIRED") {
+      setExpiredSignals(prev => [signal, ...prev.filter(s => s.id !== signal.id)]);
+    } else {
+      setHistorySignals(prev => [signal, ...prev.filter(s => s.id !== signal.id)]);
+    }
+  }, []);
+
+  const onPriceUpdate = useCallback((prices) => {
+    setActiveSignals(prev => prev.map(s => {
+      const livePrice = prices[s.coin];
+      if (!livePrice) return s;
+      const entry = Number(s.entry);
+      const signalMovePercent = entry ? Number((((s.side === "LONG" ? livePrice - entry : entry - livePrice) / entry) * 100).toFixed(2)) : null;
+      return { ...s, livePrice, liveUpdatedAt: new Date().toISOString(), signalMovePercent };
+    }));
+  }, []);
+
+  const onStatsUpdate = useCallback(({ crypto }) => {
+    if (crypto) setOverview(prev => ({ ...prev, ...crypto }));
+  }, []);
+
+  const { connected: wsConnected } = useWebSocket({
+    onSignalNew,
+    onSignalClosed,
+    onPriceUpdate,
+    onStatsUpdate,
+  });
 
   // ── Admin: coin search + paused coins ──────────────────────────────────────
   const [searchCoin, setSearchCoin]         = useState("");
@@ -171,12 +218,14 @@ export default function Crypto() {
       }
     }
     load();
-    const id = window.setInterval(load, 30000);
+    // WS handles realtime — polling is fallback only (every 2 min)
+    const id = window.setInterval(load, 120_000);
     return () => { mounted = false; window.clearInterval(id); };
   }, []);
 
-  // ── Live price refresh ─────────────────────────────────────────────────────
+  // ── Live price refresh (fallback when WS not connected) ───────────────────
   useEffect(() => {
+    if (wsConnected) return; // WS handles prices — skip polling
     let mounted = true;
     async function refreshPrices() {
       if (!signalCoinsKey) return;
@@ -187,9 +236,9 @@ export default function Crypto() {
       } catch { /* keep stale */ }
     }
     refreshPrices();
-    const id = window.setInterval(refreshPrices, 12000);
+    const id = window.setInterval(refreshPrices, 15_000);
     return () => { mounted = false; window.clearInterval(id); };
-  }, [signalCoinsKey]);
+  }, [signalCoinsKey, wsConnected]);
 
   // ── Stats ──────────────────────────────────────────────────────────────────
   const closedSignals  = historySignals; // historySignals already = TP/SL only from backend
