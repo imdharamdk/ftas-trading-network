@@ -1,8 +1,17 @@
-const express = require("express");
+const express    = require("express");
+const rateLimit  = require("express-rate-limit");
 const { requireAdmin, requireAuth, requireSignalAccess } = require("../middleware/auth");
 const { SIGNAL_STATUS } = require("../models/Signal");
 const { mutateCollection, readCollection, writeCollection } = require("../storage/fileStore");
 const { getPrices } = require("../services/binanceService");
+
+// Rate limit only manual scan triggers — not signal reads
+const scanLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max:      10,
+  message:  { message: "Too many scan requests. Wait a minute before scanning again." },
+  keyGenerator: (req) => req.userId || req.ip,
+});
 const { getLtp } = require("../services/smartApiService");
 const { getInstrumentUniverse } = require("../services/smartInstrumentService");
 const { createManualSignal, generateForCoin, getPausedCoins, getStatus, pauseCoin, resumeCoin, scanNow, start, stop } = require("../services/signalEngine");
@@ -684,7 +693,7 @@ router.post("/facebook/test-post", requireAuth, requireAdmin, async (_req, res) 
   }
 });
 
-router.post("/scan", requireAuth, requireAdmin, async (req, res) => {
+router.post("/scan", requireAuth, requireAdmin, scanLimiter, async (req, res) => {
   try {
     const result = await scanNow({ source: "MANUAL_SCAN" });
     return res.json(result);
