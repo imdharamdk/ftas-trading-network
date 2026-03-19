@@ -20,10 +20,12 @@ const NAV_ITEMS = [
   { to: "/crypto",    icon: "💹", label: "Crypto"    },
   { to: "/stocks",    icon: "🇮🇳", label: "Stocks"    },
   { to: "/news",      icon: "📰", label: "News"      },
+  { to: "/settings",  icon: "⚙️", label: "Settings"  },
 ];
 
 const ADMIN_NAV_ITEMS = [
-  { to: "/post-generator", icon: "✍️", label: "Post Gen" },
+  { to: "/analytics",      icon: "📈", label: "Analytics" },
+  { to: "/post-generator", icon: "✍️", label: "Post Gen"  },
 ];
 
 export default function AppShell({ actions = null, children, subtitle, title }) {
