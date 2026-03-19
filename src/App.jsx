@@ -9,6 +9,8 @@ import News from "./pages/News";
 import Signup from "./pages/Signup";
 import Stocks from "./pages/Stocks";
 import PostGenerator from "./pages/PostGenerator";
+import Analytics from "./pages/Analytics";
+import Settings from "./pages/Settings";
 
 function SessionGate({ children, guestOnly = false }) {
   const { loading, user } = useSession();
@@ -89,14 +91,9 @@ export default function App() {
             path="/stocks"
           />
           <Route element={<News />} path="/news" />
-          <Route
-            element={
-              <SessionGate>
-                <PostGenerator />
-              </SessionGate>
-            }
-            path="/post-generator"
-          />
+          <Route element={<SessionGate><PostGenerator /></SessionGate>} path="/post-generator" />
+          <Route element={<SessionGate><Analytics /></SessionGate>}     path="/analytics" />
+          <Route element={<SessionGate><Settings /></SessionGate>}      path="/settings" />
           <Route element={<Navigate replace to="/" />} path="*" />
         </Routes>
       </BrowserRouter>
