@@ -3,6 +3,8 @@ import AppShell from "../components/AppShell";
 import DistributionList from "../components/DistributionList";
 import { useSession } from "../context/useSession";
 import { apiFetch } from "../lib/api";
+import { useWebSocket } from "../lib/useWebSocket";
+import { useWebSocket } from "../lib/useWebSocket";
 
 const defaultPaymentForm = {
   amount: "",
@@ -141,6 +143,14 @@ export default function Dashboard() {
   const [users, setUsers] = useState([]);
   const [paymentForm, setPaymentForm] = useState(defaultPaymentForm);
   const [manualForm, setManualForm] = useState(defaultManualForm);
+
+  // ── WebSocket — realtime stats + engine updates ────────────────────────────
+  const onStatsUpdate = useCallback(({ crypto, stocks }) => {
+    if (crypto) setOverview(prev => prev ? { ...prev, ...crypto } : crypto);
+    if (stocks) setStockOverview(prev => prev ? { ...prev, ...stocks } : stocks);
+  }, []);
+  const onEngineStatus = useCallback((eng) => setEngine(eng), []);
+  const { connected: wsConnected } = useWebSocket({ onStatsUpdate, onEngineStatus });
   const [paymentMethodDraft, setPaymentMethodDraft] = useState("");
   const [editingMethod, setEditingMethod] = useState(null);
   const [editingMethodLabel, setEditingMethodLabel] = useState("");
@@ -228,7 +238,7 @@ export default function Dashboard() {
       }
     }
     loadData();
-    const id = window.setInterval(loadData, 60000); // was 30s — reduce poll frequency
+    const id = window.setInterval(loadData, 300_000); // WS handles realtime — 5min fallback only
     // Also refresh instantly when user comes back to this tab
     function onVisible() {
       if (document.visibilityState === "visible" && active) loadData();
@@ -431,6 +441,7 @@ export default function Dashboard() {
                 label: "Active Signals",
                 value: (overview?.activeSignals ?? 0) + (stockOverview?.activeSignals ?? 0),
                 meta: `${overview?.activeSignals ?? 0} crypto · ${stockOverview?.activeSignals ?? 0} stocks`,
+                badge: wsConnected ? { text: "● LIVE", color: "#2bd48f" } : { text: "○ polling", color: "#8da0bc" },
               },
               {
                 label: "💹 Crypto Win Rate",
@@ -452,6 +463,11 @@ export default function Dashboard() {
                 <span className="metric-label">{stat.label}</span>
                 <strong>{stat.value}</strong>
                 <span className="metric-meta">{stat.meta}</span>
+                {stat.badge && (
+                  <span style={{ fontSize: "0.65rem", fontWeight: 700, color: stat.badge.color, letterSpacing: "0.05em" }}>
+                    {stat.badge.text}
+                  </span>
+                )}
               </div>
             ))}
           </div>
