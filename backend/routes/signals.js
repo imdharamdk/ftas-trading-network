@@ -548,6 +548,14 @@ router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) =>
       liveUpdatedAt,
     }));
 
+    // Broadcast prices to all WS clients — they don't need to poll anymore
+    try {
+      const wsServer = require("../services/wsServer");
+      const priceMap = {};
+      priceRows.forEach(r => { if (r.livePrice !== null) priceMap[r.coin] = r.livePrice; });
+      if (Object.keys(priceMap).length) wsServer.broadcastPrices(priceMap);
+    } catch {}
+
     return res.json({ prices: priceRows });
   } catch (error) {
     return res.status(500).json({ message: error.message });
