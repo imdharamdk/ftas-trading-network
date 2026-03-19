@@ -22,12 +22,27 @@ function formatSymbol(signal) {
 }
 
 function isStock(signal) {
-  return signal.source === "SMART_ENGINE";
+  // Stock signals either have source=SMART_ENGINE OR coin doesn't end with USDT
+  if (signal.source === "SMART_ENGINE") return true;
+  const coin = String(signal.coin || "").toUpperCase();
+  if (coin.endsWith("USDT")) return false;
+  // Has exchange info = stock
+  if (signal.scanMeta?.instrument?.exchange) return true;
+  // No USDT suffix and not a known crypto pattern = treat as stock
+  return !coin.match(/^[A-Z]{2,10}USDT$/);
 }
 
 function getMarketEmoji(signal) {
   if (isStock(signal)) return "🇮🇳";
   return "💹";
+}
+
+function getMarketLabel(signal) {
+  if (!isStock(signal)) return "Bybit Futures";
+  const exchange = signal.scanMeta?.instrument?.exchange
+    || signal.indicatorSnapshot?.exchange;
+  if (exchange) return exchange;
+  return "NSE/BSE";
 }
 
 function getSideEmoji(side) {
@@ -64,7 +79,7 @@ function generateWhatsAppPost(signals, includeFooter) {
 
   const body = signals.map((s, i) => {
     const sym    = formatSymbol(s);
-    const market = isStock(s) ? "NSE/BSE" : "Bybit Futures";
+    const market = getMarketLabel(s);
     const lines  = [
       `${getSideEmoji(s.side)} *Signal ${i + 1} — ${sym}*`,
       ``,
@@ -116,7 +131,7 @@ function generateFacebookPost(signals, includeFooter) {
 
   const body = signals.map((s, i) => {
     const sym    = formatSymbol(s);
-    const market = isStock(s) ? "🇮🇳 NSE/BSE" : "💹 Bybit Futures";
+    const market = `${getMarketEmoji(s)} ${getMarketLabel(s)}`;
     return [
       `${getSideEmoji(s.side)} Signal ${i + 1} | ${sym} | ${s.side} ${s.timeframe.toUpperCase()}`,
       `Market: ${market}`,
