@@ -1,10 +1,13 @@
 require("dotenv").config();
 
-const express = require("express");
-const cors    = require("cors");
-const fs      = require("fs");
-const http    = require("http");
-const path    = require("path");
+const express    = require("express");
+const cors       = require("cors");
+const fs         = require("fs");
+const http       = require("http");
+const path       = require("path");
+const helmet     = require("helmet");
+const rateLimit  = require("express-rate-limit");
+const morgan     = require("morgan");
 
 const chatRoutes        = require("./routes/chat");
 const authRoutes        = require("./routes/auth");
@@ -16,6 +19,7 @@ const stockSignalRoutes = require("./routes/stockSignals");
 const { getStatus, start } = require("./services/signalEngine");
 const stockSignalEngine    = require("./services/stockSignalEngine");
 const { createWsServer, getConnectedCount } = require("./services/wsServer");
+const sseManager           = require("./services/sseManager");
 
 const PORT     = Number(process.env.PORT || 5000);
 const distPath = path.join(__dirname, "..", "dist");
@@ -134,11 +138,51 @@ async function maybeBootstrapAdmin() {
 function createApp() {
   const app = express();
 
+  // ── Security ────────────────────────────────────────────────────────────────
   app.disable("x-powered-by");
+  app.use(helmet({
+    crossOriginEmbedderPolicy: false, // allow charts/widgets to load
+    contentSecurityPolicy: false,     // managed by Vercel frontend
+  }));
   app.use(cors(createCorsOptions()));
   app.use(express.json({ limit: "1mb" }));
 
-  // Disable caching for all /api routes — ensures dashboard always gets fresh data
+  // ── Logging ─────────────────────────────────────────────────────────────────
+  // Compact format: METHOD /path STATUS ms
+  app.use(morgan(":method :url :status :res[content-length] - :response-time ms", {
+    skip: (req) => req.path === "/api/health", // don't spam logs with health checks
+  }));
+
+  // ── Rate limiting ───────────────────────────────────────────────────────────
+  // Global: 200 req / 1 min per IP
+  const globalLimiter = rateLimit({
+    windowMs:        60 * 1000,
+    max:             200,
+    standardHeaders: true,
+    legacyHeaders:   false,
+    message:         { message: "Too many requests, please slow down." },
+    skip: (req) => req.path === "/api/health",
+  });
+
+  // Auth endpoints: tighter — 20 req / 15 min (brute-force protection)
+  const authLimiter = rateLimit({
+    windowMs:        15 * 60 * 1000,
+    max:             20,
+    standardHeaders: true,
+    legacyHeaders:   false,
+    message:         { message: "Too many auth attempts, try again later." },
+  });
+
+  // Signal scan endpoint (admin only but still limit)
+  const scanLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max:      5,
+    message:  { message: "Scan rate limit exceeded." },
+  });
+
+  app.use(globalLimiter);
+
+  // ── Cache-control for API routes ────────────────────────────────────────────
   app.use("/api", (_req, res, next) => {
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.set("Pragma", "no-cache");
@@ -146,20 +190,26 @@ function createApp() {
     next();
   });
 
-  // Health — Render uses this to confirm service is alive
+  // ── Health ──────────────────────────────────────────────────────────────────
   app.get("/api/health", (_req, res) => res.json({
-    name:      "FTAS Signal Engine",
-    ok:        true,
-    timestamp: new Date().toISOString(),
-    engine:    getStatus(),
+    name:       "FTAS Signal Engine",
+    ok:         true,
+    timestamp:  new Date().toISOString(),
+    engine:     getStatus(),
+    wsClients:  getConnectedCount(),
+    sseClients: sseManager.getClientCount(),
   }));
 
-  app.use("/api/auth",     authRoutes);
+  // ── SSE stream (Render-only real-time for clients that can't use WS) ────────
+  app.get("/api/signals/stream", sseManager.handleConnection);
+
+  // ── Routes ──────────────────────────────────────────────────────────────────
+  app.use("/api/auth",     authLimiter, authRoutes);
   app.use("/api/chat",     chatRoutes);
   app.use("/api/news",     newsRoutes);
   app.use("/api/market",   marketRoutes);
   app.use("/api/payments", paymentRoutes);
-  app.use("/api/signals",  signalRoutes);
+  app.use("/api/signals",  scanLimiter, signalRoutes);
   app.use("/api/stocks",   stockSignalRoutes);
 
   if (fs.existsSync(distPath)) {
@@ -169,6 +219,22 @@ function createApp() {
       return res.sendFile(path.join(distPath, "index.html"));
     });
   }
+
+  // ── Global error handler ────────────────────────────────────────────────────
+  // Must be last — catches any unhandled errors from routes/middleware
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, _next) => {
+    const status = err.status || err.statusCode || 500;
+    const isProd = process.env.NODE_ENV === "production";
+
+    console.error(`[error] ${req.method} ${req.path} →`, err.message);
+    if (!isProd) console.error(err.stack);
+
+    return res.status(status).json({
+      message: isProd && status === 500 ? "Internal server error" : (err.message || "Internal server error"),
+      ...(isProd ? {} : { stack: err.stack }),
+    });
+  });
 
   return app;
 }
