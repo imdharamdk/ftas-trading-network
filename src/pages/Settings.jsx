@@ -116,6 +116,13 @@ export default function Settings() {
   const [tgBusy, setTgBusy]       = useState(false);
   const [tgMsg, setTgMsg]         = useState("");
 
+  // Facebook (admin)
+  const [fbStatus, setFbStatus]   = useState(null);
+  const [fbBusy, setFbBusy]       = useState(false);
+  const [fbMsg, setFbMsg]         = useState("");
+  const [fbTokenForm, setFbTokenForm] = useState({ appId: "", appSecret: "", shortToken: "" });
+  const [fbTokenResult, setFbTokenResult] = useState(null);
+
   const loadAlerts = useCallback(async () => {
     setAlertsLoading(true);
     try {
@@ -133,10 +140,19 @@ export default function Settings() {
     } catch {}
   }, [isAdmin]);
 
+  const loadFacebook = useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      const res = await apiFetch("/facebook/status");
+      setFbStatus(res);
+    } catch {}
+  }, [isAdmin]);
+
   useEffect(() => {
     loadAlerts();
     loadTelegram();
-  }, [loadAlerts, loadTelegram]);
+    loadFacebook();
+  }, [loadAlerts, loadTelegram, loadFacebook]);
 
   const deleteAlert = async (id) => {
     await apiFetch(`/price-alerts/${id}`, { method: "DELETE" });
@@ -305,6 +321,136 @@ export default function Settings() {
                   </button>
                 </div>
                 {tgMsg && <p style={{ fontSize: 13, color: tgMsg.startsWith("✅") ? "#2bd48f" : "#f87171" }}>{tgMsg}</p>}
+              </div>
+            )}
+          </Section>
+        )}
+
+        {/* ── Facebook (Admin only) ── */}
+        {isAdmin && (
+          <Section eyebrow="Integration" title="Facebook Auto-Post" accent="#1877f2">
+            {!fbStatus?.configured ? (
+              <div style={{ display: "grid", gap: 14 }}>
+                <div className="banner banner-warning">
+                  ⚠️ Facebook not configured. Set these in Render environment variables:
+                </div>
+                <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 8, padding: 14, fontFamily: "monospace", fontSize: 12, color: "#93c5fd" }}>
+                  <div>FB_PAGE_ID=<span style={{ color: "#fbbf24" }}>your_numeric_page_id</span></div>
+                  <div style={{ marginTop: 6 }}>FB_PAGE_ACCESS_TOKEN=<span style={{ color: "#fbbf24" }}>your_long_lived_page_token</span></div>
+                  <div style={{ marginTop: 6 }}>FB_MIN_CONFIDENCE=<span style={{ color: "#fbbf24" }}>85</span></div>
+                  <div style={{ marginTop: 6 }}>FB_AUTO_POST=<span style={{ color: "#fbbf24" }}>true</span></div>
+                </div>
+
+                {/* Token exchange helper */}
+                <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", paddingTop: 14 }}>
+                  <p style={{ fontWeight: 600, marginBottom: 8 }}>🔑 Get Long-Lived Page Token</p>
+                  <p style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>
+                    Enter your App credentials and a short-lived user token — we'll exchange it for a long-lived page token automatically.
+                  </p>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {[
+                      ["App ID", "appId", "From developers.facebook.com → Your App"],
+                      ["App Secret", "appSecret", "From App Dashboard → Settings → Basic"],
+                      ["Short-lived User Token", "shortToken", "From Graph API Explorer → Generate Token"],
+                    ].map(([label, key, placeholder]) => (
+                      <label key={key} style={{ display: "grid", gap: 4, fontSize: 12, color: "#64748b" }}>
+                        {label}
+                        <input
+                          type={key === "appSecret" ? "password" : "text"}
+                          value={fbTokenForm[key]}
+                          onChange={e => setFbTokenForm(f => ({ ...f, [key]: e.target.value }))}
+                          placeholder={placeholder}
+                          style={inputStyle}
+                        />
+                      </label>
+                    ))}
+                    <button
+                      type="button"
+                      disabled={fbBusy || !fbTokenForm.appId || !fbTokenForm.appSecret || !fbTokenForm.shortToken}
+                      onClick={async () => {
+                        setFbBusy(true); setFbTokenResult(null);
+                        try {
+                          const res = await apiFetch("/facebook/exchange-token", { method: "POST", body: fbTokenForm });
+                          setFbTokenResult(res);
+                        } catch (e) { setFbMsg(`❌ ${e.message}`); }
+                        finally { setFbBusy(false); }
+                      }}
+                      className="button button-primary"
+                      style={{ fontSize: 13, justifySelf: "start" }}
+                    >
+                      {fbBusy ? "Exchanging..." : "🔄 Get Long-Lived Token"}
+                    </button>
+                  </div>
+
+                  {fbTokenResult && (
+                    <div style={{ marginTop: 14, background: "rgba(43,212,143,0.08)", border: "1px solid rgba(43,212,143,0.2)", borderRadius: 8, padding: 14 }}>
+                      <p style={{ fontWeight: 700, color: "#2bd48f", marginBottom: 8 }}>✅ Token exchanged! Copy these to Render env vars:</p>
+                      {fbTokenResult.pages?.map(p => (
+                        <div key={p.id} style={{ marginBottom: 10 }}>
+                          <p style={{ fontSize: 12, color: "#94a3b8", marginBottom: 4 }}>📄 {p.name} (ID: {p.id})</p>
+                          <div style={{ background: "rgba(0,0,0,0.4)", borderRadius: 6, padding: "8px 10px", fontFamily: "monospace", fontSize: 11, color: "#fbbf24", wordBreak: "break-all" }}>
+                            FB_PAGE_ID={p.id}<br/>
+                            FB_PAGE_ACCESS_TOKEN={p.accessToken}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {fbMsg && <p style={{ fontSize: 13, color: "#f87171", marginTop: 8 }}>{fbMsg}</p>}
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: 14 }}>
+                <div className="banner banner-success">
+                  ✅ Connected to: <strong>{fbStatus.page?.name}</strong>
+                  {fbStatus.page?.fan_count ? ` · ${fbStatus.page.fan_count.toLocaleString()} followers` : ""}
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 8, padding: "10px 14px", fontSize: 13 }}>
+                    <span style={{ color: "#64748b", display: "block", marginBottom: 4, fontSize: 11 }}>AUTO-POST</span>
+                    <strong style={{ color: fbStatus.autoPost ? "#2bd48f" : "#f87171" }}>
+                      {fbStatus.autoPost ? "✅ Enabled" : "❌ Disabled"}
+                    </strong>
+                    <p style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>Set FB_AUTO_POST=true in Render to enable</p>
+                  </div>
+                  <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 8, padding: "10px 14px", fontSize: 13 }}>
+                    <span style={{ color: "#64748b", display: "block", marginBottom: 4, fontSize: 11 }}>MIN CONFIDENCE</span>
+                    <strong>{fbStatus.minConf}%+</strong>
+                    <p style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>Set FB_MIN_CONFIDENCE=85 in Render</p>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    type="button" disabled={fbBusy}
+                    onClick={async () => {
+                      setFbBusy(true); setFbMsg("");
+                      try {
+                        await apiFetch("/facebook/test", { method: "POST" });
+                        setFbMsg("✅ Test post sent to Facebook page!");
+                      } catch (e) { setFbMsg(`❌ ${e.message}`); }
+                      finally { setFbBusy(false); setTimeout(() => setFbMsg(""), 5000); }
+                    }}
+                    className="button button-ghost" style={{ fontSize: 13 }}
+                  >
+                    📤 Send Test Post
+                  </button>
+                  <button
+                    type="button" onClick={loadFacebook}
+                    className="button button-ghost" style={{ fontSize: 13 }}
+                  >
+                    🔄 Refresh Status
+                  </button>
+                  <a
+                    href="https://www.facebook.com/Ftas.trading.network"
+                    target="_blank" rel="noopener noreferrer"
+                    className="button button-ghost" style={{ fontSize: 13 }}
+                  >
+                    📘 Open Facebook Page ↗
+                  </a>
+                </div>
+                {fbMsg && <p style={{ fontSize: 13, color: fbMsg.startsWith("✅") ? "#2bd48f" : "#f87171" }}>{fbMsg}</p>}
               </div>
             )}
           </Section>
