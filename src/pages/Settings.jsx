@@ -194,25 +194,77 @@ export default function Settings() {
                     Get notified instantly when a new trading signal is generated — even when the app is closed.
                   </p>
                 </div>
-                <Toggle
-                  checked={subscribed}
-                  onChange={subscribed ? unsubscribe : subscribe}
-                  disabled={pushLoading || permission === "denied"}
-                />
+                {permission !== "denied" && (
+                  <Toggle
+                    checked={subscribed}
+                    onChange={subscribed ? unsubscribe : subscribe}
+                    disabled={pushLoading}
+                  />
+                )}
               </div>
 
+              {/* Blocked — show step by step fix */}
               {permission === "denied" && (
-                <div className="banner banner-error">
-                  🚫 Notifications blocked. Go to browser settings → Site Settings → Notifications → Allow for this site.
+                <div style={{
+                  background: "rgba(255,85,119,0.08)",
+                  border: "1px solid rgba(255,85,119,0.25)",
+                  borderRadius: 12, padding: 16,
+                }}>
+                  <p style={{ color: "#ff5577", fontWeight: 700, marginBottom: 10, fontSize: 14 }}>
+                    🚫 Notifications Blocked
+                  </p>
+                  <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 12 }}>
+                    You need to allow notifications in your browser settings. Follow these steps:
+                  </p>
+
+                  {/* Android Chrome steps */}
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {[
+                      { step: "1", text: "Tap the 🔒 lock icon in the address bar (top of Chrome)" },
+                      { step: "2", text: "Tap \"Permissions\" or \"Site settings\"" },
+                      { step: "3", text: "Tap \"Notifications\"" },
+                      { step: "4", text: "Select \"Allow\"" },
+                      { step: "5", text: "Come back here and toggle ON" },
+                    ].map(({ step, text }) => (
+                      <div key={step} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                        <span style={{
+                          background: "rgba(255,85,119,0.2)", borderRadius: "50%",
+                          color: "#ff5577", fontSize: 11, fontWeight: 800,
+                          flexShrink: 0, height: 22, width: 22,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>{step}</span>
+                        <span style={{ fontSize: 13, color: "#cbd5e1", paddingTop: 2 }}>{text}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Direct settings link for Chrome Android */}
+                  <a
+                    href="chrome://settings/content/notifications"
+                    style={{
+                      display: "block", marginTop: 14, textAlign: "center",
+                      background: "rgba(255,85,119,0.15)",
+                      border: "1px solid rgba(255,85,119,0.3)",
+                      borderRadius: 8, color: "#ff5577",
+                      fontSize: 13, fontWeight: 700, padding: "8px 14px",
+                      textDecoration: "none",
+                    }}
+                  >
+                    Open Chrome Notification Settings ↗
+                  </a>
                 </div>
               )}
+
               {permission === "default" && !subscribed && (
                 <div className="banner banner-warning" style={{ fontSize: 13 }}>
-                  Click the toggle to enable notifications. Your browser will ask for permission.
+                  👆 Tap the toggle above to enable notifications. Your browser will ask for permission.
                 </div>
               )}
               {subscribed && (
                 <div className="banner banner-success">✅ Push notifications active — you'll receive signal alerts instantly!</div>
+              )}
+              {pushLoading && (
+                <p style={{ color: "#64748b", fontSize: 13 }}>⏳ Processing...</p>
               )}
               {pushError && <p style={{ color: "#f87171", fontSize: 13 }}>{pushError}</p>}
             </div>
