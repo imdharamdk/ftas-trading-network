@@ -553,7 +553,11 @@ router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) =>
       const wsServer = require("../services/wsServer");
       const priceMap = {};
       priceRows.forEach(r => { if (r.livePrice !== null) priceMap[r.coin] = r.livePrice; });
-      if (Object.keys(priceMap).length) wsServer.broadcastPrices(priceMap);
+      if (Object.keys(priceMap).length) {
+        wsServer.broadcastPrices(priceMap);
+        // Check price alerts async — don't block response
+        require("./priceAlerts").checkPriceAlerts(priceMap).catch(() => {});
+      }
     } catch {}
 
     return res.json({ prices: priceRows });
@@ -651,6 +655,33 @@ router.post("/engine/stop", requireAuth, requireAdmin, (req, res) => {
   return res.json({
     engine: stop(),
   });
+});
+
+// ── Facebook Publisher: test connection + status ────────────────────────────
+router.get("/facebook/status", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { testConnection, FB_ENABLED } = require("../services/facebookPublisher");
+    if (!FB_ENABLED) {
+      return res.json({ enabled: false, message: "Set FB_PAGE_ID and FB_PAGE_ACCESS_TOKEN in Render env vars." });
+    }
+    const result = await testConnection();
+    return res.json({ enabled: true, ...result });
+  } catch (e) {
+    return res.status(500).json({ message: e.message });
+  }
+});
+
+router.post("/facebook/test-post", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const { postToFacebook, FB_ENABLED } = require("../services/facebookPublisher");
+    if (!FB_ENABLED) return res.status(400).json({ message: "Facebook publishing not configured." });
+    const postId = await postToFacebook(
+      "🧪 FTAS Test Post\n\nThis is a test post from FTAS Signal Engine.\n✅ Facebook integration is working!\n\n#FTAS #Test"
+    );
+    return res.json({ ok: Boolean(postId), postId });
+  } catch (e) {
+    return res.status(500).json({ message: e.message });
+  }
 });
 
 router.post("/scan", requireAuth, requireAdmin, async (req, res) => {
