@@ -120,25 +120,50 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
       <main className="main">
         <div className="mobile-topbar">
           <span className="brand-mark" style={{ fontSize: "1.35rem" }}>FTAS</span>
-          {/* Admin badge + menu trigger on topbar */}
-          {isAdmin ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {/* Admin badge */}
+            {isAdmin && (
+              <button
+                onClick={toggle}
+                type="button"
+                style={{
+                  background: "rgba(255,138,61,0.15)",
+                  border: "1px solid rgba(255,138,61,0.3)",
+                  borderRadius: 8, color: "var(--c-accent)",
+                  cursor: "pointer", fontSize: "0.72rem",
+                  fontWeight: 700, padding: "5px 10px",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                ⚡ ADMIN
+              </button>
+            )}
+            {/* LIVE dot for regular users */}
+            {!isAdmin && <div className="topbar-live">LIVE</div>}
+            {/* Logout button — always visible on mobile topbar */}
             <button
-              onClick={toggle}
+              onClick={logout}
               type="button"
+              title="Logout"
               style={{
-                background: "rgba(255,138,61,0.15)",
-                border: "1px solid rgba(255,138,61,0.3)",
-                borderRadius: 8, color: "var(--c-accent)",
-                cursor: "pointer", fontSize: "0.72rem",
-                fontWeight: 700, padding: "5px 10px",
-                letterSpacing: "0.05em",
+                alignItems: "center",
+                background: "rgba(255,85,119,0.1)",
+                border: "1px solid rgba(255,85,119,0.25)",
+                borderRadius: 8,
+                color: "#ff5577",
+                cursor: "pointer",
+                display: "flex",
+                fontSize: "0.75rem",
+                fontWeight: 700,
+                gap: 4,
+                padding: "5px 10px",
+                WebkitTapHighlightColor: "transparent",
               }}
             >
-              ⚡ ADMIN
+              <span>⏻</span>
+              <span>Logout</span>
             </button>
-          ) : (
-            <div className="topbar-live">LIVE</div>
-          )}
+          </div>
         </div>
 
         <header className="page-header">
