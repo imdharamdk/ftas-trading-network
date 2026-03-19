@@ -14,15 +14,21 @@ function fmtExpiry(value) {
   return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" }).format(d);
 }
 
+// Bottom nav — 5 items for regular users
 const NAV_ITEMS = [
   { to: "/dashboard", icon: "📊", label: "Dashboard" },
   { to: "/market",    icon: "🔍", label: "Scanner"   },
   { to: "/crypto",    icon: "💹", label: "Crypto"    },
   { to: "/stocks",    icon: "🇮🇳", label: "Stocks"    },
   { to: "/news",      icon: "📰", label: "News"      },
-  { to: "/settings",  icon: "⚙️", label: "Settings"  },
 ];
 
+// Sidebar only (all users)
+const SIDEBAR_EXTRA = [
+  { to: "/settings", icon: "⚙️", label: "Settings" },
+];
+
+// Admin-only tools
 const ADMIN_NAV_ITEMS = [
   { to: "/analytics",      icon: "📈", label: "Analytics" },
   { to: "/post-generator", icon: "✍️", label: "Post Gen"  },
@@ -32,15 +38,21 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
   const { logout, user } = useSession();
   const location = useLocation();
   const [open, setOpen] = useState(false);
-  const planEnd = fmtExpiry(user?.subscriptionEndsAt);
-  const showPlanEnd = user?.role !== "ADMIN" && planEnd;
+  const isAdmin  = user?.role === "ADMIN";
+  const planEnd  = fmtExpiry(user?.subscriptionEndsAt);
+  const showPlanEnd = !isAdmin && planEnd;
 
   const close  = () => setOpen(false);
   const toggle = () => setOpen(o => !o);
 
+  // Check if current page is an admin page (for bottom nav active state)
+  const isAdminPage = ADMIN_NAV_ITEMS.some(i => location.pathname.startsWith(i.to))
+    || location.pathname.startsWith("/settings");
+
   return (
     <div className="shell">
 
+      {/* ── SIDEBAR ── */}
       <aside className={`sidebar${open ? " sidebar-open" : ""}`}>
         <div className="sidebar-top">
           <div className="sidebar-brand-row">
@@ -57,7 +69,14 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
                 {item.icon} {item.label}
               </NavLink>
             ))}
-            {user?.role === "ADMIN" && (
+            {SIDEBAR_EXTRA.map(item => (
+              <NavLink key={item.to} className={navCls} onClick={close} to={item.to}>
+                {item.icon} {item.label}
+              </NavLink>
+            ))}
+
+            {/* Admin tools section */}
+            {isAdmin && (
               <>
                 <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", margin: "8px 0 4px", paddingTop: 8 }}>
                   <span style={{ color: "rgba(255,138,61,0.7)", fontSize: "0.65rem", fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase" }}>
@@ -78,7 +97,7 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
           <div className="profile-card">
             <div className="profile-row">
               <span className="profile-label">Account</span>
-              <span className={`pill ${user?.role === "ADMIN" ? "pill-accent" : "pill-neutral"}`}>
+              <span className={`pill ${isAdmin ? "pill-accent" : "pill-neutral"}`}>
                 {user?.role || "USER"}
               </span>
             </div>
@@ -97,10 +116,29 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
 
       {open && <div aria-hidden="true" className="sidebar-overlay" onClick={close} />}
 
+      {/* ── MAIN ── */}
       <main className="main">
         <div className="mobile-topbar">
           <span className="brand-mark" style={{ fontSize: "1.35rem" }}>FTAS</span>
-          <div className="topbar-live">LIVE</div>
+          {/* Admin badge + menu trigger on topbar */}
+          {isAdmin ? (
+            <button
+              onClick={toggle}
+              type="button"
+              style={{
+                background: "rgba(255,138,61,0.15)",
+                border: "1px solid rgba(255,138,61,0.3)",
+                borderRadius: 8, color: "var(--c-accent)",
+                cursor: "pointer", fontSize: "0.72rem",
+                fontWeight: 700, padding: "5px 10px",
+                letterSpacing: "0.05em",
+              }}
+            >
+              ⚡ ADMIN
+            </button>
+          ) : (
+            <div className="topbar-live">LIVE</div>
+          )}
         </div>
 
         <header className="page-header">
@@ -115,6 +153,7 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
         {children}
       </main>
 
+      {/* ── BOTTOM NAV ── */}
       <nav className="bottom-nav" aria-label="Mobile navigation">
         {NAV_ITEMS.map(item => (
           <NavLink
@@ -126,6 +165,26 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
             <span>{item.label}</span>
           </NavLink>
         ))}
+
+        {/* Admin: replace last item with "More" that opens sidebar showing admin tools */}
+        {isAdmin ? (
+          <button
+            type="button"
+            onClick={toggle}
+            className={`bottom-nav-item${isAdminPage ? " active" : ""}`}
+          >
+            <span className="nav-icon">🛠️</span>
+            <span>Admin</span>
+          </button>
+        ) : (
+          <NavLink
+            to="/settings"
+            className={({ isActive }) => `bottom-nav-item${isActive ? " active" : ""}`}
+          >
+            <span className="nav-icon">⚙️</span>
+            <span>Settings</span>
+          </NavLink>
+        )}
       </nav>
 
       <ChatBox />
