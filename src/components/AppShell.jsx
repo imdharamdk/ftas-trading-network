@@ -22,6 +22,10 @@ const NAV_ITEMS = [
   { to: "/news",      icon: "📰", label: "News"      },
 ];
 
+const ADMIN_NAV_ITEMS = [
+  { to: "/post-generator", icon: "✍️", label: "Post Gen" },
+];
+
 export default function AppShell({ actions = null, children, subtitle, title }) {
   const { logout, user } = useSession();
   const location = useLocation();
@@ -51,6 +55,20 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
                 {item.icon} {item.label}
               </NavLink>
             ))}
+            {user?.role === "ADMIN" && (
+              <>
+                <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", margin: "8px 0 4px", paddingTop: 8 }}>
+                  <span style={{ color: "rgba(255,138,61,0.7)", fontSize: "0.65rem", fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase" }}>
+                    Admin Tools
+                  </span>
+                </div>
+                {ADMIN_NAV_ITEMS.map(item => (
+                  <NavLink key={item.to} className={navCls} onClick={close} to={item.to}>
+                    {item.icon} {item.label}
+                  </NavLink>
+                ))}
+              </>
+            )}
           </nav>
         </div>
 
