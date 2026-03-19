@@ -31,7 +31,7 @@ const defaultManualForm = {
 const fallbackPaymentSettings = {
   contactPerson: "+91 8679215898",
   paymentMethods: [
-    { label: "UPI", value: "UPI" },
+    { label: "UPI", value: "8679215898@ybl" },
     { label: "Bank Transfer", value: "BANK" },
     { label: "Crypto", value: "CRYPTO" },
   ],
