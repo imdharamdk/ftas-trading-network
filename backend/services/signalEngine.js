@@ -3,8 +3,9 @@ const { readCollection, mutateCollection } = require("../storage/fileStore");
 const { getKlines, getPrices, getAllFuturesCoins, getAllTickerStats } = require("./binanceService");
 const { analyzeCandles, computeFibonacci } = require("./indicatorEngine");
 
-// Lazy-load wsServer to avoid circular dependency
-function ws() { try { return require("./wsServer"); } catch { return null; } }
+// Lazy-load to avoid circular dependency
+function ws()  { try { return require("./wsServer");  } catch { return null; } }
+function sse() { try { return require("./sseManager"); } catch { return null; } }
 // Fallback list if Binance exchangeInfo API fails
 const FALLBACK_COINS = [
   "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
@@ -970,7 +971,10 @@ async function evaluateActiveSignals() {
     return sig;
   }));
   // Broadcast each closed signal via WebSocket
-  closed.forEach(s => { try { ws()?.broadcastSignalClosed(s); } catch {} });
+  closed.forEach(s => {
+    try { ws()?.broadcastSignalClosed(s);  } catch {}
+    try { sse()?.broadcastSignalClosed(s); } catch {}
+  });
   return closed;
 }
 
@@ -1009,7 +1013,8 @@ async function getPerformanceSnapshot() {
 // ─── Persist / Manual / Demo ─────────────────────────────────────────────────
 async function persistSignal(signal) {
   const result = await mutateCollection("signals", records => ({ records: [signal, ...records], value: signal }));
-  try { ws()?.broadcastNewSignal(signal); } catch {}
+  try { ws()?.broadcastNewSignal(signal);  } catch {}
+  try { sse()?.broadcastNewSignal(signal); } catch {}
   return result;
 }
 async function signalExists(candidate) {
