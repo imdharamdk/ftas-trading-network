@@ -25,68 +25,77 @@ const MIN_SCAN_QUOTE_VOLUME_USDT = 8_000_000;
 const MIN_SCAN_TRADE_COUNT_24H   = 10_000;
 const MIN_SCAN_OPEN_INTEREST_USDT = 3_500_000;
 
-const RULE_VERSION = "v13_precision";
-const DEFAULT_PUBLISH_FLOOR = 83;
-const STRENGTH_THRESHOLDS = { STRONG: 90, MEDIUM: 83 };
+const RULE_VERSION = "v14_balanced";
+const DEFAULT_PUBLISH_FLOOR = 80;
+const STRENGTH_THRESHOLDS = { STRONG: 88, MEDIUM: 80 };
 
 // ─── Per-Timeframe Rules ───────────────────────────────────────────────────────
-// v13 changes:
-//  5m  — raise publishFloor 86→88, add requireHtfBullOrNeutral guard,
-//         requireVolumeConfirm so low-volume signals are skipped
-//  15m — add minAdx 18, minRsi 40, tighten score to 57, add VWAP support
-//  30m — NEW timeframe: sweet spot between 15m scalp and 1h swing
-//  1h  — relax minScore 52→50, raise publishFloor 82→84 (quality > quantity)
+// v14 changes: balanced for more signal frequency while keeping quality
 const TIMEFRAME_RULES = {
+  "1m": {
+    minScore:             54,
+    minConfirmations:     4,
+    publishFloor:         80,
+    requireHigherBias:    false,
+    minAdx:               18,
+    minRsi:               35,
+    maxRsi:               82,
+    requireVwapSupport:   false,
+    requireVolumeConfirm: true,
+    blockDailyBear:       false,
+    entryDriftMultiplier: 0.3,
+    maxLeverage:          20,
+  },
   "5m": {
-    minScore: 60,
-    minConfirmations: 5,
-    publishFloor: 88,           // was 86 — extra strict on scalps
-    requireHigherBias: false,
-    minAdx: 22,
-    minRsi: 43,
-    maxRsi: 80,
-    minDiDelta: 3,
-    requireVwapSupport: true,
-    requireVolumeConfirm: true, // NEW: must have volumeStrong or volumeSpike
-    blockDailyBear: true,
-    intradayOverride: false,
+    minScore:             56,   // relaxed from 60
+    minConfirmations:     4,    // relaxed from 5
+    publishFloor:         82,   // relaxed from 88
+    requireHigherBias:    false,
+    minAdx:               18,   // relaxed from 22
+    minRsi:               38,   // relaxed from 43
+    maxRsi:               82,
+    minDiDelta:           2,    // relaxed from 3
+    requireVwapSupport:   false, // relaxed
+    requireVolumeConfirm: false, // relaxed
+    blockDailyBear:       false,
+    intradayOverride:     false,
     entryDriftMultiplier: 0.5,
-    maxLeverage: 25,
+    maxLeverage:          25,
   },
   "15m": {
-    minScore: 57,               // was 55
-    minConfirmations: 4,
-    publishFloor: 85,           // was 84
-    requireHigherBias: true,
-    minAdx: 18,                 // NEW: momentum gate
-    minRsi: 40,                 // NEW: no overbought entry
-    maxRsi: 78,
-    requireVwapSupport: true,   // NEW
-    blockDailyBear: true,       // NEW
+    minScore:             54,   // relaxed from 57
+    minConfirmations:     3,
+    publishFloor:         80,   // relaxed from 85
+    requireHigherBias:    false, // relaxed from true
+    minAdx:               15,   // relaxed from 18
+    minRsi:               35,   // relaxed from 40
+    maxRsi:               80,
+    requireVwapSupport:   false, // relaxed
+    blockDailyBear:       false,
     entryDriftMultiplier: 0.65,
-    maxLeverage: 35,
+    maxLeverage:          35,
   },
-  "30m": {                      // NEW TIMEFRAME
-    minScore: 55,
-    minConfirmations: 4,
-    publishFloor: 84,
-    requireHigherBias: true,
-    minAdx: 20,
-    minRsi: 38,
-    maxRsi: 76,
-    requireVwapSupport: false,
-    blockDailyBear: true,
+  "30m": {
+    minScore:             52,   // relaxed from 55
+    minConfirmations:     3,
+    publishFloor:         79,   // relaxed from 84
+    requireHigherBias:    false,
+    minAdx:               15,   // relaxed from 20
+    minRsi:               35,   // relaxed from 38
+    maxRsi:               78,
+    requireVwapSupport:   false,
+    blockDailyBear:       false,
     entryDriftMultiplier: 0.75,
-    maxLeverage: 30,
+    maxLeverage:          30,
   },
   "1h": {
-    minScore: 50,               // was 52 — 1h signals are rarer, accept slightly lower
-    minConfirmations: 3,
-    publishFloor: 84,           // was 82 — but gate higher to avoid noise
-    requireHigherBias: true,
-    minAdx: 16,                 // NEW
+    minScore:             48,   // relaxed from 50
+    minConfirmations:     3,
+    publishFloor:         78,   // relaxed from 84
+    requireHigherBias:    false, // relaxed
+    minAdx:               13,   // relaxed from 16
     entryDriftMultiplier: 0.8,
-    maxLeverage: 20,
+    maxLeverage:          20,
   },
 };
 const RELAXED_PUBLISH_DELTA = Number(process.env.RELAXED_PUBLISH_DELTA || 8);
@@ -312,15 +321,24 @@ function getHigherTimeframeBias(analyses) {
 }
 
 // ─── SL/TP ────────────────────────────────────────────────────────────────────
-// v13: Per-timeframe TP multipliers.
-//  5m/15m/30m scalps: TP1 tighter (0.55) = higher hit rate on quick moves
-//  1h swings: TP1 slightly looser (0.7), TP3 extended (2.0) = better R:R
-// SL uses nearest S/R + ATR buffer (unchanged, working well).
-const TP_R_MULTIPLIERS_SCALP  = [0.55, 1.1, 1.75];  // 5m / 15m / 30m
-const TP_R_MULTIPLIERS_SWING  = [0.70, 1.3, 2.0];   // 1h
+// Improved TP multipliers for better win rate and R:R:
+//  1m scalps:  TP1 tight (0.5) = quick exits, high hit rate
+//  5m scalps:  TP1 balanced (0.6), TP3 extended (2.0)
+//  15m/30m:    TP1 comfortable (0.7), TP3 extended (2.2) = better R:R
+//  1h swings:  TP1 relaxed (0.85), TP3 generous (2.8) = ride the trend
+// SL uses nearest S/R + ATR buffer — tighter SL = better R:R ratio.
+const TP_R_MULTIPLIERS_1M    = [0.50, 1.00, 1.60];  // 1m — very tight scalp
+const TP_R_MULTIPLIERS_5M    = [0.60, 1.15, 2.00];  // 5m — scalp
+const TP_R_MULTIPLIERS_15M   = [0.70, 1.35, 2.20];  // 15m — intraday
+const TP_R_MULTIPLIERS_30M   = [0.80, 1.55, 2.50];  // 30m — intraday swing
+const TP_R_MULTIPLIERS_SWING = [0.85, 1.65, 2.80];  // 1h+ — swing
 
 function getTpMultipliers(timeframe) {
-  return ["1h","4h"].includes(timeframe) ? TP_R_MULTIPLIERS_SWING : TP_R_MULTIPLIERS_SCALP;
+  if (timeframe === "1m")                    return TP_R_MULTIPLIERS_1M;
+  if (timeframe === "5m")                    return TP_R_MULTIPLIERS_5M;
+  if (timeframe === "15m")                   return TP_R_MULTIPLIERS_15M;
+  if (timeframe === "30m")                   return TP_R_MULTIPLIERS_30M;
+  return TP_R_MULTIPLIERS_SWING; // 1h and above
 }
 
 function calculateTargets(side, analysis, timeframe = "5m") {
