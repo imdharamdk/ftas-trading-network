@@ -101,7 +101,7 @@ const inputStyle = {
 
 // ─── Main Settings Page ───────────────────────────────────────────────────────
 export default function Settings() {
-  const { user } = useSession();
+  const { user, logout } = useSession();
   const isAdmin  = user?.role === "ADMIN";
 
   const { permission, subscribed, supported, loading: pushLoading, error: pushError, subscribe, unsubscribe } = usePushNotifications();
@@ -477,6 +477,42 @@ export default function Settings() {
             </a>
           </div>
         </Section>
+
+        {/* ── Account / Logout ── */}
+        <section className="panel" style={{ border: "1px solid rgba(255,85,119,0.15)", background: "rgba(255,85,119,0.04)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+            <div>
+              <p style={{ fontWeight: 700, marginBottom: 3 }}>
+                {user?.name || "FTAS Member"}
+              </p>
+              <p style={{ fontSize: 13, color: "#64748b" }}>{user?.email}</p>
+              <p style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                Plan: <strong style={{ color: "#e2e8f0" }}>{user?.plan || "FREE"}</strong>
+                {" · "}
+                Role: <strong style={{ color: user?.role === "ADMIN" ? "var(--c-accent)" : "#e2e8f0" }}>{user?.role || "USER"}</strong>
+              </p>
+            </div>
+            <button
+              onClick={logout}
+              type="button"
+              style={{
+                alignItems: "center",
+                background: "rgba(255,85,119,0.12)",
+                border: "1px solid rgba(255,85,119,0.3)",
+                borderRadius: 10,
+                color: "#ff5577",
+                cursor: "pointer",
+                display: "flex",
+                fontSize: 14,
+                fontWeight: 700,
+                gap: 8,
+                padding: "10px 20px",
+              }}
+            >
+              ⏻ Logout
+            </button>
+          </div>
+        </section>
 
       </div>
     </AppShell>
