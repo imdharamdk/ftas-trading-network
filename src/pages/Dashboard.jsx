@@ -4,7 +4,6 @@ import DistributionList from "../components/DistributionList";
 import { useSession } from "../context/useSession";
 import { apiFetch } from "../lib/api";
 import { useWebSocket } from "../lib/useWebSocket";
-import { useWebSocket } from "../lib/useWebSocket";
 
 const defaultPaymentForm = {
   amount: "",
@@ -31,7 +30,7 @@ const defaultManualForm = {
 const fallbackPaymentSettings = {
   contactPerson: "+91 8679215898",
   paymentMethods: [
-    { label: "UPI", value: "8679215898@ybl" },
+    { label: "UPI", value: "UPI" },
     { label: "Bank Transfer", value: "BANK" },
     { label: "Crypto", value: "CRYPTO" },
   ],
