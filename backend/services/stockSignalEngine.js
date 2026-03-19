@@ -49,29 +49,46 @@ const RULE_VERSION = "v17_stocks_working";
 const DEFAULT_PUBLISH_FLOOR = 76;
 const STRENGTH_THRESHOLDS   = { STRONG: 88, MEDIUM: 76 };
 
+// ── NSE Market Hours Guard ─────────────────────────────────────────────────────
+// Only scan during NSE trading hours: Mon-Fri 9:15 AM – 3:30 PM IST
+function isNseMarketOpen() {
+  const now = new Date();
+  const ist  = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const day  = ist.getDay(); // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) return false; // weekend
+
+  const hh   = ist.getHours();
+  const mm   = ist.getMinutes();
+  const mins = hh * 60 + mm;
+
+  const OPEN  = 9  * 60 + 15;  // 9:15 AM
+  const CLOSE = 15 * 60 + 30;  // 3:30 PM
+  return mins >= OPEN && mins < CLOSE;
+}
+
 // ── Per-Timeframe Rules ────────────────────────────────────────────────────────
 const TIMEFRAME_RULES = {
   "15m": {
-    minScore: 55,
-    minConfirmations: 3,
-    publishFloor: 76,
-    minAdx: 14,
-    minDiDelta: 2,
-    requireVwapSupport: false,
-    blockDailyBear: false,
+    minScore:            52,   // relaxed from 55
+    minConfirmations:    3,
+    publishFloor:        73,   // relaxed from 76 — more signals
+    minAdx:              12,   // relaxed from 14
+    minDiDelta:          2,
+    requireVwapSupport:  false,
+    blockDailyBear:      false,
     entryDriftMultiplier: 0.8,
-    maxLeverage: 10,
+    maxLeverage:         10,
   },
   "1h": {
-    minScore: 52,
-    minConfirmations: 3,
-    publishFloor: 74,
-    minAdx: 14,
-    minDiDelta: 2,
-    requireVwapSupport: false,
-    blockDailyBear: false,
+    minScore:            49,   // relaxed from 52
+    minConfirmations:    3,
+    publishFloor:        71,   // relaxed from 74
+    minAdx:              12,   // relaxed from 14
+    minDiDelta:          2,
+    requireVwapSupport:  false,
+    blockDailyBear:      false,
     entryDriftMultiplier: 1.2,
-    maxLeverage: 10,
+    maxLeverage:         10,
   },
 };
 
@@ -786,6 +803,15 @@ async function createManualSignal(payload, actor) {
 
 async function scanNow({ source = "ENGINE" } = {}) {
   if (engineState.isScanning) return { skipped: true, message: "Scan already in progress" };
+
+  // ── NSE Market Hours Guard ────────────────────────────────────────────────
+  // Skip scan outside 9:15 AM – 3:30 PM IST, Mon-Fri
+  // Admin-triggered scans (source="ADMIN") bypass this check
+  if (source === "ENGINE" && !isNseMarketOpen()) {
+    const ist = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" });
+    console.log(`[stockEngine] Market closed at ${ist} IST — skipping scan`);
+    return { skipped: true, message: `NSE market closed (${ist} IST)` };
+  }
   engineState.isScanning = true;
   const generatedSignals = [], errors = [];
   try {
