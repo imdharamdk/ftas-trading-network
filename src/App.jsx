@@ -8,6 +8,7 @@ import Crypto from "./pages/Crypto";
 import News from "./pages/News";
 import Signup from "./pages/Signup";
 import Stocks from "./pages/Stocks";
+import PostGenerator from "./pages/PostGenerator";
 
 function SessionGate({ children, guestOnly = false }) {
   const { loading, user } = useSession();
@@ -88,6 +89,14 @@ export default function App() {
             path="/stocks"
           />
           <Route element={<News />} path="/news" />
+          <Route
+            element={
+              <SessionGate>
+                <PostGenerator />
+              </SessionGate>
+            }
+            path="/post-generator"
+          />
           <Route element={<Navigate replace to="/" />} path="*" />
         </Routes>
       </BrowserRouter>
