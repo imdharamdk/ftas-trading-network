@@ -95,7 +95,7 @@ function CryptoTab() {
       finally     { if (active) setLoading(false); }
     }
     load();
-    const id = window.setInterval(load, 45000);
+    const id = window.setInterval(load, 60000); // was 45s — tickers cached backend-side
     return () => { active = false; window.clearInterval(id); };
   }, [sortBy]);
 
@@ -110,28 +110,12 @@ function CryptoTab() {
       } catch { /* stale */ }
     }
     refresh();
-    const id = window.setInterval(refresh, 12000);
+    const id = window.setInterval(refresh, 20000); // was 12s
     return () => { active = false; window.clearInterval(id); };
   }, [signalCoinsKey]);
 
-  useEffect(() => {
-    let active = true;
-    async function refreshTicker() {
-      if (!tickerCoinsKey) return;
-      try {
-        const res = await apiFetch(`/signals/live-prices?coins=${tickerCoinsKey}`);
-        if (!active) return;
-        const map = {};
-        for (const item of res.prices || []) {
-          if (item.livePrice) map[item.coin] = item.livePrice;
-        }
-        setTickerPrices(map);
-      } catch { /* stale */ }
-    }
-    refreshTicker();
-    const id = window.setInterval(refreshTicker, 12000);
-    return () => { active = false; window.clearInterval(id); };
-  }, [tickerCoinsKey]);
+  // FIX: Removed 12s ticker price polling — WS price:update event handles this
+  // tickerPrices now updated via onPriceUpdate WS handler below
 
   useEffect(() => {
     function handle(e) {
