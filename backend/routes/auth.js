@@ -1,6 +1,6 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
-const { requireAdmin, requireAuth, signToken } = require("../middleware/auth");
+const { invalidateUserCache, requireAdmin, requireAuth, signToken } = require("../middleware/auth");
 const {
   SUBSCRIPTION_STATUS,
   USER_PLANS,
