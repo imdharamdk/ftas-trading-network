@@ -447,6 +447,11 @@ export default function Dashboard() {
                 meta: `${stockOverview?.totalWins ?? 0}W / ${stockOverview?.totalLosses ?? 0}L · ${stockOverview?.closedSignals ?? 0} resolved`,
               },
               {
+                label: "Archived Signals",
+                value: (overview?.archiveSize ?? 0) + (stockOverview?.archiveSize ?? 0),
+                meta: `${overview?.archiveSize ?? 0} crypto · ${stockOverview?.archiveSize ?? 0} stocks`,
+              },
+              {
                 label: "Your Plan",
                 value: user?.plan || "FREE",
                 meta: user?.subscriptionStatus || "INACTIVE",

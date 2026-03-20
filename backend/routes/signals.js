@@ -475,7 +475,7 @@ router.get("/stats/overview", requireAuth, async (req, res) => {
   const signals = await readCollection("signals");
   const archive = await readCollection("signalsArchive");
   const combined = [...signals, ...archive];
-  const result = { stats: buildOverview(combined) };
+  const result = { stats: { ...buildOverview(combined), archiveSize: archive.length } };
   cache.set("signals:overview", result, 30); // 30s TTL
   return res.json(result);
 });

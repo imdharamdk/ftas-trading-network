@@ -294,7 +294,7 @@ router.get("/stats/overview", requireAuth, async (req, res) => {
   const combined = [...raw, ...archive];
   const signals = combined.filter((s) => !isCryptoCoin(s.coin) && s.result !== "EXPIRED");
   const result = {
-    stats: buildOverview(signals),
+    stats: { ...buildOverview(signals), archiveSize: archive.length },
   };
   cache.set("stocks:overview", result, 30);
   return res.json(result);
