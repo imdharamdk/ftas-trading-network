@@ -28,6 +28,31 @@ function createId(prefix = "ftas") {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// ─── Read cache (hot reads) ───────────────────────────────────────────────────
+// Avoid repeated disk/DB reads when multiple endpoints hit the same collection
+// within a short window (e.g., dashboard loads 4-6 endpoints at once).
+const READ_CACHE_TTL_MS = 5000;
+const readCache = new Map();    // name -> { value, expiresAt }
+const readInflight = new Map(); // name -> Promise
+
+function getReadCache(name) {
+  const entry = readCache.get(name);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    readCache.delete(name);
+    return null;
+  }
+  return entry.value;
+}
+
+function setReadCache(name, value) {
+  readCache.set(name, { value, expiresAt: Date.now() + READ_CACHE_TTL_MS });
+}
+
+function invalidateReadCache(name) {
+  if (name) readCache.delete(name);
+}
+
 // ─── MongoDB connection state ──────────────────────────────────────────────────
 // FIX: Previously _mongoFailed was permanent (never retried after first failure).
 // Now: retry every MONGO_RETRY_INTERVAL_MS so a temporary outage heals itself.
@@ -169,12 +194,32 @@ async function ensureCollection(name) {
 }
 
 async function readCollection(name) {
-  const db = await getDb();
-  if (db) {
-    const result = await mongoRead(name);
-    if (result !== null) return result;
+  const cached = getReadCache(name);
+  if (cached) return cached;
+
+  const inflight = readInflight.get(name);
+  if (inflight) return inflight;
+
+  const task = (async () => {
+    const db = await getDb();
+    let result = null;
+    if (db) {
+      result = await mongoRead(name);
+    }
+    if (result === null) {
+      result = await localRead(name);
+    }
+    const safe = Array.isArray(result) ? result : [];
+    setReadCache(name, safe);
+    return safe;
+  })();
+
+  readInflight.set(name, task);
+  try {
+    return await task;
+  } finally {
+    readInflight.delete(name);
   }
-  return localRead(name);
 }
 
 async function writeCollection(name, records) {
@@ -182,9 +227,14 @@ async function writeCollection(name, records) {
   const db   = await getDb();
   if (db) {
     const ok = await mongoWrite(name, safe);
-    if (ok) return safe;
+    if (ok) {
+      setReadCache(name, safe);
+      return safe;
+    }
   }
-  return localWrite(name, safe);
+  const written = await localWrite(name, safe);
+  setReadCache(name, written);
+  return written;
 }
 
 const queues = new Map();
@@ -213,6 +263,7 @@ module.exports = {
   COLLECTION_FILES,
   createId,
   ensureCollection,
+  invalidateReadCache,
   mutateCollection,
   readCollection,
   writeCollection,

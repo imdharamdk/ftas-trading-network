@@ -182,22 +182,32 @@ export default function Dashboard() {
   }, [availablePaymentMethods, availablePaymentSettings, availablePlans]);
 
   const loadPublicData = useCallback(async () => {
-    // Fetch all stats endpoints in parallel — small payloads, fast
-    const [overviewRes, stockOverviewRes, analyticsRes, performanceRes, engineRes] = await Promise.all([
+    // Phase 1: fast endpoints first so dashboard renders quickly
+    const [overviewRes, stockOverviewRes, engineRes] = await Promise.all([
       apiFetch("/signals/stats/overview").catch(() => null),
       apiFetch("/stocks/stats/overview").catch(() => null),
-      apiFetch("/signals/stats/analytics").catch(() => null),
-      apiFetch("/signals/stats/performance").catch(() => null),
       apiFetch("/signals/engine/status").catch(() => null),
     ]);
 
     if (overviewRes?.stats)      setOverview(overviewRes.stats);
     if (stockOverviewRes?.stats) setStockOverview(stockOverviewRes.stats);
-    if (analyticsRes?.analytics) setAnalytics(analyticsRes.analytics);
-    if (performanceRes?.performance) setPerformance(performanceRes.performance);
     if (engineRes?.engine)       setEngine(engineRes.engine);
-
     setLoading(false);
+
+    // Phase 2: heavier analytics/performance in background
+    void (async () => {
+      const [analyticsRes, performanceRes] = await Promise.allSettled([
+        apiFetch("/signals/stats/analytics"),
+        apiFetch("/signals/stats/performance"),
+      ]);
+      if (analyticsRes.status === "fulfilled" && analyticsRes.value?.analytics) {
+        setAnalytics(analyticsRes.value.analytics);
+      }
+      if (performanceRes.status === "fulfilled" && performanceRes.value?.performance) {
+        setPerformance(performanceRes.value.performance);
+      }
+    })();
+
     return null;
   }, []);
 

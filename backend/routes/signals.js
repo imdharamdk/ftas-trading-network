@@ -46,20 +46,37 @@ function isTimeExpired(signal) {
 }
 
 // Expire any ACTIVE signals that have passed their time limit in DB
-// Called on every /active and /expired request so display is always fresh
+// Throttled to avoid repeated full-file writes on bursty traffic.
+let lastExpireCheckAt = 0;
+let expireInFlight = null;
+const EXPIRE_CHECK_INTERVAL_MS = 30_000;
 async function expireStaleActives(collectionName) {
-  const now = new Date().toISOString();
-  let hadChanges = false;
-  await mutateCollection(collectionName, (records) => {
-    const updated = records.map((sig) => {
-      if (sig.status !== SIGNAL_STATUS.ACTIVE) return sig;
-      if (!isTimeExpired(sig)) return sig;
-      hadChanges = true;
-      return { ...sig, status: SIGNAL_STATUS.CLOSED, result: "EXPIRED", closedAt: now, updatedAt: now };
+  const nowMs = Date.now();
+  if (expireInFlight) return expireInFlight;
+  if (nowMs - lastExpireCheckAt < EXPIRE_CHECK_INTERVAL_MS) return false;
+
+  expireInFlight = (async () => {
+    const now = new Date().toISOString();
+    let hadChanges = false;
+    await mutateCollection(collectionName, (records) => {
+      const updated = records.map((sig) => {
+        if (sig.status !== SIGNAL_STATUS.ACTIVE) return sig;
+        if (!isTimeExpired(sig)) return sig;
+        hadChanges = true;
+        return { ...sig, status: SIGNAL_STATUS.CLOSED, result: "EXPIRED", closedAt: now, updatedAt: now };
+      });
+      return updated;
     });
-    return updated;
-  });
-  return hadChanges;
+    lastExpireCheckAt = nowMs;
+    if (hadChanges) cache.invalidatePrefix("signals:");
+    return hadChanges;
+  })();
+
+  try {
+    return await expireInFlight;
+  } finally {
+    expireInFlight = null;
+  }
 }
 
 function isWinningResult(result) {
@@ -396,18 +413,28 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
 });
 
 router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
+  const cacheKey = "signals:history:" + (req.query.coin || "all") + ":" + (req.query.limit || "all");
+  const cached = cache.get(cacheKey);
+  if (cached) return res.json(cached);
+
   const rawSignals = await readCollection("signals");
   // History = closed signals that hit TP or SL (NOT expired)
   const filtered = sortByCreatedAtDesc(rawSignals)
     .filter((signal) => signal.status === SIGNAL_STATUS.CLOSED && signal.result !== "EXPIRED")
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
 
-  return res.json({
+  const result = {
     signals: req.query.limit ? filtered.slice(0, Number(req.query.limit)) : filtered,
-  });
+  };
+  cache.set(cacheKey, result, 30);
+  return res.json(result);
 });
 
 router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
+  const cacheKey = "signals:expired:" + (req.query.coin || "all") + ":" + (req.query.limit || "all");
+  const cached = cache.get(cacheKey);
+  if (cached) return res.json(cached);
+
   // Expire any stale actives first so this list is always up-to-date
   await expireStaleActives("signals");
   const rawSignals = await readCollection("signals");
@@ -415,9 +442,11 @@ router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
     .filter((signal) => signal.result === "EXPIRED")
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
 
-  return res.json({
+  const result = {
     signals: req.query.limit ? filtered.slice(0, Number(req.query.limit)) : filtered,
-  });
+  };
+  cache.set(cacheKey, result, 20);
+  return res.json(result);
 });
 
 router.get("/stats/overview", requireAuth, async (req, res) => {
@@ -432,17 +461,27 @@ router.get("/stats/overview", requireAuth, async (req, res) => {
 });
 
 router.get("/stats/analytics", requireAuth, async (req, res) => {
+  const cached = cache.get("signals:analytics");
+  if (cached) return res.json(cached);
+
   const signals = await readCollection("signals");
-  return res.json({
+  const result = {
     analytics: buildAnalytics(signals),
-  });
+  };
+  cache.set("signals:analytics", result, 60);
+  return res.json(result);
 });
 
 router.get("/stats/performance", requireAuth, async (req, res) => {
+  const cached = cache.get("signals:performance");
+  if (cached) return res.json(cached);
+
   const signals = await readCollection("signals");
-  return res.json({
+  const result = {
     performance: buildPerformance(signals),
-  });
+  };
+  cache.set("signals:performance", result, 60);
+  return res.json(result);
 });
 
 router.get("/engine/status", requireAuth, (req, res) => {
@@ -599,16 +638,19 @@ router.post("/archive", requireAuth, requireAdmin, async (req, res) => {
       const nextArchive = [...stamped, ...archiveRecords.filter((record) => record?.id && !closedIds.has(record.id))];
       await writeCollection("signalsArchive", nextArchive);
       await writeCollection("signals", remaining);
+      cache.invalidatePrefix("signals:");
       return res.json({ archived: stamped.length, archiveSize: nextArchive.length, remaining: remaining.length });
     }
     if (action === "CLEAR_ARCHIVE") {
       await writeCollection("signalsArchive", []);
+      cache.invalidatePrefix("signals:");
       return res.json({ archived: 0, archiveSize: 0 });
     }
     if (action === "CLEAR_HISTORY") {
       const signals = await readCollection("signals");
       const activeSignals = signals.filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE);
       await writeCollection("signals", activeSignals);
+      cache.invalidatePrefix("signals:");
       return res.json({ remaining: activeSignals.length });
     }
     return res.status(400).json({ message: "Invalid archive action" });
@@ -716,6 +758,7 @@ router.post("/manual", requireAuth, requireAdmin, async (req, res) => {
     }
 
     const signal = await createManualSignal(req.body, req.user);
+    cache.invalidatePrefix("signals:");
     return res.status(201).json({ signal });
   } catch (error) {
     return res.status(500).json({ message: error.message });
@@ -755,6 +798,7 @@ router.patch("/:id/status", requireAuth, requireAdmin, async (req, res) => {
       return res.status(404).json({ message: "Signal not found" });
     }
 
+    cache.invalidatePrefix("signals:");
     return res.json({ signal: result });
   } catch (error) {
     return res.status(500).json({ message: error.message });
@@ -776,6 +820,7 @@ router.delete("/:id", requireAuth, requireAdmin, async (req, res) => {
       return res.status(404).json({ message: "Signal not found" });
     }
 
+    cache.invalidatePrefix("signals:");
     return res.json({ deleted: true, signal: result });
   } catch (error) {
     return res.status(500).json({ message: error.message });

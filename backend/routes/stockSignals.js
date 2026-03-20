@@ -6,6 +6,7 @@ const { readCollection, mutateCollection } = require("../storage/fileStore");
 const stockEngine = require("../services/stockSignalEngine");
 const { ensureSession } = require("../services/smartApiService");
 const { getInstrumentUniverse } = require("../services/smartInstrumentService");
+const cache = require("../services/apiCache");
 
 const router = express.Router();
 
@@ -26,14 +27,34 @@ function isTimeExpired(signal) {
   return age > (SIGNAL_EXPIRY_MS[signal.timeframe] || SIGNAL_EXPIRY_MS.default);
 }
 
+let lastExpireCheckAt = 0;
+let expireInFlight = null;
+const EXPIRE_CHECK_INTERVAL_MS = 30_000;
 async function expireStaleActives() {
-  const now = new Date().toISOString();
-  await mutateCollection("stockSignals", (records) =>
-    records.map((sig) => {
-      if (sig.status !== SIGNAL_STATUS.ACTIVE || !isTimeExpired(sig)) return sig;
-      return { ...sig, status: SIGNAL_STATUS.CLOSED, result: "EXPIRED", closedAt: now, updatedAt: now };
-    })
-  );
+  const nowMs = Date.now();
+  if (expireInFlight) return expireInFlight;
+  if (nowMs - lastExpireCheckAt < EXPIRE_CHECK_INTERVAL_MS) return false;
+
+  expireInFlight = (async () => {
+    const now = new Date().toISOString();
+    let hadChanges = false;
+    await mutateCollection("stockSignals", (records) =>
+      records.map((sig) => {
+        if (sig.status !== SIGNAL_STATUS.ACTIVE || !isTimeExpired(sig)) return sig;
+        hadChanges = true;
+        return { ...sig, status: SIGNAL_STATUS.CLOSED, result: "EXPIRED", closedAt: now, updatedAt: now };
+      })
+    );
+    lastExpireCheckAt = nowMs;
+    if (hadChanges) cache.invalidatePrefix("stocks:");
+    return hadChanges;
+  })();
+
+  try {
+    return await expireInFlight;
+  } finally {
+    expireInFlight = null;
+  }
 }
 
 function isWinningResult(result) {
@@ -184,6 +205,10 @@ function isCryptoCoin(coin) {
 }
 
 router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
+  const cacheKey = "stocks:active:" + (req.query.coin || "all") + ":" + (req.query.limit || 50);
+  const cached = cache.get(cacheKey);
+  if (cached) return res.json(cached);
+
   await expireStaleActives();
   const signals = await readCollection("stockSignals");
   const filtered = sortByCreatedAtDesc(signals)
@@ -191,12 +216,18 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
     .filter((signal) => !isCryptoCoin(signal.coin))
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
 
-  return res.json({
+  const result = {
     signals: filtered.slice(0, Number(req.query.limit || 50)),
-  });
+  };
+  cache.set(cacheKey, result, 20);
+  return res.json(result);
 });
 
 router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
+  const cacheKey = "stocks:history:" + (req.query.coin || "all") + ":" + (req.query.limit || "all");
+  const cached = cache.get(cacheKey);
+  if (cached) return res.json(cached);
+
   const signals = await readCollection("stockSignals");
   // History = TP/SL hits only — no expired
   const filtered = sortByCreatedAtDesc(signals)
@@ -204,12 +235,18 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
     .filter((signal) => !isCryptoCoin(signal.coin))
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
 
-  return res.json({
+  const result = {
     signals: req.query.limit ? filtered.slice(0, Number(req.query.limit)) : filtered,
-  });
+  };
+  cache.set(cacheKey, result, 30);
+  return res.json(result);
 });
 
 router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
+  const cacheKey = "stocks:expired:" + (req.query.coin || "all") + ":" + (req.query.limit || "all");
+  const cached = cache.get(cacheKey);
+  if (cached) return res.json(cached);
+
   await expireStaleActives();
   const signals = await readCollection("stockSignals");
   const filtered = sortByCreatedAtDesc(signals)
@@ -217,9 +254,11 @@ router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
     .filter((signal) => !isCryptoCoin(signal.coin))
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
 
-  return res.json({
+  const result = {
     signals: req.query.limit ? filtered.slice(0, Number(req.query.limit)) : filtered,
-  });
+  };
+  cache.set(cacheKey, result, 20);
+  return res.json(result);
 });
 
 // ─── Admin: purge crypto signals from stockSignals collection ─────────────────
@@ -231,6 +270,7 @@ router.post("/admin/purge-crypto", requireAuth, requireAdmin, async (req, res) =
       removed = records.length - clean.length;
       return clean;
     });
+    cache.invalidatePrefix("stocks:");
     return res.json({ success: true, removed, message: `Removed ${removed} crypto signal(s) from stockSignals collection` });
   } catch (err) {
     return res.status(500).json({ message: err.message });
@@ -238,28 +278,43 @@ router.post("/admin/purge-crypto", requireAuth, requireAdmin, async (req, res) =
 });
 
 router.get("/stats/overview", requireAuth, async (req, res) => {
+  const cached = cache.get("stocks:overview");
+  if (cached) return res.json(cached);
+
   await expireStaleActives(); // ensure stale actives are marked expired before counting
   const raw = await readCollection("stockSignals");
   const signals = raw.filter((s) => !isCryptoCoin(s.coin));
-  return res.json({
+  const result = {
     stats: buildOverview(signals),
-  });
+  };
+  cache.set("stocks:overview", result, 30);
+  return res.json(result);
 });
 
 router.get("/stats/analytics", requireAuth, async (req, res) => {
+  const cached = cache.get("stocks:analytics");
+  if (cached) return res.json(cached);
+
   const raw = await readCollection("stockSignals");
   const signals = raw.filter((s) => !isCryptoCoin(s.coin));
-  return res.json({
+  const result = {
     analytics: buildAnalytics(signals),
-  });
+  };
+  cache.set("stocks:analytics", result, 60);
+  return res.json(result);
 });
 
 router.get("/stats/performance", requireAuth, async (req, res) => {
+  const cached = cache.get("stocks:performance");
+  if (cached) return res.json(cached);
+
   const raw = await readCollection("stockSignals");
   const signals = raw.filter((s) => !isCryptoCoin(s.coin));
-  return res.json({
+  const result = {
     performance: buildPerformance(signals),
-  });
+  };
+  cache.set("stocks:performance", result, 60);
+  return res.json(result);
 });
 
 router.get("/engine/status", requireAuth, (_req, res) => {
