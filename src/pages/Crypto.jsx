@@ -6,17 +6,26 @@ import { getSignalCoins, mergeSignalLivePrices } from "../lib/liveSignalPrices";
 import { useSession } from "../context/useSession";
 import { useWebSocket } from "../lib/useWebSocket";
 
-// ─── Expiry config (must match backend SIGNAL_EXPIRY_MS) ─────────────────────
-const EXPIRY_MS = {
+// ─── Expiry config — loaded from backend at startup via /api/signals/config ──
+// FIX: Was hardcoded here. Now fetched from backend so both stay in sync.
+// Falls back to defaults while loading (matches backend values).
+let EXPIRY_MS = {
   "1m":  8  * 60 * 1000,
   "5m":  25 * 60 * 1000,
   "15m": 90 * 60 * 1000,
-  "30m": 3  * 60 * 60 * 1000,
-  "1h":  6  * 60 * 60 * 1000,
+  "30m":  3  * 60 * 60 * 1000,
+  "1h":   6  * 60 * 60 * 1000,
+  "4h":  24  * 60 * 60 * 1000,
+  default: 6 * 60 * 60 * 1000,
 };
 
+// Load from backend once at module init
+apiFetch("/signals/config").then(cfg => {
+  if (cfg?.signalExpiryMs) EXPIRY_MS = cfg.signalExpiryMs;
+}).catch(() => { /* use defaults */ });
+
 function getExpiryMs(signal) {
-  return EXPIRY_MS[signal.timeframe] || 6 * 60 * 60 * 1000;
+  return EXPIRY_MS[signal.timeframe] || EXPIRY_MS.default || 6 * 60 * 60 * 1000;
 }
 
 function getRemainingMs(signal) {
