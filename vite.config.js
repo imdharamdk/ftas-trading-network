@@ -11,38 +11,36 @@ export default defineConfig({
   },
 
   build: {
-    // Code splitting — each page becomes a separate chunk
-    // Browser only downloads the page the user is actually visiting
+    // FIX: Vite v8 (rolldown) requires manualChunks as a FUNCTION, not an object
     rollupOptions: {
       output: {
-        manualChunks: {
+        manualChunks(id) {
           // Vendor chunk — React + Router (cached separately by browser)
-          vendor: ['react', 'react-dom', 'react-router-dom'],
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom') || id.includes('node_modules/react-router-dom')) {
+            return 'vendor';
+          }
+
+          // Heavy canvas chart — only loads on market/crypto pages
+          if (id.includes('CandlestickChart')) {
+            return 'chart';
+          }
 
           // Heavy pages — load only when visited
-          dashboard:  ['./src/pages/Dashboard.jsx'],
-          market:     ['./src/pages/Market.jsx'],
-          crypto:     ['./src/pages/Crypto.jsx'],
-          stocks:     ['./src/pages/Stocks.jsx'],
-          analytics:  ['./src/pages/Analytics.jsx'],
-          settings:   ['./src/pages/Settings.jsx'],
-          community:  ['./src/pages/Community.jsx'],
-          post:       ['./src/pages/PostGenerator.jsx'],
-
-          // Heavy component — candlestick chart only loads on market/crypto pages
-          chart: ['./src/components/CandlestickChart.jsx'],
+          if (id.includes('/pages/Dashboard'))    return 'dashboard';
+          if (id.includes('/pages/Market'))       return 'market';
+          if (id.includes('/pages/Crypto'))       return 'crypto';
+          if (id.includes('/pages/Stocks'))       return 'stocks';
+          if (id.includes('/pages/Analytics'))    return 'analytics';
+          if (id.includes('/pages/Settings'))     return 'settings';
+          if (id.includes('/pages/Community'))    return 'community';
+          if (id.includes('/pages/PostGenerator')) return 'post';
         },
       },
     },
 
-    // Slightly larger warning threshold — chart canvas code is intentionally big
     chunkSizeWarningLimit: 600,
-
-    // Minify CSS + JS
     cssMinify: true,
     minify: 'esbuild',
-
-    // Source maps off in production (faster build, smaller output)
     sourcemap: false,
   },
 })
