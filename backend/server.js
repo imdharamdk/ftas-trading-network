@@ -267,11 +267,22 @@ async function startServer(port = PORT) {
     console.log(`WS ready at ws://localhost:${port}/ws`);
     console.log("Engine:", JSON.stringify(getStatus()));
 
-    if (String(process.env.AUTO_START_ENGINE || "").toLowerCase() === "true") {
+    const envToBool = (value) => {
+      if (value === undefined || value === null || value === "") return null;
+      const v = String(value).trim().toLowerCase();
+      if (["true", "1", "yes", "y"].includes(v)) return true;
+      if (["false", "0", "no", "n"].includes(v)) return false;
+      return null;
+    };
+    const defaultAutoStart = process.env.NODE_ENV === "production";
+    const autoStartCrypto = envToBool(process.env.AUTO_START_ENGINE);
+    const autoStartStock = envToBool(process.env.AUTO_START_STOCK_ENGINE);
+
+    if ((autoStartCrypto ?? defaultAutoStart) === true) {
       start();
       console.log("Signal scanner started");
     }
-    if (String(process.env.AUTO_START_STOCK_ENGINE || "").toLowerCase() === "true") {
+    if ((autoStartStock ?? defaultAutoStart) === true) {
       stockSignalEngine.start();
       console.log("Stock/FO scanner started");
     }
