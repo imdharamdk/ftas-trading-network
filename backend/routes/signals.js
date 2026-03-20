@@ -519,7 +519,10 @@ router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) =>
       return res.json({ prices: [] });
     }
 
-    const uniqueCoins = [...new Set(coins)];
+    const uniqueCoins = [...new Set(coins)].sort();
+    const cacheKey = `signals:live-prices:${uniqueCoins.join(",")}`;
+    const cached = cache.get(cacheKey);
+    if (cached) return res.json(cached);
 
     // Split coins: Indian stocks end with -EQ, -BE, or have NSE/BSE prefix pattern
     const isIndianStock = (coin) => /-(EQ|BE|N1|BL|IL|SM|GR|ST)$/i.test(coin) || coin.includes("NSE:") || coin.includes("BSE:");
@@ -630,7 +633,9 @@ router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) =>
       }
     } catch {}
 
-    return res.json({ prices: priceRows });
+    const result = { prices: priceRows };
+    cache.set(cacheKey, result, 8);
+    return res.json(result);
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }

@@ -434,16 +434,23 @@ router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) =>
 
     if (!coins.length) return res.json({ prices: [] });
 
-    const priceMap = await fetchStockLivePrices([...new Set(coins)]);
+    const uniqueCoins = [...new Set(coins)].sort();
+    const cacheKey = `stocks:live-prices:${uniqueCoins.join(",")}`;
+    const cached = cache.get(cacheKey);
+    if (cached) return res.json(cached);
+
+    const priceMap = await fetchStockLivePrices(uniqueCoins);
     const liveUpdatedAt = new Date().toISOString();
 
-    return res.json({
+    const result = {
       prices: coins.map(coin => ({
         coin,
         livePrice: Number.isFinite(priceMap[coin]) ? priceMap[coin] : null,
         liveUpdatedAt,
       })),
-    });
+    };
+    cache.set(cacheKey, result, 12);
+    return res.json(result);
   } catch (err) {
     console.error("[stocks/live-prices] Error:", err.message);
     return res.status(500).json({ message: err.message });

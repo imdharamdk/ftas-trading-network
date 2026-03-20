@@ -204,7 +204,7 @@ export default function Crypto() {
         // Phase 1: active signals — backend expires stale ones first
         const [overviewRes, activeRes] = await Promise.allSettled([
           apiFetch("/signals/stats/overview"),
-          apiFetch("/signals/active?limit=100"),
+          apiFetch("/signals/active?limit=60"),
         ]);
         if (!mounted) return;
 
@@ -268,7 +268,7 @@ export default function Crypto() {
       } catch { /* keep stale */ }
     }
     refreshPrices();
-    const id = window.setInterval(refreshPrices, 15_000);
+    const id = window.setInterval(refreshPrices, 20_000);
     return () => { mounted = false; window.clearInterval(id); };
   }, [signalCoinsKey, wsConnected]);
 
