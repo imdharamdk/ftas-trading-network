@@ -377,8 +377,6 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const smcStructure = smc.structure  || { trend: "NEUTRAL" };
   const bosBull   = smcBOS.bull;
   const bosBear   = smcBOS.bear;
-  const chochBull = smcCHoCH.bull;
-  const chochBear = smcCHoCH.bear;
   const idmBull   = smcIDM.bull;
   const idmBear   = smcIDM.bear;
 
@@ -390,9 +388,9 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   if (higherBias === "NEUTRAL") return null;
   const side = higherBias === "BULLISH" ? "LONG" : "SHORT";
 
-  // ── SMC HARD GATE: BOS or CHoCH required ─────────────────────────────────
-  const smcBullGate = bosBull || chochBull;
-  const smcBearGate = bosBear || chochBear;
+  // ── SMC HARD GATE: BOS required (CHoCH removed) ─────────────────────────
+  const smcBullGate = bosBull;
+  const smcBearGate = bosBear;
   if (side === "LONG"  && !smcBullGate) return null;
   if (side === "SHORT" && !smcBearGate) return null;
 
@@ -558,12 +556,10 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   // ── SMC Scoring ───────────────────────────────────────────────────────────
   if (bosBull && side === "LONG")  addConf(true, 8,  "BOS 📈 structure break up");
   if (bosBear && side === "SHORT") addConf(true, 8,  "BOS 📉 structure break down");
-  if (chochBull && side === "LONG")  addConf(true, 12, "CHoCH 🔄 bearish→bullish shift");
-  if (chochBear && side === "SHORT") addConf(true, 12, "CHoCH 🔄 bullish→bearish shift");
   if (idmBull && side === "LONG")  { const s = Math.round(smcIDM.rejectionStrength); addConf(true, 6, "IDM 🎯 liquidity grab + rejection (" + s + "/10)"); }
   if (idmBear && side === "SHORT") { const s = Math.round(smcIDM.rejectionStrength); addConf(true, 6, "IDM 🎯 liquidity grab + rejection (" + s + "/10)"); }
-  if ((bosBull||chochBull) && idmBull && side === "LONG")  addConf(true, 6, "SMC full confluence");
-  if ((bosBear||chochBear) && idmBear && side === "SHORT") addConf(true, 6, "SMC full confluence");
+  if (bosBull && idmBull && side === "LONG")  addConf(true, 6, "SMC full confluence");
+  if (bosBear && idmBear && side === "SHORT") addConf(true, 6, "SMC full confluence");
 
   // Candlestick patterns
   const strongBullPat = ["Morning Star","Morning Doji Star","Three White Soldiers","Bullish Engulfing","Bullish Marubozu","Abandoned Baby (Bull)"];
@@ -642,7 +638,7 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
       modelVersion: "v16_working",
       smc: {
         bos:       { bull: bosBull,   bear: bosBear,   level: smcBOS.level   },
-        choch:     { bull: chochBull, bear: chochBear, level: smcCHoCH.level },
+        choch:     { bull: false, bear: false, level: smcCHoCH.level },
         idm:       { bull: idmBull,   bear: idmBear,   sweepLevel: smcIDM.sweepLevel, rejectionStrength: smcIDM.rejectionStrength },
         structure: smcStructure.trend,
       },
