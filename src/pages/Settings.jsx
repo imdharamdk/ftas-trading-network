@@ -105,6 +105,9 @@ export default function Settings() {
   const isAdmin  = user?.role === "ADMIN";
 
   const { permission, subscribed, supported, loading: pushLoading, error: pushError, subscribe, unsubscribe } = usePushNotifications();
+  const [pushConfig, setPushConfig] = useState({ loading: true, configured: true, message: "" });
+  const [pushTestBusy, setPushTestBusy] = useState(false);
+  const [pushTestMsg, setPushTestMsg] = useState("");
 
   // Price alerts
   const [alerts, setAlerts]       = useState([]);
@@ -137,6 +140,37 @@ export default function Settings() {
   const [riskDraft, setRiskDraft] = useState(user?.riskPreference || "BALANCED");
   const [riskBusy, setRiskBusy] = useState(false);
   const [riskMsg, setRiskMsg] = useState("");
+
+  const checkPushConfig = useCallback(async () => {
+    setPushConfig((prev) => ({ ...prev, loading: true }));
+    try {
+      await apiFetch("/notifications/vapid-public-key", { skipAuth: true });
+      setPushConfig({ loading: false, configured: true, message: "" });
+    } catch (e) {
+      setPushConfig({ loading: false, configured: false, message: e.message || "Push notifications not configured" });
+    }
+  }, []);
+
+  const sendTestPush = useCallback(async () => {
+    setPushTestBusy(true);
+    setPushTestMsg("");
+    try {
+      await apiFetch("/notifications/test", {
+        method: "POST",
+        body: { title: "FTAS Test", body: "Push notifications are working!" },
+      });
+      setPushTestMsg("✅ Test push sent. Check your notification tray.");
+    } catch (e) {
+      setPushTestMsg(`❌ ${e.message}`);
+    } finally {
+      setPushTestBusy(false);
+      setTimeout(() => setPushTestMsg(""), 5000);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkPushConfig();
+  }, [checkPushConfig]);
 
   const loadAlerts = useCallback(async () => {
     setAlertsLoading(true);
@@ -323,10 +357,53 @@ export default function Settings() {
                   <Toggle
                     checked={subscribed}
                     onChange={subscribed ? unsubscribe : subscribe}
-                    disabled={pushLoading}
+                    disabled={pushLoading || !pushConfig.configured}
                   />
                 )}
               </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, color: pushConfig.configured ? "#22c55e" : "#f87171" }}>
+                  {pushConfig.loading
+                    ? "Checking push configuration..."
+                    : pushConfig.configured
+                      ? "✅ Push configured"
+                      : `❌ ${pushConfig.message || "Push notifications not configured"}`}
+                </span>
+                {isAdmin && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={checkPushConfig}
+                      disabled={pushConfig.loading}
+                      style={{
+                        background: "rgba(255,255,255,0.06)",
+                        border: "1px solid rgba(255,255,255,0.15)",
+                        borderRadius: 8, padding: "6px 12px",
+                        color: "#e2e8f0", fontSize: 12, cursor: pushConfig.loading ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {pushConfig.loading ? "Checking..." : "Check Status"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={sendTestPush}
+                      disabled={!pushConfig.configured || pushTestBusy}
+                      style={{
+                        background: "linear-gradient(135deg,#22c55e,#16a34a)",
+                        border: "none", borderRadius: 8, padding: "6px 12px",
+                        color: "#fff", fontSize: 12, fontWeight: 700,
+                        cursor: (!pushConfig.configured || pushTestBusy) ? "not-allowed" : "pointer",
+                        opacity: (!pushConfig.configured || pushTestBusy) ? 0.6 : 1,
+                      }}
+                    >
+                      {pushTestBusy ? "Sending..." : "Send Test Push"}
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {pushTestMsg && <p style={{ fontSize: 12, color: pushTestMsg.startsWith("✅") ? "#22c55e" : "#f87171" }}>{pushTestMsg}</p>}
 
               {/* Blocked — show step by step fix */}
               {permission === "denied" && (
