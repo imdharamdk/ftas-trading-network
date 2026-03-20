@@ -16,6 +16,7 @@ const scanLimiter = rateLimit({
 const { getLtp } = require("../services/smartApiService");
 const { getInstrumentUniverse } = require("../services/smartInstrumentService");
 const { createManualSignal, generateForCoin, getPausedCoins, getStatus, pauseCoin, resumeCoin, scanNow, start, stop } = require("../services/signalEngine");
+const cache = require("../services/apiCache");
 
 const router = express.Router();
 
@@ -379,16 +380,19 @@ async function attachLivePrices(signals) {
 }
 
 router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
-  // Expire any stale signals first, then return only truly active ones
+  const cacheKey = "signals:active:" + (req.query.coin || "all") + ":" + (req.query.limit || 50);
+  const cached = cache.get(cacheKey);
+  if (cached) return res.json(cached);
+
   await expireStaleActives("signals");
   const rawSignals = await readCollection("signals");
   const filtered = sortByCreatedAtDesc(rawSignals)
     .filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE)
     .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
 
-  return res.json({
-    signals: filtered.slice(0, Number(req.query.limit || 50)),
-  });
+  const result = { signals: filtered.slice(0, Number(req.query.limit || 50)) };
+  cache.set(cacheKey, result, 20); // 20s TTL
+  return res.json(result);
 });
 
 router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
@@ -417,11 +421,14 @@ router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
 });
 
 router.get("/stats/overview", requireAuth, async (req, res) => {
-  await expireStaleActives("signals"); // ensure stale actives are marked expired before counting
+  const cached = cache.get("signals:overview");
+  if (cached) return res.json(cached);
+
+  await expireStaleActives("signals");
   const signals = await readCollection("signals");
-  return res.json({
-    stats: buildOverview(signals),
-  });
+  const result = { stats: buildOverview(signals) };
+  cache.set("signals:overview", result, 30); // 30s TTL
+  return res.json(result);
 });
 
 router.get("/stats/analytics", requireAuth, async (req, res) => {
@@ -693,6 +700,7 @@ router.post("/facebook/test-post", requireAuth, requireAdmin, async (_req, res) 
 router.post("/scan", requireAuth, requireAdmin, scanLimiter, async (req, res) => {
   try {
     const result = await scanNow({ source: "MANUAL_SCAN" });
+    cache.invalidatePrefix("signals:"); // flush cache after scan
     return res.json(result);
   } catch (error) {
     return res.status(500).json({ message: error.message });
