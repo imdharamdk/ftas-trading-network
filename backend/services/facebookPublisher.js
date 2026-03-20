@@ -31,18 +31,31 @@ if (!FB_ENABLED) {
 }
 
 // ─── Stock vs Crypto Detection ─────────────────────────────────────────────
-// FIX: Previously relied ONLY on signal.source === "SMART_ENGINE"
-// But stockSignalEngine was incorrectly setting source: "ENGINE" (now fixed to "SMART_ENGINE")
-// Double-safety: also check if coin ends with USDT — stock coins never end with USDT
+// FIX: Make detection resilient when source is missing or older data is mixed.
+const CRYPTO_QUOTE_SUFFIXES = ["USDT", "BUSD", "USDC", "USDP", "FDUSD", "TUSD", "DAI"];
+const CRYPTO_QUOTE_RE = new RegExp(`(${CRYPTO_QUOTE_SUFFIXES.join("|")})$`, "i");
+
+function isCryptoSymbol(coin = "") {
+  return CRYPTO_QUOTE_RE.test(String(coin || "").toUpperCase());
+}
+
 function isStockSignal(signal) {
+  const assetClass = String(signal.assetClass || "").toUpperCase();
+  if (assetClass === "STOCK") return true;
+  if (assetClass === "CRYPTO") return false;
+
   // Primary check: source field (most reliable after fix)
   if (signal.source === "SMART_ENGINE" || signal.source === "SMART_MANUAL") return true;
-  // Secondary check: crypto coins always end with USDT on Bybit/Binance
-  const coin = String(signal.coin || "").toUpperCase();
-  if (coin.endsWith("USDT")) return false;
-  // Tertiary check: if it has an exchange field like NSE/BSE it's definitely stock
+
+  // Secondary check: exchange field like NSE/BSE/MCX
   if (signal.exchange === "NSE" || signal.exchange === "BSE" || signal.exchange === "MCX") return true;
-  return false;
+
+  // Tertiary check: crypto symbols end with stable-quote suffixes
+  const coin = String(signal.coin || "").toUpperCase();
+  if (isCryptoSymbol(coin)) return false;
+
+  // Default: treat non-crypto symbols as stock
+  return Boolean(coin);
 }
 
 // ─── Symbol cleanup ────────────────────────────────────────────────────────
@@ -52,8 +65,8 @@ function cleanSymbol(signal) {
   const coin  = String(signal.coin || "");
   const stock = isStockSignal(signal);
   if (!stock) {
-    // Crypto — remove USDT suffix
-    return coin.replace(/USDT$/i, "").replace(/BUSD$/i, "").trim() || coin;
+    // Crypto — remove stable-quote suffix
+    return coin.replace(CRYPTO_QUOTE_RE, "").trim() || coin;
   }
   // Stock — remove exchange suffix like -EQ, -BE, -N1 etc.
   return coin.replace(/-(EQ|BE|N1|BL|IL|SM|GR|ST)$/i, "").trim() || coin;
