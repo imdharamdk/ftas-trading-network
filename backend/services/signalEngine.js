@@ -1,8 +1,8 @@
 const { SIGNAL_STATUS, createSignal } = require("../models/Signal");
 const { readCollection, mutateCollection } = require("../storage/fileStore");
 const { analyzeCandles } = require("./indicatorEngine");
-const { ensureSession, getCandles: smartGetCandles } = require("./smartApiService");
-const { getInstrumentUniverse } = require("./smartInstrumentService");
+const { getAllTickerStats, getAllFuturesCoins, getKlines, getPrices } = require("./binanceService");
+const { getExpiryMs, WIN_RESULTS, LOSS_RESULTS, STRENGTH_THRESHOLDS } = require("../constants");
 
 function ws()   { try { return require("./wsServer");              } catch { return null; } }
 function sse()  { try { return require("./sseManager");            } catch { return null; } }
@@ -10,93 +10,81 @@ function fb()   { try { return require("./facebookPublisher");     } catch { ret
 function push() { try { return require("../routes/notifications"); } catch { return null; } }
 function tg()   { try { return require("../routes/telegram");      } catch { return null; } }
 
-// ─── STOCK COLLECTION NAME ────────────────────────────────────────────────────
-const STOCK_COLLECTION = "stockSignals";
+// ─── CRYPTO COLLECTION NAME ───────────────────────────────────────────────────
+const SIGNAL_COLLECTION = "signals";
 
-// ─── BALANCED ACCURACY MODE ───────────────────────────────────────────────────
-// Philosophy: "Achhe signals aayein, TP bhi hit ho — balance between frequency & accuracy"
-//
-// 6 GATES — smart combination, not brute force strict
-//
-//  GATE 1 — HTF ALIGNMENT   : 15m + 1h agree (1m ke liye 5m + 15m)
-//  GATE 2 — EMA TREND       : EMA21 > EMA50 > EMA200 (3 EMA sufficient, not all 5)
-//  GATE 3 — ADX STRENGTH    : ADX >= 20 (trend present, not necessarily explosive)
-//  GATE 4 — MOMENTUM        : RSI + MACD agree (StochRSI optional bonus)
-//  GATE 5 — VOLUME          : 1.4x avg (smart money, not waiting for 2x spike)
-//  GATE 6 — HA DIRECTION    : Last 2 HA candles same direction (not 3)
-//
-// RESULT: ~8-15 signals per day, ~70-75% TP1 hit rate
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── CRYPTO SIGNAL ENGINE ────────────────────────────────────────────────────
+// Focus: higher frequency with controlled quality.
 
-// Stock engine scans Angel One instruments — NOT crypto coins
-// FALLBACK_STOCKS is used only if instrument universe fails to load
-const FALLBACK_STOCKS = [
-  "RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK",
-  "HINDUNILVR","SBIN","BAJFINANCE","KOTAKBANK","LT",
-  "AXISBANK","ASIANPAINT","MARUTI","TITAN","SUNPHARMA",
-];
+const SCAN_TIMEFRAMES            = ["1m","5m","15m","30m","1h"];
+const DEFAULT_TRADE_TIMEFRAMES   = ["1m","5m","15m","30m"];
+const DEFAULT_MAX_COINS_PER_SCAN = 60;
+const MAX_COINS_PER_SCAN_CAP     = 120;
 
-const SCAN_TIMEFRAMES          = ["15m","1h","4h","1d"];
-const DEFAULT_TRADE_TIMEFRAMES = ["15m","1h"];
-const DEFAULT_MAX_COINS_PER_SCAN = 50;
-const MAX_COINS_PER_SCAN_CAP     = 70;
+const MIN_SCAN_QUOTE_VOLUME_USDT  = 5_000_000;
+const MIN_SCAN_TRADE_COUNT_24H    = 10_000;
+const MIN_SCAN_OPEN_INTEREST_USDT = 2_000_000;
 
-const MIN_SCAN_QUOTE_VOLUME_USDT  = 15_000_000;   // was 25M — include more liquid coins
-const MIN_SCAN_TRADE_COUNT_24H    = 20_000;        // was 30K
-const MIN_SCAN_OPEN_INTEREST_USDT = 5_000_000;    // was 8M
-
-const RULE_VERSION = "v17_stocks_working";
-const DEFAULT_PUBLISH_FLOOR = 76;
-const STRENGTH_THRESHOLDS   = { STRONG: 88, MEDIUM: 76 };
-
-// ── NSE Market Hours Guard ─────────────────────────────────────────────────────
-// Only scan during NSE trading hours: Mon-Fri 9:15 AM – 3:30 PM IST
-function isNseMarketOpen() {
-  const now = new Date();
-  const ist  = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-  const day  = ist.getDay(); // 0=Sun, 6=Sat
-  if (day === 0 || day === 6) return false; // weekend
-
-  const hh   = ist.getHours();
-  const mm   = ist.getMinutes();
-  const mins = hh * 60 + mm;
-
-  const OPEN  = 9  * 60 + 15;  // 9:15 AM
-  const CLOSE = 15 * 60 + 30;  // 3:30 PM
-  return mins >= OPEN && mins < CLOSE;
-}
+const RULE_VERSION = "v18_crypto_working";
+const DEFAULT_PUBLISH_FLOOR = 72;
 
 // ── Per-Timeframe Rules ────────────────────────────────────────────────────────
 const TIMEFRAME_RULES = {
-  "15m": {
-    minScore:            52,   // relaxed from 55
+  "1m": {
+    minScore:            44,
     minConfirmations:    3,
-    publishFloor:        73,   // relaxed from 76 — more signals
-    minAdx:              12,   // relaxed from 14
+    publishFloor:        70,
+    minAdx:              10,
+    minDiDelta:          2,
+    requireVwapSupport:  false,
+    blockDailyBear:      false,
+    entryDriftMultiplier: 0.5,
+    maxLeverage:         20,
+  },
+  "5m": {
+    minScore:            46,
+    minConfirmations:    3,
+    publishFloor:        72,
+    minAdx:              12,
+    minDiDelta:          2,
+    requireVwapSupport:  false,
+    blockDailyBear:      false,
+    entryDriftMultiplier: 0.6,
+    maxLeverage:         20,
+  },
+  "15m": {
+    minScore:            50,
+    minConfirmations:    3,
+    publishFloor:        74,
+    minAdx:              13,
+    minDiDelta:          2,
+    requireVwapSupport:  false,
+    blockDailyBear:      false,
+    entryDriftMultiplier: 0.7,
+    maxLeverage:         15,
+  },
+  "30m": {
+    minScore:            52,
+    minConfirmations:    3,
+    publishFloor:        75,
+    minAdx:              14,
     minDiDelta:          2,
     requireVwapSupport:  false,
     blockDailyBear:      false,
     entryDriftMultiplier: 0.8,
-    maxLeverage:         10,
+    maxLeverage:         15,
   },
   "1h": {
-    minScore:            49,   // relaxed from 52
+    minScore:            55,
     minConfirmations:    3,
-    publishFloor:        71,   // relaxed from 74
-    minAdx:              12,   // relaxed from 14
-    minDiDelta:          2,
+    publishFloor:        76,
+    minAdx:              15,
+    minDiDelta:          3,
     requireVwapSupport:  false,
     blockDailyBear:      false,
-    entryDriftMultiplier: 1.2,
-    maxLeverage:         10,
+    entryDriftMultiplier: 1.0,
+    maxLeverage:         12,
   },
-};
-
-// ── Signal Expiry ──────────────────────────────────────────────────────────────
-const SIGNAL_EXPIRY_MS = {
-  "1m":  8  * 60 * 1000,   // was 5 min — slight more time to hit TP
-  "5m":  25 * 60 * 1000,   // was 15 min
-  default: 25 * 60 * 1000,
 };
 
 // ── TP targets — realistic R:R for scalps ─────────────────────────────────────
@@ -104,12 +92,10 @@ const SIGNAL_EXPIRY_MS = {
 const TP_R_MULTIPLIERS_1M = [0.45, 0.8, 1.2];   // was [0.5, 0.85, 1.3]
 const TP_R_MULTIPLIERS_5M = [0.55, 0.95, 1.4];  // was [0.6, 1.0, 1.5]
 
-const WIN_RESULTS  = new Set(["TP1_HIT","TP2_HIT","TP3_HIT"]);
-const LOSS_RESULTS = new Set(["SL_HIT"]);
 const buildTally   = () => ({ wins: 0, losses: 0 });
 
 const engineState = {
-  intervalMs: Number(process.env.SCAN_INTERVAL_MS || 60000),
+  intervalMs: Number(process.env.CRYPTO_SCAN_INTERVAL_MS || process.env.SCAN_INTERVAL_MS || 60_000),
   isScanning: false, lastError: null, lastGenerated: 0,
   lastScanAt: null, running: false, scanCount: 0,
   timer: null, expiryTimer: null,
@@ -146,8 +132,8 @@ function buildMarketActivitySnapshot(ticker = {}) {
   const hasParticipation = tradeCount > 0 || openInterestValue > 0;
   const liquidityScore     = Math.log10(quoteVolume + 1) * 16 + Math.log10(volume + 1) * 4;
   const participationScore = Math.log10(tradeCount + 1) * 8  + Math.log10(openInterestValue + 1) * 10;
-  const isLiquid  = quoteVolume >= 25_000_000 || openInterestValue >= 5_000_000;
-  const isCrowded = tradeCount  >= 15_000     || openInterestValue >= 8_000_000;
+  const isLiquid  = quoteVolume >= 12_000_000 || openInterestValue >= 3_000_000;
+  const isCrowded = tradeCount  >= 8_000      || openInterestValue >= 5_000_000;
   const passesFloor = symbol.endsWith("USDT") &&
     quoteVolume >= MIN_SCAN_QUOTE_VOLUME_USDT &&
     (!hasParticipation || tradeCount >= MIN_SCAN_TRADE_COUNT_24H || openInterestValue >= MIN_SCAN_OPEN_INTEREST_USDT);
@@ -157,74 +143,62 @@ function buildMarketActivitySnapshot(ticker = {}) {
     relaxThresholds: isLiquid && (isCrowded || quoteVolume >= 50_000_000) };
 }
 function getMaxCoinsPerScan() {
-  return clamp(Number(process.env.STOCK_SCAN_MAX_COINS || DEFAULT_MAX_COINS_PER_SCAN), 5, MAX_COINS_PER_SCAN_CAP);
+  return clamp(Number(process.env.CRYPTO_SCAN_MAX_COINS || DEFAULT_MAX_COINS_PER_SCAN), 10, MAX_COINS_PER_SCAN_CAP);
 }
 
-// ─── Stock Scan Universe — Angel One instruments only ─────────────────────────
-// Returns an array of { symbol } objects from the SmartAPI instrument universe.
-// Falls back to FALLBACK_STOCKS if instrument list is empty.
-function getScanUniverse() {
+// ─── Crypto Scan Universe — Binance/Bybit USDT perpetuals ────────────────────
+async function getScanUniverse() {
   try {
-    const instruments = getInstrumentUniverse({ limit: MAX_COINS_PER_SCAN_CAP });
-    if (instruments.length) {
-      return instruments.map(inst => ({
-        symbol: (inst.tradingSymbol || inst.symbol || "").toUpperCase(),
-        exchange: inst.exchange,
-        token: inst.token,
-        instrumentType: inst.instrumentType,
-        // satisfy buildMarketActivitySnapshot shape (not used for stocks but prevents crashes)
-        quoteVolume: 0, volume: 0, tradeCount: 0, openInterestValue: 0,
-        activityScore: 0, isLiquid: false, isCrowded: false,
-        passesFloor: true, relaxThresholds: false,
-      })).filter(m => m.symbol);
+    const stats = await getAllTickerStats();
+    const markets = (stats || [])
+      .map(buildMarketActivitySnapshot)
+      .filter(m => m.symbol.endsWith("USDT"));
+
+    if (!markets.length) {
+      const coins = await getAllFuturesCoins();
+      return (coins || []).map(sym => buildFallbackMarketActivity(sym));
     }
+
+    const filtered = markets.filter(m => m.passesFloor || m.relaxThresholds);
+    const ranked = (filtered.length ? filtered : markets)
+      .sort((a, b) => b.activityScore - a.activityScore);
+
+    return ranked;
   } catch (e) {
-    console.error("[stockEngine/getScanUniverse] Instrument load failed:", e.message);
+    console.error("[cryptoEngine/getScanUniverse] ticker stats failed:", e.message);
+    return [];
   }
-  // Fallback: use hardcoded NSE equity list
-  return FALLBACK_STOCKS.map(sym => ({
-    symbol: sym, exchange: "NSE", token: null, instrumentType: "EQ",
-    quoteVolume: 0, volume: 0, tradeCount: 0, openInterestValue: 0,
-    activityScore: 0, isLiquid: false, isCrowded: false,
-    passesFloor: true, relaxThresholds: false,
-  }));
 }
-function getCoinList() { return getScanUniverse().map(m => m.symbol); }
+async function getCoinList() {
+  const universe = await getScanUniverse();
+  return universe.map(m => m.symbol);
+}
 function getTradeTimeframes() {
-  const r = String(process.env.TRADE_TIMEFRAMES || "").split(",").map(s => s.trim()).filter(Boolean);
+  const r = String(process.env.CRYPTO_TRADE_TIMEFRAMES || process.env.TRADE_TIMEFRAMES || "")
+    .split(",").map(s => s.trim()).filter(Boolean);
   return r.length ? r : DEFAULT_TRADE_TIMEFRAMES;
 }
 
 // ─── GATE 1: HTF Bias ─────────────────────────────────────────────────────────
-// Stocks: 1h EMA direction is primary anchor.
-// 4H as soft confirmation. 1D as veto only if strongly opposite.
-// Much more relaxed than crypto — Indian stocks trend at 1h level.
-function getHigherTimeframeBias(analyses, tradeTimeframe = "15m") {
-  const a1h = analyses["1h"];
-  const a4h = analyses["4h"];
-  const a1d = analyses["1d"];
+// Crypto: use a higher timeframe filter, but keep it lenient for more signals.
+function getHigherTimeframeBias(analyses, tradeTimeframe = "5m") {
+  const pick = (tf) => analyses[tf] || null;
 
-  // Primary: 1H EMA direction
-  const primary = a1h || a4h;
+  const primary =
+    tradeTimeframe === "1m"  ? (pick("5m")  || pick("15m")) :
+    tradeTimeframe === "5m"  ? (pick("15m") || pick("1h"))  :
+    tradeTimeframe === "15m" ? (pick("1h")  || pick("30m")) :
+    tradeTimeframe === "30m" ? (pick("1h")  || pick("15m")) :
+    tradeTimeframe === "1h"  ? (pick("1h")) :
+    pick("1h");
+
   if (!primary) return "NEUTRAL";
 
   const { ema50, ema100, adx } = primary.trend;
   const rsi = primary.momentum?.rsi || 50;
 
-  // Relaxed thresholds for stocks — ADX 14+ is enough, RSI 35-65 range
-  const bull = ema50 > ema100 * 0.996 && (adx||0) >= 14 && rsi >= 35 && rsi <= 75;
-  const bear = ema50 < ema100 * 1.004 && (adx||0) >= 14 && rsi <= 65 && rsi >= 25;
-
-  if (!bull && !bear) return "NEUTRAL";
-
-  // 1D soft veto — only block if strongly opposite (ADX 20+)
-  if (a1d) {
-    const dAdx = a1d.trend.adx || 0;
-    const dBull = a1d.trend.ema50 > a1d.trend.ema100 && dAdx >= 20;
-    const dBear = a1d.trend.ema50 < a1d.trend.ema100 && dAdx >= 20;
-    if (bull && dBear) return "NEUTRAL";
-    if (bear && dBull) return "NEUTRAL";
-  }
+  const bull = ema50 > ema100 * 0.995 && (adx||0) >= 10 && rsi >= 40 && rsi <= 78;
+  const bear = ema50 < ema100 * 1.005 && (adx||0) >= 10 && rsi <= 60 && rsi >= 22;
 
   if (bull) return "BULLISH";
   if (bear) return "BEARISH";
@@ -386,7 +360,6 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const side = higherBias === "BULLISH" ? "LONG" : "SHORT";
 
   // GATE 2: Core EMA Trend — ema50 > ema100 required; ema200 alignment is bonus not gate
-  // Indian stocks have slower EMA convergence — requiring ema100>ema200 blocks too many valid setups
   const coreBullStack = ema50 > ema100 * 0.997;
   const coreBearStack = ema50 < ema100 * 1.003;
   if (side === "LONG"  && !coreBullStack) return null;
@@ -417,7 +390,7 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   if (tfRule.blockDailyBear && side === "LONG" && dailyBearStack) return null;
   // Manipulation candle
   if (hasManipulationCandle(side, analysis)) return null;
-  // REMOVED: regime === "RANGING" block — Indian stocks are often range-bound
+  // REMOVED: regime === "RANGING" block — too restrictive for crypto mean-reversion
   // BB extreme zone — don't buy overbought top or sell oversold bottom
   if (bbPctB !== null) {
     if (side === "LONG"  && bbPctB > 0.92) return null;
@@ -637,55 +610,29 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   });
 }
 
-// ─── Angel One candle fetch (timeframe mapping) ───────────────────────────────
-const SMART_INTERVAL_MAP = {
-  "1m": "ONE_MINUTE", "3m": "THREE_MINUTE", "5m": "FIVE_MINUTE",
-  "10m": "TEN_MINUTE", "15m": "FIFTEEN_MINUTE", "30m": "THIRTY_MINUTE",
-  "1h": "ONE_HOUR", "4h": "FOUR_HOUR", "1d": "ONE_DAY",
-};
-const TF_LOOKBACK_DAYS = { "1m": 1, "5m": 3, "15m": 7, "1h": 30, "4h": 60, "1d": 365 };
-
-async function fetchStockCandles(symbol, tf, exchange, token) {
-  const smartInterval = SMART_INTERVAL_MAP[tf] || "FIFTEEN_MINUTE";
-  const lookbackDays  = TF_LOOKBACK_DAYS[tf] || 14;
-  const to   = new Date();
-  const from = new Date(to.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
+// ─── Crypto candle fetch (Binance/Bybit) ──────────────────────────────────────
+async function fetchCryptoCandles(symbol, tf) {
   try {
-    await ensureSession(); // Ensure Angel One session is live before fetching
-    const raw = await smartGetCandles({ exchange: exchange || "NSE", symbolToken: String(token), interval: smartInterval, from, to });
-    // Angel One format: [[timestamp, open, high, low, close, volume], ...]
-    return raw.map(row => ({
-      openTime: new Date(row[0]).getTime(),
-      open: Number(row[1]), high: Number(row[2]),
-      low: Number(row[3]),  close: Number(row[4]),
-      volume: Number(row[5] || 0),
-    })).filter(c => Number.isFinite(c.open) && c.open > 0);
+    const raw = await getKlines(symbol, tf, 200);
+    return (raw || []).filter(c =>
+      Number.isFinite(c.open) && Number.isFinite(c.high) &&
+      Number.isFinite(c.low)  && Number.isFinite(c.close)
+    );
   } catch (e) {
-    console.error(`[stockEngine/fetchStockCandles] ${symbol} ${tf}:`, e.message);
+    console.error(`[cryptoEngine/fetchCandles] ${symbol} ${tf}:`, e.message);
     return [];
   }
 }
 
 // ─── Coin Scan ────────────────────────────────────────────────────────────────
 async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = null) {
-  // Resolve exchange + token from instrument universe
-  const universe = getInstrumentUniverse({ limit: 5000 });
-  const inst = universe.find(i => (i.tradingSymbol || i.symbol || "").toUpperCase() === coin);
-  const exchange = marketActivity?.exchange || inst?.exchange || "NSE";
-  const token    = marketActivity?.token    || inst?.token    || null;
-
-  if (!token) {
-    console.warn(`[stockEngine/analyzeCoin] No token found for ${coin} — skipping`);
-    return null;
-  }
-
   const analyses = {};
   for (const tf of SCAN_TIMEFRAMES) {
-    const candles = await fetchStockCandles(coin, tf, exchange, token);
+    const candles = await fetchCryptoCandles(coin, tf);
     if (candles.length >= 20) analyses[tf] = analyzeCandles(candles);
-    await new Promise(r => setTimeout(r, 150)); // Angel One rate limit buffer
+    await new Promise(r => setTimeout(r, 40)); // light throttle for API stability
   }
-  const htf = { daily: analyses["1d"] || null, twelveH: null, fourH: analyses["4h"] || null, oneH: analyses["1h"] || null };
+  const htf = { daily: analyses["1h"] || null, twelveH: null, fourH: null, oneH: analyses["1h"] || null };
   const tradeTimeframes = getTradeTimeframes();
   const candidates = tradeTimeframes.map(tf => {
     if (!analyses[tf]) return null;
@@ -696,64 +643,26 @@ async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = nu
   return candidates.sort((a, b) => b.confidence - a.confidence)[0];
 }
 
-// ─── Angel One batch price fetch for stock signals ────────────────────────────
-async function fetchStockPrices(coins) {
+// ─── Crypto batch price fetch ────────────────────────────────────────────────
+async function fetchCryptoPrices(coins) {
   if (!coins.length) return {};
   try {
-    const universe = getInstrumentUniverse();
-    const tokenMap = {};
-    for (const inst of universe) {
-      const key = (inst.symbol || inst.tradingSymbol || "").toUpperCase();
-      if (key) tokenMap[key] = { exchange: inst.exchange, token: String(inst.token) };
-    }
-    const byExchange = {};
-    const tokenToCoin = {};
-    for (const coin of coins) {
-      const info = tokenMap[coin];
-      if (!info) continue;
-      if (!byExchange[info.exchange]) byExchange[info.exchange] = [];
-      byExchange[info.exchange].push(info.token);
-      tokenToCoin[info.token] = coin;
-    }
-    if (!Object.keys(byExchange).length) return {};
-    const axios  = require("axios");
-    const token  = await ensureSession();
-    const baseUrl = process.env.SMART_API_BASE_URL || "https://apiconnect.angelone.in";
-    const resp   = await axios.post(
-      `${baseUrl}/rest/secure/angelbroking/market/v1/quote/`,
-      { mode: "LTP", exchangeTokens: byExchange },
-      {
-        headers: {
-          "Content-Type": "application/json", Accept: "application/json",
-          "X-PrivateKey": process.env.SMART_API_KEY,
-          "X-UserType": "USER", "X-SourceID": "WEB",
-          Authorization: `Bearer ${token}`,
-        },
-        timeout: 8000,
-      }
-    );
-    const priceMap = {};
-    for (const item of resp.data?.data?.fetched || []) {
-      const coinName = tokenToCoin[String(item.symbolToken)];
-      const price = Number(item.ltp) || Number(item.close);
-      if (coinName && Number.isFinite(price) && price > 0) priceMap[coinName] = price;
-    }
-    return priceMap;
+    return await getPrices(coins);
   } catch (e) {
-    console.error("[stockEngine/fetchStockPrices] Error:", e.message);
+    console.error("[cryptoEngine/fetchPrices] Error:", e.message);
     return {};
   }
 }
 
 // ─── Signal Evaluation (TP/SL only) ──────────────────────────────────────────
 async function evaluateActiveSignals() {
-  const signals = await readCollection(STOCK_COLLECTION);
+  const signals = await readCollection(SIGNAL_COLLECTION);
   const active  = signals.filter(s => s.status === SIGNAL_STATUS.ACTIVE);
   if (!active.length) return [];
-  const prices = await fetchStockPrices([...new Set(active.map(s => s.coin))]);
+  const prices = await fetchCryptoPrices([...new Set(active.map(s => s.coin))]);
   const now    = new Date().toISOString();
   const closed = [];
-  await mutateCollection(STOCK_COLLECTION, records => records.map(sig => {
+  await mutateCollection(SIGNAL_COLLECTION, records => records.map(sig => {
     if (sig.status !== SIGNAL_STATUS.ACTIVE) return sig;
     const price = prices[sig.coin];
     if (!Number.isFinite(price)) return sig;
@@ -781,7 +690,7 @@ async function evaluateActiveSignals() {
 
 async function getPerformanceSnapshot() {
   try {
-    const signals = await readCollection(STOCK_COLLECTION);
+    const signals = await readCollection(SIGNAL_COLLECTION);
     const stats   = { overall: buildTally(), LONG: buildTally(), SHORT: buildTally(), "5m": buildTally(), "1m": buildTally() };
     for (const sig of signals) {
       const isWin  = WIN_RESULTS.has(sig.result);
@@ -802,16 +711,16 @@ async function getPerformanceSnapshot() {
 
 // ─── Persist / Manual ────────────────────────────────────────────────────────
 async function persistSignal(signal) {
-  const result = await mutateCollection(STOCK_COLLECTION, records => ({ records: [signal, ...records], value: signal }));
-  try { ws()?.broadcastNewStockSignal(signal);   } catch {}
-  try { sse()?.broadcastNewSignal(signal, true); } catch {}
+  const result = await mutateCollection(SIGNAL_COLLECTION, records => ({ records: [signal, ...records], value: signal }));
+  try { ws()?.broadcastNewSignal(signal);   } catch {}
+  try { sse()?.broadcastNewSignal(signal, false); } catch {}
   try { fb()?.publishSignal(signal);             } catch {}
   try { push()?.broadcastSignalPush(signal);     } catch {}
   try { tg()?.autoSendSignal(signal);            } catch {}
   return result;
 }
 async function signalExists(candidate) {
-  const signals = await readCollection(STOCK_COLLECTION);
+  const signals = await readCollection(SIGNAL_COLLECTION);
   return signals.some(s => s.status === SIGNAL_STATUS.ACTIVE && s.coin === candidate.coin && s.side === candidate.side && s.timeframe === candidate.timeframe);
 }
 async function createManualSignal(payload, actor) {
@@ -832,21 +741,12 @@ async function createManualSignal(payload, actor) {
 
 async function scanNow({ source = "ENGINE" } = {}) {
   if (engineState.isScanning) return { skipped: true, message: "Scan already in progress" };
-
-  // ── NSE Market Hours Guard ────────────────────────────────────────────────
-  // Skip scan outside 9:15 AM – 3:30 PM IST, Mon-Fri
-  // Admin-triggered scans (source="ADMIN") bypass this check
-  if (source === "ENGINE" && !isNseMarketOpen()) {
-    const ist = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" });
-    console.log(`[stockEngine] Market closed at ${ist} IST — skipping scan`);
-    return { skipped: true, message: `NSE market closed (${ist} IST)` };
-  }
   engineState.isScanning = true;
   const generatedSignals = [], errors = [];
   try {
     const closedSignals       = await evaluateActiveSignals();
     const performanceSnapshot = await getPerformanceSnapshot();
-    const scanUniverse        = getScanUniverse();
+    const scanUniverse        = await getScanUniverse();
     const coins               = scanUniverse.slice(0, getMaxCoinsPerScan());
     for (const market of coins) {
       // Skip admin-paused coins
@@ -862,7 +762,7 @@ async function scanNow({ source = "ENGINE" } = {}) {
         if (await signalExists(candidate)) continue;
         generatedSignals.push(await persistSignal(candidate));
       } catch (e) { errors.push({ coin: market.symbol, message: e.message }); }
-      await new Promise(r => setTimeout(r, 200));
+      await new Promise(r => setTimeout(r, 80));
     }
     engineState.lastGenerated = generatedSignals.length;
     engineState.lastScanAt    = new Date().toISOString();
@@ -881,13 +781,13 @@ function getStatus() {
 // ─── Fast Expiry Checker (every 30s) ─────────────────────────────────────────
 async function checkAndExpireSignals() {
   try {
-    const signals = await readCollection(STOCK_COLLECTION);
+    const signals = await readCollection(SIGNAL_COLLECTION);
     if (!signals.filter(s => s.status === SIGNAL_STATUS.ACTIVE).length) return;
     const nowMs = Date.now(), now = new Date().toISOString();
     let hasExpired = false;
     const updated = signals.map(sig => {
       if (sig.status !== SIGNAL_STATUS.ACTIVE) return sig;
-      const expiryMs  = SIGNAL_EXPIRY_MS[sig.timeframe] || SIGNAL_EXPIRY_MS.default;
+      const expiryMs  = getExpiryMs(sig.timeframe);
       const createdMs = sig.createdAt ? new Date(sig.createdAt).getTime() : 0;
       if (nowMs - createdMs > expiryMs) {
         hasExpired = true;
@@ -895,13 +795,13 @@ async function checkAndExpireSignals() {
       }
       return sig;
     });
-    if (hasExpired) { const { writeCollection } = require("../storage/fileStore"); await writeCollection(STOCK_COLLECTION, updated); }
+    if (hasExpired) { const { writeCollection } = require("../storage/fileStore"); await writeCollection(SIGNAL_COLLECTION, updated); }
   } catch (e) { engineState.lastError = `Expiry check failed: ${e.message}`; }
 }
 
 function start() {
   if (engineState.timer) { engineState.running = true; return getStatus(); }
-  engineState.intervalMs  = Number(process.env.SCAN_INTERVAL_MS || engineState.intervalMs || 60000);
+  engineState.intervalMs  = Number(process.env.CRYPTO_SCAN_INTERVAL_MS || process.env.SCAN_INTERVAL_MS || engineState.intervalMs || 60000);
   engineState.timer        = setInterval(() => { scanNow({ source: "ENGINE" }).catch(e => { engineState.lastError = e.message; }); }, engineState.intervalMs);
   engineState.expiryTimer  = setInterval(() => { checkAndExpireSignals().catch(e => { engineState.lastError = e.message; }); }, 30 * 1000);
   engineState.running      = true;
@@ -918,7 +818,8 @@ function stop() {
 
 // ─── Admin: Pause / Resume Coins ─────────────────────────────────────────────
 function pauseCoin(symbol, actor, reason = "") {
-  const coin = String(symbol || "").trim().toUpperCase();
+  let coin = String(symbol || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (coin && !coin.endsWith("USDT")) coin = `${coin}USDT`;
   if (!coin) throw new Error("Symbol required");
   engineState.pausedCoins[coin] = {
     pausedAt: new Date().toISOString(),
@@ -929,7 +830,8 @@ function pauseCoin(symbol, actor, reason = "") {
 }
 
 function resumeCoin(symbol) {
-  const coin = String(symbol || "").trim().toUpperCase();
+  let coin = String(symbol || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (coin && !coin.endsWith("USDT")) coin = `${coin}USDT`;
   delete engineState.pausedCoins[coin];
   return engineState.pausedCoins;
 }
@@ -940,11 +842,21 @@ function getPausedCoins() {
 
 // ─── Admin: Force-generate signal for a specific coin ─────────────────────────
 async function generateForCoin(symbol, actor) {
-  const coin = String(symbol || "").trim().toUpperCase();
+  let coin = String(symbol || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (!coin) throw new Error("Symbol required");
+  if (!coin.endsWith("USDT")) coin = `${coin}USDT`;
 
-  // Build minimal market activity so analyzeCoin doesn't crash
-  const marketActivity = buildFallbackMarketActivity(coin);
+  let marketActivity = buildFallbackMarketActivity(coin);
+  try {
+    const stats = await getAllTickerStats();
+    if (stats && stats.length) {
+      const match = stats.find(t => String(t.symbol || "").toUpperCase() === coin);
+      if (!match) {
+        return { generated: false, message: `Symbol ${coin} not found on USDT perpetuals.` };
+      }
+      marketActivity = buildMarketActivitySnapshot(match);
+    }
+  } catch {}
   const performanceSnapshot = await getPerformanceSnapshot();
 
   const candidate = await analyzeCoin(coin, marketActivity, performanceSnapshot);
