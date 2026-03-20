@@ -3,6 +3,7 @@ const { getAllFuturesCoins, getAllTickerStats, getKlines } = require("../service
 const { requireAuth } = require("../middleware/auth");
 
 const router = express.Router();
+const cache  = require("../services/apiCache");
 const SORTABLE_TICKER_FIELDS = new Set(["changePercent", "highPrice", "lowPrice", "price", "quoteVolume", "volume"]);
 
 function normalizeTicker(ticker) {
@@ -36,46 +37,42 @@ router.get("/tickers", async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit || 20), 5), 500);
     const requestedSort = String(req.query.sort || "quoteVolume");
     const sortBy = SORTABLE_TICKER_FIELDS.has(requestedSort) ? requestedSort : "quoteVolume";
-    const tickers = await getAllTickerStats();
 
-    const normalized = tickers
-      .map(normalizeTicker)
-      .filter((ticker) => ticker.symbol.endsWith("USDT"))
-      .sort((left, right) => {
-        const leftValue = Number(left[sortBy] || 0);
-        const rightValue = Number(right[sortBy] || 0);
-        return rightValue - leftValue;
-      })
+    // Cache tickers for 30s — Bybit API is slow and called on every Market page load
+    const cacheKey = "market:tickers:" + sortBy;
+    const cachedAll = cache.get(cacheKey);
+    const allTickers = cachedAll || await (async () => {
+      const raw = await getAllTickerStats();
+      const result = raw.map(normalizeTicker).filter(t => t.symbol.endsWith("USDT"));
+      cache.set(cacheKey, result, 30);
+      return result;
+    })();
+
+    const normalized = [...allTickers]
+      .sort((l, r) => Number(r[sortBy] || 0) - Number(l[sortBy] || 0))
       .slice(0, limit);
 
-    return res.json({
-      source: "BINANCE_FUTURES",
-      tickers: normalized,
-    });
+    return res.json({ source: "BINANCE_FUTURES", tickers: normalized });
   } catch (error) {
-    return res.status(503).json({
-      message: error.message,
-      source: "BINANCE_FUTURES",
-      tickers: [],
-    });
+    return res.status(503).json({ message: error.message, source: "BINANCE_FUTURES", tickers: [] });
   }
 });
 
 router.get("/coins", async (req, res) => {
   try {
     const requestedLimit = Number(req.query.limit || 0);
-    const coins = await getAllFuturesCoins();
-
+    const cached = cache.get("market:coins");
+    const coins  = cached || await (async () => {
+      const c = await getAllFuturesCoins();
+      cache.set("market:coins", c, 120); // 2 min — coin list rarely changes
+      return c;
+    })();
     return res.json({
       coins: requestedLimit > 0 ? coins.slice(0, requestedLimit) : coins,
       source: "BINANCE_FUTURES",
     });
   } catch (error) {
-    return res.status(503).json({
-      coins: [],
-      message: error.message,
-      source: "BINANCE_FUTURES",
-    });
+    return res.status(503).json({ coins: [], message: error.message, source: "BINANCE_FUTURES" });
   }
 });
 
