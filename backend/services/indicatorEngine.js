@@ -295,6 +295,170 @@ function detectPatterns(candles) {
   return { bullish, bearish, neutral };
 }
 
+
+// ─── SMC: IDM / BOS / CHoCH Detection ────────────────────────────────────────
+//
+// Smart Money Concepts — Three core structure tools:
+//
+//  IDM  (Inducement)          — Liquidity grab below/above a swing before real move
+//                               Price sweeps a recent swing low (LONG) or high (SHORT),
+//                               then quickly reverses — institutional trap.
+//
+//  BOS  (Break of Structure)  — Trend continuation confirmed.
+//                               Price closes ABOVE the most recent swing high (LONG)
+//                               or BELOW the most recent swing low (SHORT).
+//
+//  CHoCH (Change of Character) — Trend reversal signal.
+//                               In a downtrend: first time price closes above a
+//                               previous swing high  →  structure shifted bullish.
+//                               In an uptrend: first time price closes below a
+//                               previous swing low   →  structure shifted bearish.
+//
+// Logic uses raw OHLC — no smoothing — to match how SMC traders manually chart.
+// lookback: how many candles to look back for swing detection (default 30)
+// swingStrength: how many candles each side must be lower/higher (default 2)
+//
+// Returns:
+//   bos       { bull: bool, bear: bool, level: number|null }
+//   choch     { bull: bool, bear: bool, level: number|null }
+//   idm       { bull: bool, bear: bool, sweepLevel: number|null, rejectionStrength: number }
+//   structure { trend: "BULLISH"|"BEARISH"|"NEUTRAL", lastSwingHigh: number, lastSwingLow: number }
+
+function detectSMC(candles, lookback = 40, swingStrength = 2) {
+  const result = {
+    bos:       { bull: false, bear: false, level: null },
+    choch:     { bull: false, bear: false, level: null },
+    idm:       { bull: false, bear: false, sweepLevel: null, rejectionStrength: 0 },
+    structure: { trend: "NEUTRAL", lastSwingHigh: null, lastSwingLow: null, higherHighs: false, lowerLows: false },
+  };
+
+  if (!candles || candles.length < lookback + swingStrength * 2 + 5) return result;
+
+  const slice   = candles.slice(-lookback);
+  const n       = slice.length;
+  const current = slice[n - 1];
+  const currentClose = current.close;
+
+  // ── Step 1: Find all swing highs and swing lows in lookback window ────────
+  const swingHighs = []; // { idx, price }
+  const swingLows  = []; // { idx, price }
+
+  for (let i = swingStrength; i < n - swingStrength; i++) {
+    const c = slice[i];
+    // Swing high: highest point with swingStrength candles lower on each side
+    let isSwingHigh = true;
+    let isSwingLow  = true;
+    for (let j = 1; j <= swingStrength; j++) {
+      if (slice[i - j].high >= c.high || slice[i + j].high >= c.high) isSwingHigh = false;
+      if (slice[i - j].low  <= c.low  || slice[i + j].low  <= c.low)  isSwingLow  = false;
+    }
+    if (isSwingHigh) swingHighs.push({ idx: i, price: c.high });
+    if (isSwingLow)  swingLows.push({ idx: i, price: c.low });
+  }
+
+  if (!swingHighs.length || !swingLows.length) return result;
+
+  // Most recent swing points
+  const lastSH = swingHighs[swingHighs.length - 1];
+  const lastSL = swingLows[swingLows.length - 1];
+  result.structure.lastSwingHigh = lastSH.price;
+  result.structure.lastSwingLow  = lastSL.price;
+
+  // ── Step 2: Determine current market structure (trend) ─────────────────────
+  // Higher Highs + Higher Lows = BULLISH structure
+  // Lower Lows  + Lower Highs = BEARISH structure
+  if (swingHighs.length >= 2 && swingLows.length >= 2) {
+    const prevSH = swingHighs[swingHighs.length - 2];
+    const prevSL = swingLows[swingLows.length - 2];
+    const higherHighs = lastSH.price > prevSH.price;
+    const higherLows  = lastSL.price > prevSL.price;
+    const lowerLows   = lastSL.price < prevSL.price;
+    const lowerHighs  = lastSH.price < prevSH.price;
+    result.structure.higherHighs = higherHighs;
+    result.structure.lowerLows   = lowerLows;
+    if (higherHighs && higherLows) result.structure.trend = "BULLISH";
+    else if (lowerLows && lowerHighs) result.structure.trend = "BEARISH";
+    else result.structure.trend = "NEUTRAL";
+  }
+
+  // ── Step 3: BOS Detection ─────────────────────────────────────────────────
+  // Bullish BOS: current close breaks ABOVE last swing high (trend continues up)
+  // Bearish BOS: current close breaks BELOW last swing low  (trend continues down)
+  //
+  // Only valid if the break happens AFTER the swing point (not the same candle)
+  const lastSHAfterSL = lastSH.idx > lastSL.idx; // last swing high came after last swing low
+  const lastSLAfterSH = lastSL.idx > lastSH.idx;
+
+  const bullBOS = lastSHAfterSL && currentClose > lastSH.price;
+  const bearBOS = lastSLAfterSH && currentClose < lastSL.price;
+
+  result.bos.bull  = bullBOS;
+  result.bos.bear  = bearBOS;
+  result.bos.level = bullBOS ? lastSH.price : bearBOS ? lastSL.price : null;
+
+  // ── Step 4: CHoCH Detection ───────────────────────────────────────────────
+  // CHoCH Bullish: market was in BEARISH structure, price now closes above last swing high
+  //               → first sign the downtrend is breaking → high probability reversal
+  // CHoCH Bearish: market was in BULLISH structure, price now closes below last swing low
+  //               → first sign the uptrend is breaking → high probability reversal
+  //
+  // Key difference from BOS: CHoCH happens AGAINST the current structure trend
+  const chochBull = result.structure.trend === "BEARISH" && currentClose > lastSH.price;
+  const chochBear = result.structure.trend === "BULLISH" && currentClose < lastSL.price;
+
+  result.choch.bull  = chochBull;
+  result.choch.bear  = chochBear;
+  result.choch.level = chochBull ? lastSH.price : chochBear ? lastSL.price : null;
+
+  // ── Step 5: IDM Detection ─────────────────────────────────────────────────
+  // Inducement = liquidity grab (stop hunt) THEN reversal
+  //
+  // Bullish IDM: price briefly dips BELOW last swing low (sweeps stops),
+  //              then closes BACK ABOVE it within next 1-3 candles
+  //              = institutions grabbed liquidity before driving price up
+  //
+  // Bearish IDM: price briefly spikes ABOVE last swing high (sweeps stops),
+  //              then closes BACK BELOW it within next 1-3 candles
+  //              = institutions grabbed liquidity before driving price down
+  //
+  // We check the last 4 candles for this sweep + rejection pattern
+  const recentCandles = slice.slice(-5);
+  let bullIDM = false, bearIDM = false;
+  let idmSweepLevel = null, idmRejectionStrength = 0;
+
+  for (let i = 0; i < recentCandles.length - 1; i++) {
+    const c    = recentCandles[i];
+    const next = recentCandles[i + 1];
+
+    // Bullish IDM: wick swept below swing low, closed above it
+    if (c.low < lastSL.price && c.close > lastSL.price && next.close > lastSL.price) {
+      const sweepDepth = (lastSL.price - c.low) / lastSL.price; // how deep the sweep was
+      if (sweepDepth > 0.001) { // must be meaningful (>0.1%)
+        bullIDM = true;
+        idmSweepLevel = lastSL.price;
+        idmRejectionStrength = Math.min(sweepDepth * 1000, 10); // normalize to 0-10
+      }
+    }
+
+    // Bearish IDM: wick swept above swing high, closed below it
+    if (c.high > lastSH.price && c.close < lastSH.price && next.close < lastSH.price) {
+      const sweepDepth = (c.high - lastSH.price) / lastSH.price;
+      if (sweepDepth > 0.001) {
+        bearIDM = true;
+        idmSweepLevel = lastSH.price;
+        idmRejectionStrength = Math.min(sweepDepth * 1000, 10);
+      }
+    }
+  }
+
+  result.idm.bull               = bullIDM;
+  result.idm.bear               = bearIDM;
+  result.idm.sweepLevel         = idmSweepLevel;
+  result.idm.rejectionStrength  = idmRejectionStrength;
+
+  return result;
+}
+
 // ─── Main Analysis ────────────────────────────────────────────────────────────
 function analyzeCandles(candles) {
   if (!Array.isArray(candles) || candles.length < 100) return null;
@@ -444,6 +608,9 @@ function analyzeCandles(candles) {
   // ── Support/Resistance ───────────────────────────────────────────────────
   const srLevels = detectSRLevels(candles, 50);
 
+  // ── SMC: IDM / BOS / CHoCH ───────────────────────────────────────────────
+  const smc = detectSMC(candles, 40, 2);
+
   // ── Candle Quality ────────────────────────────────────────────────────────
   const candleQuality = analyzeCandleQuality(candles.slice(-5));
 
@@ -518,6 +685,7 @@ function analyzeCandles(candles) {
     },
     averages: { averagePrice, averageRange, totalVolume: sum(volumes.slice(-20)) },
     patterns,
+    smc,
   };
 }
 
@@ -630,4 +798,4 @@ function roundP(v) {
   return Number(v.toFixed(6));
 }
 
-module.exports = { analyzeCandles, computeFibonacci };
+module.exports = { analyzeCandles, computeFibonacci, detectSMC };
