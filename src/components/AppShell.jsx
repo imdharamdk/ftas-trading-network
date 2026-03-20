@@ -39,6 +39,17 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
   const { logout, user } = useSession();
   const location = useLocation();
   const [open, setOpen] = useState(false);
+
+  // FIX: Keep Render backend alive — ping every 9 min to prevent 30-50s cold start
+  // Render free tier spins down after 15 min of inactivity
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const [, _keepAlive] = useState(() => {
+    const API = (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL || "/api").replace(/\/+$/, "");
+    const ping = () => fetch(API + "/health", { method: "GET", cache: "no-store" }).catch(() => {});
+    ping();
+    const id = setInterval(ping, 9 * 60 * 1000);
+    return () => clearInterval(id);
+  });
   const isAdmin  = user?.role === "ADMIN";
   const planEnd  = fmtExpiry(user?.subscriptionEndsAt);
   const showPlanEnd = !isAdmin && planEnd;
