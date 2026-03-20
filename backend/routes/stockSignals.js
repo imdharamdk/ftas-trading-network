@@ -290,7 +290,9 @@ router.get("/stats/overview", requireAuth, async (req, res) => {
 
   await expireStaleActives(); // ensure stale actives are marked expired before counting
   const raw = await readCollection("stockSignals");
-  const signals = raw.filter((s) => !isCryptoCoin(s.coin) && s.result !== "EXPIRED");
+  const archive = await readCollection("stockSignalsArchive");
+  const combined = [...raw, ...archive];
+  const signals = combined.filter((s) => !isCryptoCoin(s.coin) && s.result !== "EXPIRED");
   const result = {
     stats: buildOverview(signals),
   };
@@ -303,7 +305,9 @@ router.get("/stats/analytics", requireAuth, async (req, res) => {
   if (cached) return res.json(cached);
 
   const raw = await readCollection("stockSignals");
-  const signals = raw.filter((s) => !isCryptoCoin(s.coin) && s.result !== "EXPIRED");
+  const archive = await readCollection("stockSignalsArchive");
+  const combined = [...raw, ...archive];
+  const signals = combined.filter((s) => !isCryptoCoin(s.coin) && s.result !== "EXPIRED");
   const result = {
     analytics: buildAnalytics(signals),
   };
@@ -316,7 +320,9 @@ router.get("/stats/performance", requireAuth, async (req, res) => {
   if (cached) return res.json(cached);
 
   const raw = await readCollection("stockSignals");
-  const signals = raw.filter((s) => !isCryptoCoin(s.coin) && s.result !== "EXPIRED");
+  const archive = await readCollection("stockSignalsArchive");
+  const combined = [...raw, ...archive];
+  const signals = combined.filter((s) => !isCryptoCoin(s.coin) && s.result !== "EXPIRED");
   const result = {
     performance: buildPerformance(signals),
   };

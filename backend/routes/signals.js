@@ -473,7 +473,9 @@ router.get("/stats/overview", requireAuth, async (req, res) => {
 
   await expireStaleActives("signals");
   const signals = await readCollection("signals");
-  const result = { stats: buildOverview(signals) };
+  const archive = await readCollection("signalsArchive");
+  const combined = [...signals, ...archive];
+  const result = { stats: buildOverview(combined) };
   cache.set("signals:overview", result, 30); // 30s TTL
   return res.json(result);
 });
@@ -483,8 +485,10 @@ router.get("/stats/analytics", requireAuth, async (req, res) => {
   if (cached) return res.json(cached);
 
   const signals = await readCollection("signals");
+  const archive = await readCollection("signalsArchive");
+  const combined = [...signals, ...archive];
   const result = {
-    analytics: buildAnalytics(signals),
+    analytics: buildAnalytics(combined),
   };
   cache.set("signals:analytics", result, 60);
   return res.json(result);
@@ -495,8 +499,10 @@ router.get("/stats/performance", requireAuth, async (req, res) => {
   if (cached) return res.json(cached);
 
   const signals = await readCollection("signals");
+  const archive = await readCollection("signalsArchive");
+  const combined = [...signals, ...archive];
   const result = {
-    performance: buildPerformance(signals),
+    performance: buildPerformance(combined),
   };
   cache.set("signals:performance", result, 60);
   return res.json(result);
