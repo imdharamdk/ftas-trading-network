@@ -12,6 +12,7 @@ import Stocks from "./pages/Stocks";
 import PostGenerator from "./pages/PostGenerator";
 import Analytics from "./pages/Analytics";
 import Settings from "./pages/Settings";
+import Community from "./pages/Community";
 
 function SessionGate({ children, guestOnly = false }) {
   const { loading, user } = useSession();
@@ -96,6 +97,7 @@ export default function App() {
           <Route element={<SessionGate><PostGenerator /></SessionGate>} path="/post-generator" />
           <Route element={<SessionGate><Analytics /></SessionGate>}     path="/analytics" />
           <Route element={<SessionGate><Settings /></SessionGate>}      path="/settings" />
+          <Route element={<SessionGate><Community /></SessionGate>}     path="/community" />
           <Route element={<Navigate replace to="/" />} path="*" />
         </Routes>
       </BrowserRouter>
