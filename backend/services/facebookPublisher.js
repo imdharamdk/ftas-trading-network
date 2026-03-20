@@ -30,10 +30,39 @@ if (!FB_ENABLED) {
   console.log("[fb] Facebook publishing disabled — set FB_PAGE_ID and FB_PAGE_ACCESS_TOKEN env vars to enable.");
 }
 
+// ─── Stock vs Crypto Detection ─────────────────────────────────────────────
+// FIX: Previously relied ONLY on signal.source === "SMART_ENGINE"
+// But stockSignalEngine was incorrectly setting source: "ENGINE" (now fixed to "SMART_ENGINE")
+// Double-safety: also check if coin ends with USDT — stock coins never end with USDT
+function isStockSignal(signal) {
+  // Primary check: source field (most reliable after fix)
+  if (signal.source === "SMART_ENGINE" || signal.source === "SMART_MANUAL") return true;
+  // Secondary check: crypto coins always end with USDT on Bybit/Binance
+  const coin = String(signal.coin || "").toUpperCase();
+  if (coin.endsWith("USDT")) return false;
+  // Tertiary check: if it has an exchange field like NSE/BSE it's definitely stock
+  if (signal.exchange === "NSE" || signal.exchange === "BSE" || signal.exchange === "MCX") return true;
+  return false;
+}
+
+// ─── Symbol cleanup ────────────────────────────────────────────────────────
+// Crypto: "BTCUSDT" → "BTC"
+// Stock:  "RELIANCE-EQ" → "RELIANCE", "NIFTY25APRFUT" → "NIFTY25APRFUT" (keep as-is)
+function cleanSymbol(signal) {
+  const coin  = String(signal.coin || "");
+  const stock = isStockSignal(signal);
+  if (!stock) {
+    // Crypto — remove USDT suffix
+    return coin.replace(/USDT$/i, "").replace(/BUSD$/i, "").trim() || coin;
+  }
+  // Stock — remove exchange suffix like -EQ, -BE, -N1 etc.
+  return coin.replace(/-(EQ|BE|N1|BL|IL|SM|GR|ST)$/i, "").trim() || coin;
+}
+
 // ─── Format signal as Facebook post message ────────────────────────────────
 function formatSignalPost(signal) {
-  const isStock  = signal.source === "SMART_ENGINE";
-  const symbol   = signal.coin?.replace("USDT", "") || signal.coin;
+  const isStock  = isStockSignal(signal);
+  const symbol   = cleanSymbol(signal);
   const side     = signal.side === "LONG" ? "🟢 LONG (BUY)" : "🔴 SHORT (SELL)";
   const tf       = signal.timeframe?.toUpperCase();
   const conf     = signal.confidence;
@@ -41,7 +70,9 @@ function formatSignalPost(signal) {
   const lev      = signal.leverage ? `${signal.leverage}x` : "—";
 
   const strengthEmoji = strength === "STRONG" ? "⚡ STRONG" : "✅ MEDIUM";
-  const typeLabel     = isStock ? "🇮🇳 Indian Stock Signal" : "💹 Crypto Signal";
+
+  // FIX: typeLabel correctly reflects signal type
+  const typeLabel = isStock ? "🇮🇳 Indian Stock Signal" : "💹 Crypto Futures Signal";
 
   function fmt(n) {
     const v = Number(n);
@@ -74,6 +105,11 @@ function formatSignalPost(signal) {
     lines.push(``);
   }
 
+  // FIX: hashtags now correctly split between stock and crypto
+  const hashTags = isStock
+    ? `#FTAS #TradingSignals #StockMarket #NSE #IndianStocks #${symbol}`
+    : `#FTAS #TradingSignals #Crypto #CryptoTrading #${symbol} #Bitcoin`;
+
   lines.push(
     `━━━━━━━━━━━━━━━━━━━━`,
     `⚠️ Risk disclaimer: Trading involves risk. This is not financial advice.`,
@@ -81,7 +117,7 @@ function formatSignalPost(signal) {
     `https://whatsapp.com/channel/0029VbCbHW97tkizw2PxR61c`,
     ``,
     `🔗 Live signals: ${process.env.FRONTEND_URL || "https://ftas-trading-network.vercel.app"}`,
-    `#FTAS #TradingSignals #${isStock ? "StockMarket #NSE" : "Crypto #Bitcoin"} #${symbol}`,
+    hashTags,
   );
 
   return lines.join("\n");
@@ -139,10 +175,10 @@ async function publishSignalResult(signal) {
   if (!FB_ENABLED) return;
   if (!["TP1_HIT","TP2_HIT","TP3_HIT","SL_HIT"].includes(signal.result)) return;
 
-  const isWin    = signal.result !== "SL_HIT";
-  const symbol   = signal.coin?.replace("USDT", "") || signal.coin;
-  const tpLevel  = signal.result.replace("_HIT", "");
-  const isStock  = signal.source === "SMART_ENGINE";
+  const isWin   = signal.result !== "SL_HIT";
+  const symbol  = cleanSymbol(signal);   // FIX: was signal.coin?.replace("USDT","") — broke for stocks
+  const tpLevel = signal.result.replace("_HIT", "");
+  const isStock = isStockSignal(signal); // FIX: was hardcoded per function, now shared helper
 
   function fmt(n) {
     const v = Number(n);
@@ -152,12 +188,17 @@ async function publishSignalResult(signal) {
     return v.toFixed(6);
   }
 
+  // FIX: result post also correctly shows stock vs crypto label and hashtags
+  const hashTags = isStock
+    ? `#FTAS #TradingSignals #StockMarket #NSE #${symbol}`
+    : `#FTAS #TradingSignals #Crypto #${symbol}`;
+
   const lines = [
     isWin
       ? `🏆 TRADE RESULT: ${tpLevel} HIT! ✅`
       : `📊 TRADE CLOSED: Stop Loss Hit`,
     ``,
-    `${isStock ? "🇮🇳" : "💹"} ${symbol} | ${signal.side}`,
+    `${isStock ? "🇮🇳 Indian Stock" : "💹 Crypto"} | ${symbol} | ${signal.side}`,
     `Entry: ${fmt(signal.entry)} → Close: ${fmt(signal.closePrice)}`,
     ``,
     isWin
@@ -167,7 +208,7 @@ async function publishSignalResult(signal) {
     `━━━━━━━━━━━━━━━━━━━━`,
     `📲 Join for more signals: https://whatsapp.com/channel/0029VbCbHW97tkizw2PxR61c`,
     `🔗 ${process.env.FRONTEND_URL || "https://ftas-trading-network.vercel.app"}`,
-    `#FTAS #TradingSignals #${symbol}`,
+    hashTags,
   ];
 
   return postToFacebook(lines.join("\n"));
@@ -190,4 +231,5 @@ async function testConnection() {
   }
 }
 
-module.exports = { publishSignal, publishSignalResult, testConnection, FB_ENABLED };
+// ─── postToFacebook exported for test-post route ───────────────────────────
+module.exports = { publishSignal, publishSignalResult, postToFacebook, testConnection, FB_ENABLED };
