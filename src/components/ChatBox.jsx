@@ -68,9 +68,17 @@ export default function ChatBox() {
     if (!user) return;
     fetchMessages(true); // always load on mount
     if (wsConnected) return; // WS handles live updates — no polling needed
-    // Fallback poll only when WS is disconnected
+
+    // FIX: Fallback poll only when:
+    //  1. WS is disconnected
+    //  2. Chat is open
+    //  3. Tab is visible (stop wasting requests in background tabs)
     if (!open) return;
-    const id = setInterval(() => fetchMessages(true), 10_000);
+    if (document.visibilityState !== "visible") return;
+
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") fetchMessages(true);
+    }, 15_000); // was 10s — increased to 15s
     return () => clearInterval(id);
   }, [user, open, wsConnected]);
 
