@@ -296,17 +296,13 @@ function detectPatterns(candles) {
 }
 
 
-// ─── SMC: IDM / BOS / CHoCH Detection ────────────────────────────────────────
+// ─── SMC: IDM / CHoCH Detection ─────────────────────────────────────────────
 //
-// Smart Money Concepts — Three core structure tools:
+// Smart Money Concepts — Two core structure tools:
 //
 //  IDM  (Inducement)          — Liquidity grab below/above a swing before real move
 //                               Price sweeps a recent swing low (LONG) or high (SHORT),
 //                               then quickly reverses — institutional trap.
-//
-//  BOS  (Break of Structure)  — Trend continuation confirmed.
-//                               Price closes ABOVE the most recent swing high (LONG)
-//                               or BELOW the most recent swing low (SHORT).
 //
 //  CHoCH (Change of Character) — Trend reversal signal.
 //                               In a downtrend: first time price closes above a
@@ -319,14 +315,12 @@ function detectPatterns(candles) {
 // swingStrength: how many candles each side must be lower/higher (default 2)
 //
 // Returns:
-//   bos       { bull: bool, bear: bool, level: number|null }
 //   choch     { bull: bool, bear: bool, level: number|null }
 //   idm       { bull: bool, bear: bool, sweepLevel: number|null, rejectionStrength: number }
 //   structure { trend: "BULLISH"|"BEARISH"|"NEUTRAL", lastSwingHigh: number, lastSwingLow: number }
 
 function detectSMC(candles, lookback = 40, swingStrength = 2) {
   const result = {
-    bos:       { bull: false, bear: false, level: null },
     choch:     { bull: false, bear: false, level: null },
     idm:       { bull: false, bear: false, sweepLevel: null, rejectionStrength: 0 },
     structure: { trend: "NEUTRAL", lastSwingHigh: null, lastSwingLow: null, higherHighs: false, lowerLows: false },
@@ -381,28 +375,13 @@ function detectSMC(candles, lookback = 40, swingStrength = 2) {
     else result.structure.trend = "NEUTRAL";
   }
 
-  // ── Step 3: BOS Detection ─────────────────────────────────────────────────
-  // Bullish BOS: current close breaks ABOVE last swing high (trend continues up)
-  // Bearish BOS: current close breaks BELOW last swing low  (trend continues down)
-  //
-  // Only valid if the break happens AFTER the swing point (not the same candle)
-  const lastSHAfterSL = lastSH.idx > lastSL.idx; // last swing high came after last swing low
-  const lastSLAfterSH = lastSL.idx > lastSH.idx;
-
-  const bullBOS = lastSHAfterSL && currentClose > lastSH.price;
-  const bearBOS = lastSLAfterSH && currentClose < lastSL.price;
-
-  result.bos.bull  = bullBOS;
-  result.bos.bear  = bearBOS;
-  result.bos.level = bullBOS ? lastSH.price : bearBOS ? lastSL.price : null;
-
-  // ── Step 4: CHoCH Detection ───────────────────────────────────────────────
+  // ── Step 3: CHoCH Detection ───────────────────────────────────────────────
   // CHoCH Bullish: market was in BEARISH structure, price now closes above last swing high
   //               → first sign the downtrend is breaking → high probability reversal
   // CHoCH Bearish: market was in BULLISH structure, price now closes below last swing low
   //               → first sign the uptrend is breaking → high probability reversal
   //
-  // Key difference from BOS: CHoCH happens AGAINST the current structure trend
+  // CHoCH happens AGAINST the current structure trend
   const chochBull = result.structure.trend === "BEARISH" && currentClose > lastSH.price;
   const chochBear = result.structure.trend === "BULLISH" && currentClose < lastSL.price;
 
@@ -410,7 +389,7 @@ function detectSMC(candles, lookback = 40, swingStrength = 2) {
   result.choch.bear  = chochBear;
   result.choch.level = chochBull ? lastSH.price : chochBear ? lastSL.price : null;
 
-  // ── Step 5: IDM Detection ─────────────────────────────────────────────────
+  // ── Step 4: IDM Detection ─────────────────────────────────────────────────
   // Inducement = liquidity grab (stop hunt) THEN reversal
   //
   // Bullish IDM: price briefly dips BELOW last swing low (sweeps stops),
@@ -608,7 +587,7 @@ function analyzeCandles(candles) {
   // ── Support/Resistance ───────────────────────────────────────────────────
   const srLevels = detectSRLevels(candles, 50);
 
-  // ── SMC: IDM / BOS / CHoCH ───────────────────────────────────────────────
+  // ── SMC: IDM / CHoCH ────────────────────────────────────────────────────
   const smc = detectSMC(candles, 40, 2);
 
   // ── Candle Quality ────────────────────────────────────────────────────────

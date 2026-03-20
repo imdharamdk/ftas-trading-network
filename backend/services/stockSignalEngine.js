@@ -364,12 +364,9 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
 
   // ── SMC Fields ────────────────────────────────────────────────────────────
   const smc          = analysis.smc || {};
-  const smcBOS       = smc.bos        || { bull: false, bear: false, level: null };
   const smcCHoCH     = smc.choch      || { bull: false, bear: false, level: null };
   const smcIDM       = smc.idm        || { bull: false, bear: false, sweepLevel: null, rejectionStrength: 0 };
   const smcStructure = smc.structure  || { trend: "NEUTRAL" };
-  const bosBull   = smcBOS.bull;
-  const bosBear   = smcBOS.bear;
   const idmBull   = smcIDM.bull;
   const idmBear   = smcIDM.bear;
 
@@ -380,12 +377,6 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   // GATE 1: HTF Alignment
   if (higherBias === "NEUTRAL") return null;
   const side = higherBias === "BULLISH" ? "LONG" : "SHORT";
-
-  // ── SMC HARD GATE: BOS required (CHoCH removed) ─────────────────────────
-  const smcBullGate = bosBull;
-  const smcBearGate = bosBear;
-  if (side === "LONG"  && !smcBullGate) return null;
-  if (side === "SHORT" && !smcBearGate) return null;
 
   // GATE 2: Core EMA Trend — ema50 > ema100 required; ema200 alignment is bonus not gate
   // Indian stocks have slower EMA convergence — requiring ema100>ema200 blocks too many valid setups
@@ -547,12 +538,8 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   if (bbWidth && rawAtr && bbWidth < rawAtr * 2.5) addConf(true, 3, "BB squeeze (breakout pending)");
 
   // ── SMC Scoring ───────────────────────────────────────────────────────────
-  if (bosBull && side === "LONG")  addConf(true, 8,  "BOS 📈 structure break up");
-  if (bosBear && side === "SHORT") addConf(true, 8,  "BOS 📉 structure break down");
   if (idmBull && side === "LONG")  { const s = Math.round(smcIDM.rejectionStrength); addConf(true, 6, "IDM 🎯 liquidity grab + rejection (" + s + "/10)"); }
   if (idmBear && side === "SHORT") { const s = Math.round(smcIDM.rejectionStrength); addConf(true, 6, "IDM 🎯 liquidity grab + rejection (" + s + "/10)"); }
-  if (bosBull && idmBull && side === "LONG")  addConf(true, 6, "SMC full confluence");
-  if (bosBear && idmBear && side === "SHORT") addConf(true, 6, "SMC full confluence");
 
   // Candlestick patterns
   const strongBullPat = ["Morning Star","Morning Doji Star","Three White Soldiers","Bullish Engulfing","Bullish Marubozu","Abandoned Baby (Bull)"];
@@ -630,7 +617,6 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
       marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
       modelVersion: "v16_working",
       smc: {
-        bos:       { bull: bosBull,   bear: bosBear,   level: smcBOS.level   },
         choch:     { bull: false, bear: false, level: smcCHoCH.level },
         idm:       { bull: idmBull,   bear: idmBear,   sweepLevel: smcIDM.sweepLevel, rejectionStrength: smcIDM.rejectionStrength },
         structure: smcStructure.trend,
