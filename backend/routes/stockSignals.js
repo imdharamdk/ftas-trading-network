@@ -2,7 +2,7 @@ const express = require("express");
 const axios = require("axios");
 const { requireAdmin, requireAuth, requireSignalAccess } = require("../middleware/auth");
 const { SIGNAL_STATUS } = require("../models/Signal");
-const { readCollection, mutateCollection } = require("../storage/fileStore");
+const { readCollection, mutateCollection, writeCollection } = require("../storage/fileStore");
 const stockEngine = require("../services/stockSignalEngine");
 const { ensureSession } = require("../services/smartApiService");
 const { getInstrumentUniverse } = require("../services/smartInstrumentService");
@@ -225,6 +225,47 @@ router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
   const result = { signals: [] };
   cache.set(cacheKey, result, 20);
   return res.json(result);
+});
+
+router.post("/archive", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const action = String(req.body?.action || "").toUpperCase();
+    if (action === "ARCHIVE_CLOSED") {
+      const signals = await readCollection("stockSignals");
+      const closedSignals = signals.filter((signal) => signal.status === SIGNAL_STATUS.CLOSED);
+      if (!closedSignals.length) {
+        const archiveSize = (await readCollection("stockSignalsArchive")).length;
+        return res.json({ archived: 0, archiveSize, remaining: signals.length });
+      }
+      const closedIds = new Set(closedSignals.map((signal) => signal.id));
+      const archiveRecords = await readCollection("stockSignalsArchive");
+      const stamped = closedSignals.map((signal) => ({
+        ...signal,
+        archivedAt: signal.archivedAt || new Date().toISOString(),
+      }));
+      const remaining = signals.filter((signal) => signal.status !== SIGNAL_STATUS.CLOSED);
+      const nextArchive = [...stamped, ...archiveRecords.filter((record) => record?.id && !closedIds.has(record.id))];
+      await writeCollection("stockSignalsArchive", nextArchive);
+      await writeCollection("stockSignals", remaining);
+      cache.invalidatePrefix("stocks:");
+      return res.json({ archived: stamped.length, archiveSize: nextArchive.length, remaining: remaining.length });
+    }
+    if (action === "CLEAR_ARCHIVE") {
+      await writeCollection("stockSignalsArchive", []);
+      cache.invalidatePrefix("stocks:");
+      return res.json({ archived: 0, archiveSize: 0 });
+    }
+    if (action === "CLEAR_HISTORY") {
+      const signals = await readCollection("stockSignals");
+      const activeSignals = signals.filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE);
+      await writeCollection("stockSignals", activeSignals);
+      cache.invalidatePrefix("stocks:");
+      return res.json({ remaining: activeSignals.length });
+    }
+    return res.status(400).json({ message: "Invalid archive action" });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
 });
 
 // ─── Admin: purge crypto signals from stockSignals collection ─────────────────

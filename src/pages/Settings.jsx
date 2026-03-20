@@ -130,6 +130,8 @@ export default function Settings() {
   const [engineMsg, setEngineMsg] = useState("");
   const [engineSettings, setEngineSettings] = useState(null);
   const [engineSettingsBusy, setEngineSettingsBusy] = useState(false);
+  const [maintenanceBusy, setMaintenanceBusy] = useState("");
+  const [maintenanceMsg, setMaintenanceMsg] = useState("");
 
   const loadAlerts = useCallback(async () => {
     setAlertsLoading(true);
@@ -212,6 +214,7 @@ export default function Settings() {
   };
 
   const autoStartEnabled = Boolean(engineSettings?.effective?.autoStartCrypto) && Boolean(engineSettings?.effective?.autoStartStock);
+  const envOverrideActive = engineSettings?.sources && (engineSettings.sources.envCrypto !== null || engineSettings.sources.envStock !== null);
 
   const saveEngineAutoStart = async (enabled) => {
     if (!isAdmin) return;
@@ -227,6 +230,28 @@ export default function Settings() {
       setTimeout(() => setEngineMsg(""), 4000);
     } finally {
       setEngineSettingsBusy(false);
+    }
+  };
+
+  const runArchiveAction = async (key, url, action) => {
+    setMaintenanceBusy(key);
+    setMaintenanceMsg("");
+    try {
+      const res = await apiFetch(url, { method: "POST", body: { action } });
+      if (action === "ARCHIVE_CLOSED") {
+        setMaintenanceMsg(`✅ Archived ${res.archived || 0} signals. Archive size: ${res.archiveSize || 0}`);
+      } else if (action === "CLEAR_ARCHIVE") {
+        setMaintenanceMsg("✅ Archive cleared");
+      } else if (action === "CLEAR_HISTORY") {
+        setMaintenanceMsg(`✅ History cleared. Remaining: ${res.remaining ?? 0}`);
+      } else {
+        setMaintenanceMsg("✅ Done");
+      }
+    } catch (e) {
+      setMaintenanceMsg(`❌ ${e.message}`);
+    } finally {
+      setMaintenanceBusy("");
+      setTimeout(() => setMaintenanceMsg(""), 5000);
     }
   };
 
@@ -431,7 +456,70 @@ export default function Settings() {
               Engines run automatically on interval after start. Auto-start on server boot can be enabled with{" "}
               <code>AUTO_START_ENGINE=true</code> and <code>AUTO_START_STOCK_ENGINE=true</code>.
             </p>
+            {envOverrideActive && (
+              <p className="panel-note" style={{ marginTop: 6, color: "#fbbf24" }}>
+                Env override active — Auto-start toggle may not take effect until env vars are cleared.
+              </p>
+            )}
             {engineMsg && <p style={{ fontSize: 13, color: engineMsg.startsWith("✅") ? "#2bd48f" : "#f87171" }}>{engineMsg}</p>}
+          </Section>
+        )}
+
+        {/* ── Data Maintenance (Admin only) ── */}
+        {isAdmin && (
+          <Section eyebrow="Admin" title="Data Maintenance" accent="#ef4444">
+            <p className="panel-note">
+              Archive moves closed signals to a separate file so pages load faster. Active signals remain untouched.
+            </p>
+            <div className="section-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
+              <div className="panel" style={{ margin: 0 }}>
+                <div className="panel-header">
+                  <div><span className="eyebrow">Crypto</span><h2>Signal Archive</h2></div>
+                </div>
+                <div className="button-row" style={{ flexWrap: "wrap", gap: 8 }}>
+                  <button
+                    type="button"
+                    className="button button-primary"
+                    disabled={maintenanceBusy === "crypto-archive"}
+                    onClick={() => runArchiveAction("crypto-archive", "/signals/archive", "ARCHIVE_CLOSED")}
+                  >
+                    {maintenanceBusy === "crypto-archive" ? "Working..." : "Archive Closed Signals"}
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-ghost"
+                    disabled={maintenanceBusy === "crypto-clear"}
+                    onClick={() => runArchiveAction("crypto-clear", "/signals/archive", "CLEAR_ARCHIVE")}
+                  >
+                    Clear Archive
+                  </button>
+                </div>
+              </div>
+              <div className="panel" style={{ margin: 0 }}>
+                <div className="panel-header">
+                  <div><span className="eyebrow">Stocks</span><h2>Signal Archive</h2></div>
+                </div>
+                <div className="button-row" style={{ flexWrap: "wrap", gap: 8 }}>
+                  <button
+                    type="button"
+                    className="button button-primary"
+                    disabled={maintenanceBusy === "stock-archive"}
+                    onClick={() => runArchiveAction("stock-archive", "/stocks/archive", "ARCHIVE_CLOSED")}
+                  >
+                    {maintenanceBusy === "stock-archive" ? "Working..." : "Archive Closed Signals"}
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-ghost"
+                    disabled={maintenanceBusy === "stock-clear"}
+                    onClick={() => runArchiveAction("stock-clear", "/stocks/archive", "CLEAR_ARCHIVE")}
+                  >
+                    Clear Archive
+                  </button>
+                </div>
+              </div>
+            </div>
+            {maintenanceMsg && <p style={{ fontSize: 13, color: maintenanceMsg.startsWith("✅") ? "#2bd48f" : "#f87171" }}>{maintenanceMsg}</p>}
           </Section>
         )}
 

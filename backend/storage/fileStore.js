@@ -10,6 +10,7 @@ const COLLECTION_FILES = {
   signals:            "signals.json",
   signalsArchive:     "signals-archive.json",
   stockSignals:       "stock-signals.json",
+  stockSignalsArchive: "stock-signals-archive.json",
   users:              "users.json",
   pushSubscriptions:  "push-subscriptions.json",
   priceAlerts:        "price-alerts.json",
