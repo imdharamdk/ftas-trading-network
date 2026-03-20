@@ -131,7 +131,6 @@ export default function Dashboard() {
   });
   const [showExpiryPrompt, setShowExpiryPrompt] = useState(false);
   const paidPlanActive = hasActivePaidPlan(user);
-  const [engine, setEngine] = useState(null);
   const [overview, setOverview] = useState(null);
   const [stockOverview, setStockOverview] = useState(null);
   const [analytics, setAnalytics] = useState(null);
@@ -143,13 +142,12 @@ export default function Dashboard() {
   const [paymentForm, setPaymentForm] = useState(defaultPaymentForm);
   const [manualForm, setManualForm] = useState(defaultManualForm);
 
-  // ── WebSocket — realtime stats + engine updates ────────────────────────────
+  // ── WebSocket — realtime stats ────────────────────────────────────────────
   const onStatsUpdate = useCallback(({ crypto, stocks }) => {
     if (crypto) setOverview(prev => prev ? { ...prev, ...crypto } : crypto);
     if (stocks) setStockOverview(prev => prev ? { ...prev, ...stocks } : stocks);
   }, []);
-  const onEngineStatus = useCallback((eng) => setEngine(eng), []);
-  const { connected: wsConnected } = useWebSocket({ onStatsUpdate, onEngineStatus });
+  const { connected: wsConnected } = useWebSocket({ onStatsUpdate });
   const [paymentMethodDraft, setPaymentMethodDraft] = useState("");
   const [editingMethod, setEditingMethod] = useState(null);
   const [editingMethodLabel, setEditingMethodLabel] = useState("");
@@ -183,15 +181,13 @@ export default function Dashboard() {
 
   const loadPublicData = useCallback(async () => {
     // Phase 1: fast endpoints first so dashboard renders quickly
-    const [overviewRes, stockOverviewRes, engineRes] = await Promise.all([
+    const [overviewRes, stockOverviewRes] = await Promise.all([
       apiFetch("/signals/stats/overview").catch(() => null),
       apiFetch("/stocks/stats/overview").catch(() => null),
-      apiFetch("/signals/engine/status").catch(() => null),
     ]);
 
     if (overviewRes?.stats)      setOverview(overviewRes.stats);
     if (stockOverviewRes?.stats) setStockOverview(stockOverviewRes.stats);
-    if (engineRes?.engine)       setEngine(engineRes.engine);
     setLoading(false);
 
     // Phase 2: heavier analytics/performance in background
@@ -385,18 +381,6 @@ export default function Dashboard() {
     } catch (e) { setError(e.message); } finally { setActionBusy(""); }
   }
 
-  async function handleEngineAction(action) {
-    setActionBusy(action);
-    setError("");
-    try {
-      if (action === "start") await apiFetch("/signals/engine/start", { method: "POST" });
-      if (action === "stop")  await apiFetch("/signals/engine/stop",  { method: "POST" });
-      if (action === "scan")  await apiFetch("/signals/scan",          { method: "POST" });
-      await refreshWithFeedback(action === "start" ? "Scanner started" : action === "stop" ? "Scanner stopped" : "Scan completed");
-    } catch (e) { setError(e.message); }
-    finally { setActionBusy(""); }
-  }
-
   const actions = (
     <button className="button button-ghost" onClick={() => refreshWithFeedback("Refreshed")} type="button">
       Refresh
@@ -537,36 +521,6 @@ export default function Dashboard() {
           <a className="button button-ghost" href="/stocks" style={{ alignSelf: "flex-start", marginTop: "8px", fontSize: "0.82rem" }}>View Stocks →</a>
         </article>
       </section>
-
-      {/* ── ENGINE STATUS ── */}
-      {isAdmin ? (
-        <section className="panel">
-          <div className="panel-header">
-            <div><span className="eyebrow">Scanner</span><h2>Engine status</h2></div>
-            <span className={`pill ${engine?.running ? "pill-success" : "pill-danger"}`}>
-              {engine?.running ? "LIVE" : "OFF"}
-            </span>
-          </div>
-          <div className="detail-grid">
-            <div><span className="detail-label">Interval</span><strong>{Math.round((engine?.intervalMs || 60000) / 1000)} sec</strong></div>
-            <div><span className="detail-label">Scans</span><strong>{engine?.scanCount || 0}</strong></div>
-            <div><span className="detail-label">Last output</span><strong>{engine?.lastGenerated || 0} signals</strong></div>
-            <div><span className="detail-label">Last scan</span><strong>{engine?.lastScanAt ? new Date(engine.lastScanAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }) : "—"}</strong></div>
-          </div>
-          <div className="button-row">
-            <button className="button button-primary" disabled={actionBusy === "start"} onClick={() => handleEngineAction("start")} type="button">
-              {actionBusy === "start" ? "Starting..." : "Start engine"}
-            </button>
-            <button className="button button-ghost" disabled={actionBusy === "stop"} onClick={() => handleEngineAction("stop")} type="button">
-              {actionBusy === "stop" ? "Stopping..." : "Stop engine"}
-            </button>
-            <button className="button button-secondary" disabled={actionBusy === "scan"} onClick={() => handleEngineAction("scan")} type="button">
-              {actionBusy === "scan" ? "Scanning..." : "Run scan now"}
-            </button>
-          </div>
-          {engine?.lastError ? <div className="banner banner-error" style={{marginTop:"12px"}}>{engine.lastError}</div> : null}
-        </section>
-      ) : null}
 
       {/* ── COMMUNITY ── */}
       <section className="section-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}>

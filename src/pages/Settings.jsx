@@ -123,6 +123,12 @@ export default function Settings() {
   const [fbTokenForm, setFbTokenForm] = useState({ appId: "", appSecret: "", shortToken: "" });
   const [fbTokenResult, setFbTokenResult] = useState(null);
 
+  // Engines (admin)
+  const [cryptoEngine, setCryptoEngine] = useState(null);
+  const [stockEngine, setStockEngine] = useState(null);
+  const [engineBusy, setEngineBusy] = useState(false);
+  const [engineMsg, setEngineMsg] = useState("");
+
   const loadAlerts = useCallback(async () => {
     setAlertsLoading(true);
     try {
@@ -148,11 +154,51 @@ export default function Settings() {
     } catch {}
   }, [isAdmin]);
 
+  const loadEngines = useCallback(async () => {
+    if (!isAdmin) return;
+    const [cryptoRes, stockRes] = await Promise.allSettled([
+      apiFetch("/signals/engine/status"),
+      apiFetch("/stocks/engine/status"),
+    ]);
+    setCryptoEngine(cryptoRes.status === "fulfilled" ? cryptoRes.value.engine : null);
+    setStockEngine(stockRes.status === "fulfilled" ? stockRes.value.engine : null);
+  }, [isAdmin]);
+
   useEffect(() => {
     loadAlerts();
     loadTelegram();
     loadFacebook();
-  }, [loadAlerts, loadTelegram, loadFacebook]);
+    loadEngines();
+  }, [loadAlerts, loadTelegram, loadFacebook, loadEngines]);
+
+  const bothEnginesRunning = Boolean(cryptoEngine?.running) && Boolean(stockEngine?.running);
+
+  const toggleEngines = async () => {
+    if (!isAdmin) return;
+    setEngineBusy(true);
+    setEngineMsg("");
+    try {
+      if (bothEnginesRunning) {
+        await Promise.all([
+          apiFetch("/signals/engine/stop", { method: "POST" }),
+          apiFetch("/stocks/engine/stop", { method: "POST" }),
+        ]);
+        setEngineMsg("✅ Both engines stopped");
+      } else {
+        await Promise.all([
+          apiFetch("/signals/engine/start", { method: "POST" }),
+          apiFetch("/stocks/engine/start", { method: "POST" }),
+        ]);
+        setEngineMsg("✅ Both engines started");
+      }
+      await loadEngines();
+    } catch (e) {
+      setEngineMsg(`❌ ${e.message}`);
+    } finally {
+      setEngineBusy(false);
+      setTimeout(() => setEngineMsg(""), 4000);
+    }
+  };
 
   const deleteAlert = async (id) => {
     await apiFetch(`/price-alerts/${id}`, { method: "DELETE" });
@@ -313,6 +359,38 @@ export default function Settings() {
             )}
           </div>
         </Section>
+
+        {/* ── Engines (Admin only) ── */}
+        {isAdmin && (
+          <Section eyebrow="Admin" title="Engines" accent="#f59e0b">
+            <div className="detail-grid">
+              <div><span className="detail-label">Crypto engine</span><strong>{cryptoEngine?.running ? "LIVE" : "OFF"}</strong></div>
+              <div><span className="detail-label">Crypto scans</span><strong>{cryptoEngine?.scanCount || 0}</strong></div>
+              <div><span className="detail-label">Crypto last scan</span><strong>{cryptoEngine?.lastScanAt ? new Date(cryptoEngine.lastScanAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }) : "—"}</strong></div>
+              <div><span className="detail-label">Stock engine</span><strong>{stockEngine?.running ? "LIVE" : "OFF"}</strong></div>
+              <div><span className="detail-label">Stock scans</span><strong>{stockEngine?.scanCount || 0}</strong></div>
+              <div><span className="detail-label">Stock last scan</span><strong>{stockEngine?.lastScanAt ? new Date(stockEngine.lastScanAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }) : "—"}</strong></div>
+            </div>
+            <div className="button-row" style={{ flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={engineBusy}
+                onClick={toggleEngines}
+              >
+                {engineBusy ? "Working..." : bothEnginesRunning ? "Stop Both Engines" : "Start Both Engines"}
+              </button>
+              <button type="button" className="button button-ghost" onClick={loadEngines} disabled={engineBusy}>
+                Refresh Status
+              </button>
+            </div>
+            <p className="panel-note" style={{ marginTop: 10 }}>
+              Engines run automatically on interval after start. Auto-start on server boot can be enabled with{" "}
+              <code>AUTO_START_ENGINE=true</code> and <code>AUTO_START_STOCK_ENGINE=true</code>.
+            </p>
+            {engineMsg && <p style={{ fontSize: 13, color: engineMsg.startsWith("✅") ? "#2bd48f" : "#f87171" }}>{engineMsg}</p>}
+          </Section>
+        )}
 
         {/* ── Telegram (Admin only) ── */}
         {isAdmin && (
