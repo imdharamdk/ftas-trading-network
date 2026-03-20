@@ -20,6 +20,7 @@ const { router: notificationRoutes } = require("./routes/notifications");
 const { router: telegramRoutes }     = require("./routes/telegram");
 const { router: priceAlertRoutes }   = require("./routes/priceAlerts");
 const facebookRoutes                 = require("./routes/facebook");
+const communityRoutes                = require("./routes/community");
 const { getStatus, start } = require("./services/signalEngine");
 const stockSignalEngine    = require("./services/stockSignalEngine");
 const { createWsServer, getConnectedCount } = require("./services/wsServer");
@@ -222,6 +223,7 @@ function createApp() {
   app.use("/api/telegram",      telegramRoutes);
   app.use("/api/price-alerts",  priceAlertRoutes);
   app.use("/api/facebook",      facebookRoutes);
+  app.use("/api/community",     communityRoutes);
 
   if (fs.existsSync(distPath)) {
     app.use(express.static(distPath));
