@@ -14,17 +14,74 @@
  *   stats:update   — overview stats
  *   connected      — initial handshake with client ID
  *   heartbeat      — every 20s to keep connection alive
+ *
+ * FIX: broadcastStatsUpdate() previously read full signals + stockSignals
+ *      collections from MongoDB on every signal event. Now uses an in-memory
+ *      cache (dirty flag pattern) — DB only re-read when data changes.
  */
 
 const jwt = require("jsonwebtoken");
 const { readCollection } = require("../storage/fileStore");
 const { hasSignalAccess } = require("../models/User");
 
-const JWT_SECRET = process.env.JWT_SECRET || "ftas_super_secret";
+const JWT_SECRET = process.env.JWT_SECRET || "ftas_super_secret_dev_only";
 
 // Active SSE clients: Map<clientId, { res, userId, hasAccess, role, connectedAt }>
 const clients = new Map();
 let nextId = 1;
+
+// ─── Stats cache (FIX) ────────────────────────────────────────────────────────
+// Instead of reading the full DB on every broadcast, cache the stats and only
+// rebuild when data is marked dirty (new signal, closed signal, etc.)
+let _statsCache    = null;
+let _statsDirty    = true;
+const STATS_TTL_MS = 15 * 1000; // max age 15s even if not dirtied
+let _statsBuiltAt  = 0;
+
+function markStatsDirty() {
+  _statsDirty = true;
+}
+
+async function getStats() {
+  const now = Date.now();
+  if (!_statsDirty && _statsCache && (now - _statsBuiltAt) < STATS_TTL_MS) {
+    return _statsCache;
+  }
+
+  try {
+    const [cryptoSignals, stockSignals] = await Promise.all([
+      readCollection("signals"),
+      readCollection("stockSignals"),
+    ]);
+
+    const buildStats = (signals, filterFn = () => true) => {
+      const filtered = signals.filter(filterFn);
+      const active   = filtered.filter(s => s.status === "ACTIVE");
+      const closed   = filtered.filter(s => s.status === "CLOSED" && s.result !== "EXPIRED");
+      const expired  = filtered.filter(s => s.result === "EXPIRED");
+      const wins     = closed.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result));
+      return {
+        activeSignals:  active.length,
+        closedSignals:  closed.length,
+        expiredSignals: expired.length,
+        totalWins:      wins.length,
+        totalLosses:    closed.length - wins.length,
+        winRate: closed.length ? Number(((wins.length / closed.length) * 100).toFixed(1)) : 0,
+      };
+    };
+
+    _statsCache = {
+      crypto: buildStats(cryptoSignals),
+      stocks: buildStats(stockSignals, s => !String(s.coin || "").toUpperCase().endsWith("USDT")),
+    };
+    _statsDirty  = false;
+    _statsBuiltAt = now;
+  } catch {
+    // On error keep stale cache rather than crash
+  }
+
+  return _statsCache;
+}
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 async function authenticateToken(token) {
@@ -127,11 +184,13 @@ function broadcast(event, data, { requireAccess = false, adminOnly = false } = {
 
 // ─── Public broadcast API ─────────────────────────────────────────────────────
 function broadcastNewSignal(signal, isStock = false) {
+  markStatsDirty();
   broadcast(isStock ? "stock:new" : "signal:new", { signal }, { requireAccess: true });
   broadcastStatsUpdate();
 }
 
 function broadcastSignalClosed(signal, isStock = false) {
+  markStatsDirty();
   broadcast(isStock ? "stock:closed" : "signal:closed", { signal }, { requireAccess: true });
   broadcastStatsUpdate();
 }
@@ -141,33 +200,10 @@ function broadcastPrices(prices) {
 }
 
 async function broadcastStatsUpdate() {
-  try {
-    const [cryptoSignals, stockSignals] = await Promise.all([
-      readCollection("signals"),
-      readCollection("stockSignals"),
-    ]);
-
-    const buildStats = (signals, filterFn = () => true) => {
-      const filtered = signals.filter(filterFn);
-      const active   = filtered.filter(s => s.status === "ACTIVE");
-      const closed   = filtered.filter(s => s.status === "CLOSED" && s.result !== "EXPIRED");
-      const expired  = filtered.filter(s => s.result === "EXPIRED");
-      const wins     = closed.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result));
-      return {
-        activeSignals:  active.length,
-        closedSignals:  closed.length,
-        expiredSignals: expired.length,
-        totalWins:      wins.length,
-        totalLosses:    closed.length - wins.length,
-        winRate: closed.length ? Number(((wins.length / closed.length) * 100).toFixed(1)) : 0,
-      };
-    };
-
-    broadcast("stats:update", {
-      crypto: buildStats(cryptoSignals),
-      stocks: buildStats(stockSignals, s => !String(s.coin || "").toUpperCase().endsWith("USDT")),
-    });
-  } catch {}
+  // FIX: Uses cached stats instead of full DB read every time
+  const stats = await getStats();
+  if (!stats) return;
+  broadcast("stats:update", stats);
 }
 
 function broadcastEngineStatus(engine) {
@@ -184,5 +220,6 @@ module.exports = {
   broadcastPrices,
   broadcastStatsUpdate,
   broadcastEngineStatus,
+  markStatsDirty,
   getClientCount,
 };
