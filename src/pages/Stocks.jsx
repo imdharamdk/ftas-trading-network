@@ -4,6 +4,7 @@ import SignalTable from "../components/SignalTable";
 import { useSession } from "../context/useSession";
 import { apiFetch } from "../lib/api";
 import { getSignalCoins, mergeSignalLivePrices } from "../lib/liveSignalPrices";
+import { useWebSocket } from "../lib/useWebSocket";
 
 // Crypto coins USDT mein end hote hain — stock page pe kabhi nahi dikhne chahiye
 function isCryptoCoin(coin) {
@@ -53,13 +54,51 @@ export default function Stocks() {
     setExpiredSignals(rawExpired.filter(s => !isCryptoCoin(s.coin)));
   }, []);
 
+  // Initial load only — no polling loop.
+  // FIX: Replaced 30s setInterval polling with WebSocket push below.
   useEffect(() => {
     loadData();
-    const id = window.setInterval(loadData, 30000);
-    return () => window.clearInterval(id);
   }, [loadData]);
 
-  // ── Live price refresh ─────────────────────────────────────────────────────
+  // ── WebSocket handlers — real-time stock signal push ──────────────────────
+  // FIX: Previously stocks page had NO WebSocket — it polled every 30 seconds.
+  //      New signals could take up to 30s to appear. Now they push instantly.
+  const onStockNew = useCallback((signal) => {
+    if (isCryptoCoin(signal?.coin)) return; // safety guard
+    setActiveSignals(cur => {
+      if (cur.some(s => s.id === signal.id)) return cur; // deduplicate
+      return [signal, ...cur];
+    });
+    setOverview(cur => cur ? { ...cur, activeSignals: (cur.activeSignals || 0) + 1 } : cur);
+  }, []);
+
+  const onStockClosed = useCallback((signal) => {
+    if (isCryptoCoin(signal?.coin)) return;
+    setActiveSignals(cur => cur.filter(s => s.id !== signal.id));
+    if (signal.result && signal.result !== "EXPIRED") {
+      setHistorySignals(cur => [signal, ...cur]);
+    } else if (signal.result === "EXPIRED") {
+      setExpiredSignals(cur => [signal, ...cur]);
+    }
+  }, []);
+
+  const onStatsUpdate = useCallback((data) => {
+    // Update overview stats from WS push without a full reload
+    if (data?.stocks) {
+      setOverview(cur => cur ? { ...cur, ...data.stocks } : data.stocks);
+    }
+  }, []);
+
+  // Connect to WebSocket — stock signals + stats channels
+  useWebSocket({
+    onStockNew,
+    onStockClosed,
+    onStatsUpdate,
+  });
+
+  // ── Live price refresh — 25s interval (SmartAPI rate limit friendly) ───────
+  // FIX: Was 12s. Increased to 25s to reduce Angel One API load.
+  // Price updates are supplementary to WS signal pushes, so slower is fine.
   const activeCoinsKey = getSignalCoins(activeSignals).join(",");
   useEffect(() => {
     let mounted = true;
@@ -72,7 +111,7 @@ export default function Stocks() {
       } catch {}
     }
     refreshPrices();
-    const id = window.setInterval(refreshPrices, 12000);
+    const id = window.setInterval(refreshPrices, 25_000); // was 12s — now 25s
     return () => { mounted = false; window.clearInterval(id); };
   }, [activeCoinsKey]);
 
