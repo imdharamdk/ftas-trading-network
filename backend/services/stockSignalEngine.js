@@ -369,6 +369,19 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const nearSupportSR    = srSup && Math.abs(price - srSup) < atr * 1.2;
   const nearResistanceSR = srRes && Math.abs(price - srRes) < atr * 1.2;
 
+  // ── SMC Fields ────────────────────────────────────────────────────────────
+  const smc          = analysis.smc || {};
+  const smcBOS       = smc.bos        || { bull: false, bear: false, level: null };
+  const smcCHoCH     = smc.choch      || { bull: false, bear: false, level: null };
+  const smcIDM       = smc.idm        || { bull: false, bear: false, sweepLevel: null, rejectionStrength: 0 };
+  const smcStructure = smc.structure  || { trend: "NEUTRAL" };
+  const bosBull   = smcBOS.bull;
+  const bosBear   = smcBOS.bear;
+  const chochBull = smcCHoCH.bull;
+  const chochBear = smcCHoCH.bear;
+  const idmBull   = smcIDM.bull;
+  const idmBear   = smcIDM.bear;
+
   // ════════════════════════════════════════════════════════════════════════════
   // GATE CHECKS
   // ════════════════════════════════════════════════════════════════════════════
@@ -376,6 +389,12 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   // GATE 1: HTF Alignment
   if (higherBias === "NEUTRAL") return null;
   const side = higherBias === "BULLISH" ? "LONG" : "SHORT";
+
+  // ── SMC HARD GATE: BOS or CHoCH required ─────────────────────────────────
+  const smcBullGate = bosBull || chochBull;
+  const smcBearGate = bosBear || chochBear;
+  if (side === "LONG"  && !smcBullGate) return null;
+  if (side === "SHORT" && !smcBearGate) return null;
 
   // GATE 2: Core EMA Trend — ema50 > ema100 required; ema200 alignment is bonus not gate
   // Indian stocks have slower EMA convergence — requiring ema100>ema200 blocks too many valid setups
@@ -536,6 +555,16 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   // BB squeeze
   if (bbWidth && rawAtr && bbWidth < rawAtr * 2.5) addConf(true, 3, "BB squeeze (breakout pending)");
 
+  // ── SMC Scoring ───────────────────────────────────────────────────────────
+  if (bosBull && side === "LONG")  addConf(true, 8,  "BOS 📈 structure break up");
+  if (bosBear && side === "SHORT") addConf(true, 8,  "BOS 📉 structure break down");
+  if (chochBull && side === "LONG")  addConf(true, 12, "CHoCH 🔄 bearish→bullish shift");
+  if (chochBear && side === "SHORT") addConf(true, 12, "CHoCH 🔄 bullish→bearish shift");
+  if (idmBull && side === "LONG")  { const s = Math.round(smcIDM.rejectionStrength); addConf(true, 6, "IDM 🎯 liquidity grab + rejection (" + s + "/10)"); }
+  if (idmBear && side === "SHORT") { const s = Math.round(smcIDM.rejectionStrength); addConf(true, 6, "IDM 🎯 liquidity grab + rejection (" + s + "/10)"); }
+  if ((bosBull||chochBull) && idmBull && side === "LONG")  addConf(true, 6, "SMC full confluence");
+  if ((bosBear||chochBear) && idmBear && side === "SHORT") addConf(true, 6, "SMC full confluence");
+
   // Candlestick patterns
   const strongBullPat = ["Morning Star","Morning Doji Star","Three White Soldiers","Bullish Engulfing","Bullish Marubozu","Abandoned Baby (Bull)"];
   const strongBearPat = ["Evening Star","Evening Doji Star","Three Black Crows","Bearish Engulfing","Bearish Marubozu","Downside Tasuki Gap"];
@@ -565,6 +594,18 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   if (confidence < publishFloor)               return null;
 
   // Entry drift check — slightly more lenient
+  // IDM entry refinement: tighten SL anchor to sweep level
+  if (idmBull && smcIDM.sweepLevel && smcIDM.sweepLevel < analysis.currentPrice) {
+    if (analysis.srLevels && analysis.srLevels.supports) {
+      analysis.srLevels.supports.unshift(smcIDM.sweepLevel * 0.999);
+    }
+  }
+  if (idmBear && smcIDM.sweepLevel && smcIDM.sweepLevel > analysis.currentPrice) {
+    if (analysis.srLevels && analysis.srLevels.resistances) {
+      analysis.srLevels.resistances.unshift(smcIDM.sweepLevel * 1.001);
+    }
+  }
+
   const targets         = calculateTargets(side, analysis, timeframe);
   const leverage        = calculateLeverage(analysis, confidence, timeframe);
   if (!Number.isFinite(targets.riskPerUnit) || targets.riskPerUnit <= 0) return null;
@@ -599,11 +640,17 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
       marketTradeCount: roundPrice(activeMarket.tradeCount),
       marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
       modelVersion: "v16_working",
+      smc: {
+        bos:       { bull: bosBull,   bear: bosBear,   level: smcBOS.level   },
+        choch:     { bull: chochBull, bear: chochBear, level: smcCHoCH.level },
+        idm:       { bull: idmBull,   bear: idmBear,   sweepLevel: smcIDM.sweepLevel, rejectionStrength: smcIDM.rejectionStrength },
+        structure: smcStructure.trend,
+      },
       sourceTimeframes: SCAN_TIMEFRAMES,
       timeframeRule: tfRule,
       gatesPassed: 4,
     },
-    source: "ENGINE",
+    source: "SMART_ENGINE",  // FIX: was "ENGINE" — facebookPublisher checks this to detect stock vs crypto
     ...targets,
   });
 }
@@ -795,7 +842,7 @@ async function createManualSignal(payload, actor) {
     confirmations: Array.isArray(payload.confirmations) ? payload.confirmations : ["Admin signal"],
     indicatorSnapshot: payload.indicatorSnapshot || {}, patternSummary: payload.patternSummary || {},
     scanMeta: { createdBy: actor?.email || "admin", manual: true, ...(payload.scanMeta || {}) },
-    source: payload.source || "MANUAL", strength: confidence >= 90 ? "STRONG" : "MEDIUM",
+    source: payload.source || "SMART_MANUAL", strength: confidence >= 90 ? "STRONG" : "MEDIUM",
   });
   await persistSignal(signal);
   return signal;
