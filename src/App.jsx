@@ -2,17 +2,20 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { SessionProvider } from "./context/SessionContext";
 import { useSession } from "./context/useSession";
-import Dashboard from "./pages/Dashboard";
+import { lazy, Suspense } from "react";
 import Login from "./pages/Login";
-import Market from "./pages/Market";
-import Crypto from "./pages/Crypto";
-import News from "./pages/News";
 import Signup from "./pages/Signup";
-import Stocks from "./pages/Stocks";
-import PostGenerator from "./pages/PostGenerator";
-import Analytics from "./pages/Analytics";
-import Settings from "./pages/Settings";
-import Community from "./pages/Community";
+
+// Lazy load heavy pages — browser downloads them only when first visited
+const Dashboard    = lazy(() => import("./pages/Dashboard"));
+const Market       = lazy(() => import("./pages/Market"));
+const Crypto       = lazy(() => import("./pages/Crypto"));
+const News         = lazy(() => import("./pages/News"));
+const Stocks       = lazy(() => import("./pages/Stocks"));
+const PostGenerator= lazy(() => import("./pages/PostGenerator"));
+const Analytics    = lazy(() => import("./pages/Analytics"));
+const Settings     = lazy(() => import("./pages/Settings"));
+const Community    = lazy(() => import("./pages/Community"));
 
 function SessionGate({ children, guestOnly = false }) {
   const { loading, user } = useSession();
@@ -44,6 +47,14 @@ export default function App() {
     <ErrorBoundary>
     <SessionProvider>
       <BrowserRouter>
+        <Suspense fallback={
+          <div className="loading-screen">
+            <div className="loading-card">
+              <span className="eyebrow">Fintech Automated Solutions</span>
+              <h1>Loading...</h1>
+            </div>
+          </div>
+        }>
         <Routes>
           <Route
             element={
@@ -100,6 +111,7 @@ export default function App() {
           <Route element={<SessionGate><Community /></SessionGate>}     path="/community" />
           <Route element={<Navigate replace to="/" />} path="*" />
         </Routes>
+        </Suspense>
       </BrowserRouter>
     </SessionProvider>
     </ErrorBoundary>
