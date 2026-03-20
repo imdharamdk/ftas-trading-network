@@ -10,6 +10,19 @@ const cache = require("../services/apiCache");
 
 const router = express.Router();
 
+const RISK_MIN_CONFIDENCE = {
+  AGGRESSIVE: 70,
+  BALANCED: 80,
+  CONSERVATIVE: 90,
+};
+
+function resolveRiskPreference(req) {
+  const pref = String(req.query.risk || req.user?.riskPreference || "BALANCED").toUpperCase();
+  if (pref === "ALL") return { preference: "ALL", minConfidence: 0 };
+  const minConfidence = RISK_MIN_CONFIDENCE[pref] ?? RISK_MIN_CONFIDENCE.BALANCED;
+  return { preference: pref, minConfidence };
+}
+
 // Stock signals should NOT auto-expire.
 async function expireStaleActives() {
   return false;
@@ -175,7 +188,8 @@ function isCryptoCoin(coin) {
 }
 
 router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
-  const cacheKey = "stocks:active:" + (req.query.coin || "all") + ":" + (req.query.limit || 50);
+  const { preference, minConfidence } = resolveRiskPreference(req);
+  const cacheKey = "stocks:active:" + (req.query.coin || "all") + ":" + (req.query.limit || 50) + ":" + preference;
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
 
@@ -188,7 +202,8 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
     (signal) =>
       signal.status === SIGNAL_STATUS.ACTIVE &&
       !isCryptoCoin(signal.coin) &&
-      (!coin || signal.coin === coin),
+      (!coin || signal.coin === coin) &&
+      Number(signal.confidence || 0) >= minConfidence,
     limit
   );
 
@@ -198,7 +213,8 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
 });
 
 router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
-  const cacheKey = "stocks:history:" + (req.query.coin || "all") + ":" + (req.query.limit || "all");
+  const { preference, minConfidence } = resolveRiskPreference(req);
+  const cacheKey = "stocks:history:" + (req.query.coin || "all") + ":" + (req.query.limit || "all") + ":" + preference;
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
 
@@ -210,14 +226,16 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
     signal.status === SIGNAL_STATUS.CLOSED &&
     signal.result !== "EXPIRED" &&
     !isCryptoCoin(signal.coin) &&
-    (!coin || signal.coin === coin);
+    (!coin || signal.coin === coin) &&
+    Number(signal.confidence || 0) >= minConfidence;
   const result = { signals: limit ? takeLatest(signals, predicate, limit) : signals.filter(predicate) };
   cache.set(cacheKey, result, 30);
   return res.json(result);
 });
 
 router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
-  const cacheKey = "stocks:expired:" + (req.query.coin || "all") + ":" + (req.query.limit || "all");
+  const { preference } = resolveRiskPreference(req);
+  const cacheKey = "stocks:expired:" + (req.query.coin || "all") + ":" + (req.query.limit || "all") + ":" + preference;
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
 
@@ -285,48 +303,63 @@ router.post("/admin/purge-crypto", requireAuth, requireAdmin, async (req, res) =
 });
 
 router.get("/stats/overview", requireAuth, async (req, res) => {
-  const cached = cache.get("stocks:overview");
+  const { preference, minConfidence } = resolveRiskPreference(req);
+  const cached = cache.get("stocks:overview:" + preference);
   if (cached) return res.json(cached);
 
   await expireStaleActives(); // ensure stale actives are marked expired before counting
   const raw = await readCollection("stockSignals");
   const archive = await readCollection("stockSignalsArchive");
   const combined = [...raw, ...archive];
-  const signals = combined.filter((s) => !isCryptoCoin(s.coin) && s.result !== "EXPIRED");
+  const signals = combined.filter((s) =>
+    !isCryptoCoin(s.coin) &&
+    s.result !== "EXPIRED" &&
+    Number(s.confidence || 0) >= minConfidence
+  );
   const result = {
     stats: { ...buildOverview(signals), archiveSize: archive.length },
   };
-  cache.set("stocks:overview", result, 30);
+  cache.set("stocks:overview:" + preference, result, 30);
   return res.json(result);
 });
 
 router.get("/stats/analytics", requireAuth, async (req, res) => {
-  const cached = cache.get("stocks:analytics");
+  const { preference, minConfidence } = resolveRiskPreference(req);
+  const cached = cache.get("stocks:analytics:" + preference);
   if (cached) return res.json(cached);
 
   const raw = await readCollection("stockSignals");
   const archive = await readCollection("stockSignalsArchive");
   const combined = [...raw, ...archive];
-  const signals = combined.filter((s) => !isCryptoCoin(s.coin) && s.result !== "EXPIRED");
+  const signals = combined.filter((s) =>
+    !isCryptoCoin(s.coin) &&
+    s.result !== "EXPIRED" &&
+    Number(s.confidence || 0) >= minConfidence
+  );
   const result = {
     analytics: buildAnalytics(signals),
   };
-  cache.set("stocks:analytics", result, 60);
+  cache.set("stocks:analytics:" + preference, result, 60);
   return res.json(result);
 });
 
 router.get("/stats/performance", requireAuth, async (req, res) => {
-  const cached = cache.get("stocks:performance");
+  const { preference, minConfidence } = resolveRiskPreference(req);
+  const cached = cache.get("stocks:performance:" + preference);
   if (cached) return res.json(cached);
 
   const raw = await readCollection("stockSignals");
   const archive = await readCollection("stockSignalsArchive");
   const combined = [...raw, ...archive];
-  const signals = combined.filter((s) => !isCryptoCoin(s.coin) && s.result !== "EXPIRED");
+  const signals = combined.filter((s) =>
+    !isCryptoCoin(s.coin) &&
+    s.result !== "EXPIRED" &&
+    Number(s.confidence || 0) >= minConfidence
+  );
   const result = {
     performance: buildPerformance(signals),
   };
-  cache.set("stocks:performance", result, 60);
+  cache.set("stocks:performance:" + preference, result, 60);
   return res.json(result);
 });
 

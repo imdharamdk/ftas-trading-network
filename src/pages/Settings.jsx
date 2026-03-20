@@ -101,7 +101,7 @@ const inputStyle = {
 
 // ─── Main Settings Page ───────────────────────────────────────────────────────
 export default function Settings() {
-  const { user, logout } = useSession();
+  const { user, logout, refreshUser } = useSession();
   const isAdmin  = user?.role === "ADMIN";
 
   const { permission, subscribed, supported, loading: pushLoading, error: pushError, subscribe, unsubscribe } = usePushNotifications();
@@ -132,6 +132,11 @@ export default function Settings() {
   const [engineSettingsBusy, setEngineSettingsBusy] = useState(false);
   const [maintenanceBusy, setMaintenanceBusy] = useState("");
   const [maintenanceMsg, setMaintenanceMsg] = useState("");
+
+  // Risk preference (all users)
+  const [riskDraft, setRiskDraft] = useState(user?.riskPreference || "BALANCED");
+  const [riskBusy, setRiskBusy] = useState(false);
+  const [riskMsg, setRiskMsg] = useState("");
 
   const loadAlerts = useCallback(async () => {
     setAlertsLoading(true);
@@ -184,6 +189,10 @@ export default function Settings() {
     loadEngineSettings();
   }, [loadAlerts, loadTelegram, loadFacebook, loadEngines, loadEngineSettings]);
 
+  useEffect(() => {
+    setRiskDraft(user?.riskPreference || "BALANCED");
+  }, [user?.riskPreference]);
+
   const bothEnginesRunning = Boolean(cryptoEngine?.running) && Boolean(stockEngine?.running);
 
   const toggleEngines = async () => {
@@ -230,6 +239,21 @@ export default function Settings() {
       setTimeout(() => setEngineMsg(""), 4000);
     } finally {
       setEngineSettingsBusy(false);
+    }
+  };
+
+  const saveRiskPreference = async () => {
+    setRiskBusy(true);
+    setRiskMsg("");
+    try {
+      await apiFetch("/auth/me", { method: "PATCH", body: { riskPreference: riskDraft } });
+      await refreshUser();
+      setRiskMsg("✅ Risk preference updated");
+    } catch (e) {
+      setRiskMsg(`❌ ${e.message}`);
+    } finally {
+      setRiskBusy(false);
+      setTimeout(() => setRiskMsg(""), 4000);
     }
   };
 
@@ -412,6 +436,34 @@ export default function Settings() {
                 </div>
               ))
             )}
+          </div>
+        </Section>
+
+        {/* ── Risk Preference ── */}
+        <Section eyebrow="Signals" title="Risk Profile" accent="#8b5cf6">
+          <div style={{ display: "grid", gap: 12 }}>
+            <p style={{ fontSize: 13, color: "#64748b" }}>
+              Choose how strict signal filtering should be. Higher risk = more signals, lower win-rate. Conservative = fewer, higher quality.
+            </p>
+            <div style={{ display: "grid", gap: 8 }}>
+              <label style={{ fontSize: 12, color: "#64748b", display: "block" }}>
+                Risk profile
+              </label>
+              <select value={riskDraft} onChange={(e) => setRiskDraft(e.target.value)} style={inputStyle}>
+                <option value="AGGRESSIVE">Aggressive (more signals)</option>
+                <option value="BALANCED">Balanced (default)</option>
+                <option value="CONSERVATIVE">Conservative (higher win-rate)</option>
+              </select>
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button type="button" className="button button-primary" onClick={saveRiskPreference} disabled={riskBusy}>
+                {riskBusy ? "Saving..." : "Save Preference"}
+              </button>
+              <span style={{ fontSize: 12, color: "#64748b" }}>
+                Current: <strong style={{ color: "#e2e8f0" }}>{user?.riskPreference || "BALANCED"}</strong>
+              </span>
+            </div>
+            {riskMsg && <p style={{ fontSize: 13, color: riskMsg.startsWith("✅") ? "#2bd48f" : "#f87171" }}>{riskMsg}</p>}
           </div>
         </Section>
 

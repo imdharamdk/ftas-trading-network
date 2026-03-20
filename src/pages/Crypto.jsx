@@ -48,7 +48,7 @@ function useNow() {
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [passesRisk]);
   return now;
 }
 
@@ -69,6 +69,9 @@ export default function Crypto() {
   const { user } = useSession();
   const isAdmin = user?.role === "ADMIN";
   const now = useNow(); // single 1s tick for all countdowns
+  const riskPref = String(user?.riskPreference || "BALANCED").toUpperCase();
+  const minConfidence = riskPref === "AGGRESSIVE" ? 70 : riskPref === "CONSERVATIVE" ? 90 : 80;
+  const passesRisk = useCallback((signal) => Number(signal?.confidence || 0) >= minConfidence, [minConfidence]);
 
   const [activeSignals, setActiveSignals]   = useState([]);
   const [historySignals, setHistorySignals] = useState([]);
@@ -91,24 +94,26 @@ export default function Crypto() {
   const onSignalNew = useCallback((signal) => {
     if (signal.source === "SMART_ENGINE") return; // stock signal — ignore
     if (!ALL_TF.includes(signal.timeframe)) return;
+    if (!passesRisk(signal)) return;
     setActiveSignals(prev => {
       // Avoid duplicate
       if (prev.some(s => s.id === signal.id)) return prev;
       return [signal, ...prev];
     });
-  }, []);
+  }, [passesRisk]);
 
   const onSignalClosed = useCallback((signal) => {
     if (signal.source === "SMART_ENGINE") return;
     // Remove from active
     setActiveSignals(prev => prev.filter(s => s.id !== signal.id));
     // Add to correct bucket
+    if (!passesRisk(signal)) return;
     if (signal.result === "EXPIRED") {
       setExpiredSignals(prev => [signal, ...prev.filter(s => s.id !== signal.id)]);
     } else {
       setHistorySignals(prev => [signal, ...prev.filter(s => s.id !== signal.id)]);
     }
-  }, []);
+  }, [passesRisk]);
 
   const onPriceUpdate = useCallback((prices) => {
     setActiveSignals(prev => prev.map(s => {
@@ -163,7 +168,7 @@ export default function Crypto() {
         const activeRes = await apiFetch("/signals/active?limit=100");
         const all = activeRes.signals || [];
         const ALL_TF = ["1m","5m","15m","30m","1h"];
-        setActiveSignals(all.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe)));
+        setActiveSignals(all.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe) && passesRisk(s)));
         setTab("active");
       }
     } catch (e) {
@@ -212,7 +217,7 @@ export default function Crypto() {
 
         const ALL_TF = ["1m","5m","15m","30m","1h"];
         const allActive = activeRes.status === "fulfilled" ? (activeRes.value.signals || []) : [];
-        setActiveSignals(allActive.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe)));
+        setActiveSignals(allActive.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe) && passesRisk(s)));
         setLoading(false); // show page immediately
       } catch (e) {
         if (mounted) { setError(e.message); setLoading(false); }
@@ -231,11 +236,11 @@ export default function Crypto() {
       const res = await apiFetch("/signals/history?limit=500");
       const allHistory = res.signals || [];
       const ALL_TF = ["1m","5m","15m","30m","1h"];
-      setHistorySignals(allHistory.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe)));
+      setHistorySignals(allHistory.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe) && passesRisk(s)));
       setHistoryLoaded(true);
     } catch {}
     finally { setHistoryLoading(false); }
-  }, [historyLoaded, historyLoading]);
+  }, [historyLoaded, historyLoading, passesRisk]);
 
   const loadExpired = useCallback(async () => {
     if (expiredLoaded || expiredLoading) return;
@@ -244,11 +249,11 @@ export default function Crypto() {
       const res = await apiFetch("/signals/expired?limit=500");
       const allExpired = res.signals || [];
       const ALL_TF = ["1m","5m","15m","30m","1h"];
-      setExpiredSignals(allExpired.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe)));
+      setExpiredSignals(allExpired.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe) && passesRisk(s)));
       setExpiredLoaded(true);
     } catch {}
     finally { setExpiredLoading(false); }
-  }, [expiredLoaded, expiredLoading]);
+  }, [expiredLoaded, expiredLoading, passesRisk]);
 
   useEffect(() => {
     if (tab === "closed") loadHistory();

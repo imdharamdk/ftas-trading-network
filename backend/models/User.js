@@ -12,6 +12,12 @@ const USER_PLANS = {
   PRO: "PRO",
 };
 
+const RISK_PREFERENCES = {
+  AGGRESSIVE: "AGGRESSIVE",
+  BALANCED: "BALANCED",
+  CONSERVATIVE: "CONSERVATIVE",
+};
+
 const SUBSCRIPTION_STATUS = {
   ACTIVE: "ACTIVE",
   EXPIRED: "EXPIRED",
@@ -22,6 +28,13 @@ const FREE_TRIAL_DAYS = 7;
 
 function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
+}
+
+function normalizeRiskPreference(value) {
+  const pref = String(value || "").trim().toUpperCase();
+  if (pref === RISK_PREFERENCES.AGGRESSIVE) return RISK_PREFERENCES.AGGRESSIVE;
+  if (pref === RISK_PREFERENCES.CONSERVATIVE) return RISK_PREFERENCES.CONSERVATIVE;
+  return RISK_PREFERENCES.BALANCED;
 }
 
 function addDaysToIso(days, baseDate = new Date()) {
@@ -78,6 +91,7 @@ function createUser({
   name,
   passwordHash,
   plan = USER_PLANS.FREE_TRIAL,
+  riskPreference = RISK_PREFERENCES.BALANCED,
   role = USER_ROLES.USER,
   subscriptionEndsAt = addDaysToIso(FREE_TRIAL_DAYS),
   subscriptionStatus = SUBSCRIPTION_STATUS.ACTIVE,
@@ -91,6 +105,7 @@ function createUser({
     passwordHash,
     role,
     plan,
+    riskPreference: normalizeRiskPreference(riskPreference),
     isActive,
     subscriptionStatus,
     subscriptionEndsAt,
@@ -117,10 +132,12 @@ module.exports = {
   SUBSCRIPTION_STATUS,
   USER_ROLES,
   USER_PLANS,
+  RISK_PREFERENCES,
   addDaysToIso,
   createUser,
   hasSignalAccess,
   normalizeEmail,
+  normalizeRiskPreference,
   resolveSubscriptionStatus,
   sanitizeUser,
 };

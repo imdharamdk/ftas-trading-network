@@ -14,6 +14,9 @@ function isCryptoCoin(coin) {
 export default function Stocks() {
   const { user } = useSession();
   const isAdmin = user?.role === "ADMIN";
+  const riskPref = String(user?.riskPreference || "BALANCED").toUpperCase();
+  const minConfidence = riskPref === "AGGRESSIVE" ? 70 : riskPref === "CONSERVATIVE" ? 90 : 80;
+  const passesRisk = useCallback((signal) => Number(signal?.confidence || 0) >= minConfidence, [minConfidence]);
 
   const [overview, setOverview]             = useState(null);
   const [activeSignals, setActiveSignals]   = useState([]);
@@ -35,9 +38,9 @@ export default function Stocks() {
     ]);
     setOverview(overviewRes.status === "fulfilled" ? overviewRes.value.stats : null);
     const rawActive = activeRes.status === "fulfilled" ? activeRes.value.signals || [] : [];
-    setActiveSignals(rawActive.filter(s => !isCryptoCoin(s.coin)));
+    setActiveSignals(rawActive.filter(s => !isCryptoCoin(s.coin) && passesRisk(s)));
     setLoading(false);
-  }, []);
+  }, [passesRisk]);
 
   // Initial load only — no polling loop.
   // FIX: Replaced 30s setInterval polling with WebSocket push below.
@@ -50,18 +53,20 @@ export default function Stocks() {
   //      New signals could take up to 30s to appear. Now they push instantly.
   const onStockNew = useCallback((signal) => {
     if (isCryptoCoin(signal?.coin)) return; // safety guard
+    if (!passesRisk(signal)) return;
     setActiveSignals(cur => {
       if (cur.some(s => s.id === signal.id)) return cur; // deduplicate
       return [signal, ...cur];
     });
     setOverview(cur => cur ? { ...cur, activeSignals: (cur.activeSignals || 0) + 1 } : cur);
-  }, []);
+  }, [passesRisk]);
 
   const onStockClosed = useCallback((signal) => {
     if (isCryptoCoin(signal?.coin)) return;
     setActiveSignals(cur => cur.filter(s => s.id !== signal.id));
+    if (!passesRisk(signal)) return;
     setHistorySignals(cur => [signal, ...cur]);
-  }, []);
+  }, [passesRisk]);
 
   const onStatsUpdate = useCallback((data) => {
     // Update overview stats from WS push without a full reload
@@ -83,11 +88,11 @@ export default function Stocks() {
     try {
       const res = await apiFetch("/stocks/history?limit=500");
       const rawHistory = res.signals || [];
-      setHistorySignals(rawHistory.filter(s => !isCryptoCoin(s.coin)));
+      setHistorySignals(rawHistory.filter(s => !isCryptoCoin(s.coin) && passesRisk(s)));
       setHistoryLoaded(true);
     } catch {}
     finally { setHistoryLoading(false); }
-  }, [historyLoaded, historyLoading]);
+  }, [historyLoaded, historyLoading, passesRisk]);
 
   useEffect(() => {
     if (tab === "closed") loadHistory();

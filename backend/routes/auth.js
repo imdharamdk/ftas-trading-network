@@ -7,6 +7,7 @@ const {
   USER_ROLES,
   createUser,
   normalizeEmail,
+  normalizeRiskPreference,
   sanitizeUser,
 } = require("../models/User");
 const { mutateCollection, readCollection } = require("../storage/fileStore");
@@ -100,21 +101,15 @@ router.get("/me", requireAuth, async (req, res) => {
   });
 });
 
-router.get("/users", requireAuth, requireAdmin, async (req, res) => {
-  const users = await readCollection("users");
-  return res.json({
-    users: users.map(sanitizeUser),
-  });
-});
-
-router.patch("/users/:id", requireAuth, requireAdmin, async (req, res) => {
+// Update self preferences (risk profile, etc.)
+router.patch("/me", requireAuth, async (req, res) => {
   try {
-    const allowed = ["isActive", "name", "plan", "role", "subscriptionEndsAt", "subscriptionStatus"];
+    const allowed = ["riskPreference"];
     const result = await mutateCollection("users", (records) => {
       let updatedUser = null;
 
       const nextRecords = records.map((user) => {
-        if (user.id !== req.params.id) {
+        if (user.id !== req.userId) {
           return user;
         }
 
@@ -125,7 +120,11 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req, res) => {
 
         allowed.forEach((field) => {
           if (req.body[field] !== undefined) {
-            updatedUser[field] = req.body[field];
+            if (field === "riskPreference") {
+              updatedUser[field] = normalizeRiskPreference(req.body[field]);
+            } else {
+              updatedUser[field] = req.body[field];
+            }
           }
         });
 
@@ -142,9 +141,61 @@ router.patch("/users/:id", requireAuth, requireAdmin, async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
+    invalidateUserCache(req.userId);
     return res.json({
       user: sanitizeUser(result),
     });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.get("/users", requireAuth, requireAdmin, async (req, res) => {
+  const users = await readCollection("users");
+  return res.json({
+    users: users.map(sanitizeUser),
+  });
+});
+
+router.patch("/users/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const allowed = ["isActive", "name", "plan", "role", "subscriptionEndsAt", "subscriptionStatus", "riskPreference"];
+    const result = await mutateCollection("users", (records) => {
+      let updatedUser = null;
+
+      const nextRecords = records.map((user) => {
+        if (user.id !== req.params.id) {
+          return user;
+        }
+
+        updatedUser = {
+          ...user,
+          updatedAt: new Date().toISOString(),
+        };
+
+        allowed.forEach((field) => {
+          if (req.body[field] !== undefined) {
+            updatedUser[field] = field === "riskPreference"
+              ? normalizeRiskPreference(req.body[field])
+              : req.body[field];
+          }
+        });
+
+        return updatedUser;
+      });
+
+      return {
+        records: nextRecords,
+        value: updatedUser,
+      };
+    });
+
+    if (!result) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    invalidateUserCache(req.params.id);
+    return res.json({ user: sanitizeUser(result) });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }

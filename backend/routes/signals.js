@@ -20,6 +20,19 @@ const cache = require("../services/apiCache");
 
 const router = express.Router();
 
+const RISK_MIN_CONFIDENCE = {
+  AGGRESSIVE: 70,
+  BALANCED: 80,
+  CONSERVATIVE: 90,
+};
+
+function resolveRiskPreference(req) {
+  const pref = String(req.query.risk || req.user?.riskPreference || "BALANCED").toUpperCase();
+  if (pref === "ALL") return { preference: "ALL", minConfidence: 0 };
+  const minConfidence = RISK_MIN_CONFIDENCE[pref] ?? RISK_MIN_CONFIDENCE.BALANCED;
+  return { preference: pref, minConfidence };
+}
+
 // ─── /api/config — expose shared constants to frontend ───────────────────────
 // Frontend reads this at startup so SIGNAL_EXPIRY_MS stays in sync with backend
 router.get("/config", (_req, res) => {
@@ -409,7 +422,8 @@ async function attachLivePrices(signals) {
 }
 
 router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
-  const cacheKey = "signals:active:" + (req.query.coin || "all") + ":" + (req.query.limit || 50);
+  const { preference, minConfidence } = resolveRiskPreference(req);
+  const cacheKey = "signals:active:" + (req.query.coin || "all") + ":" + (req.query.limit || 50) + ":" + preference;
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
 
@@ -419,7 +433,10 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
   const limit = Number(req.query.limit || 50);
   const filtered = takeLatest(
     rawSignals,
-    (signal) => signal.status === SIGNAL_STATUS.ACTIVE && (!coin || signal.coin === coin),
+    (signal) =>
+      signal.status === SIGNAL_STATUS.ACTIVE &&
+      (!coin || signal.coin === coin) &&
+      Number(signal.confidence || 0) >= minConfidence,
     limit
   );
 
@@ -429,7 +446,8 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
 });
 
 router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
-  const cacheKey = "signals:history:" + (req.query.coin || "all") + ":" + (req.query.limit || "all");
+  const { preference, minConfidence } = resolveRiskPreference(req);
+  const cacheKey = "signals:history:" + (req.query.coin || "all") + ":" + (req.query.limit || "all") + ":" + preference;
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
 
@@ -440,7 +458,8 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   const predicate = (signal) =>
     signal.status === SIGNAL_STATUS.CLOSED &&
     signal.result !== "EXPIRED" &&
-    (!coin || signal.coin === coin);
+    (!coin || signal.coin === coin) &&
+    Number(signal.confidence || 0) >= minConfidence;
   const signals = limit ? takeLatest(rawSignals, predicate, limit) : rawSignals.filter(predicate);
 
   const result = { signals };
@@ -449,7 +468,8 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
 });
 
 router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
-  const cacheKey = "signals:expired:" + (req.query.coin || "all") + ":" + (req.query.limit || "all");
+  const { preference, minConfidence } = resolveRiskPreference(req);
+  const cacheKey = "signals:expired:" + (req.query.coin || "all") + ":" + (req.query.limit || "all") + ":" + preference;
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
 
@@ -459,7 +479,9 @@ router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
   const coin = req.query.coin ? String(req.query.coin).toUpperCase() : null;
   const limit = Number(req.query.limit || 0);
   const predicate = (signal) =>
-    signal.result === "EXPIRED" && (!coin || signal.coin === coin);
+    signal.result === "EXPIRED" &&
+    (!coin || signal.coin === coin) &&
+    Number(signal.confidence || 0) >= minConfidence;
   const signals = limit ? takeLatest(rawSignals, predicate, limit) : rawSignals.filter(predicate);
 
   const result = { signals };
@@ -468,43 +490,46 @@ router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
 });
 
 router.get("/stats/overview", requireAuth, async (req, res) => {
-  const cached = cache.get("signals:overview");
+  const { preference, minConfidence } = resolveRiskPreference(req);
+  const cached = cache.get("signals:overview:" + preference);
   if (cached) return res.json(cached);
 
   await expireStaleActives("signals");
   const signals = await readCollection("signals");
   const archive = await readCollection("signalsArchive");
-  const combined = [...signals, ...archive];
+  const combined = [...signals, ...archive].filter((s) => Number(s.confidence || 0) >= minConfidence);
   const result = { stats: { ...buildOverview(combined), archiveSize: archive.length } };
-  cache.set("signals:overview", result, 30); // 30s TTL
+  cache.set("signals:overview:" + preference, result, 30); // 30s TTL
   return res.json(result);
 });
 
 router.get("/stats/analytics", requireAuth, async (req, res) => {
-  const cached = cache.get("signals:analytics");
+  const { preference, minConfidence } = resolveRiskPreference(req);
+  const cached = cache.get("signals:analytics:" + preference);
   if (cached) return res.json(cached);
 
   const signals = await readCollection("signals");
   const archive = await readCollection("signalsArchive");
-  const combined = [...signals, ...archive];
+  const combined = [...signals, ...archive].filter((s) => Number(s.confidence || 0) >= minConfidence);
   const result = {
     analytics: buildAnalytics(combined),
   };
-  cache.set("signals:analytics", result, 60);
+  cache.set("signals:analytics:" + preference, result, 60);
   return res.json(result);
 });
 
 router.get("/stats/performance", requireAuth, async (req, res) => {
-  const cached = cache.get("signals:performance");
+  const { preference, minConfidence } = resolveRiskPreference(req);
+  const cached = cache.get("signals:performance:" + preference);
   if (cached) return res.json(cached);
 
   const signals = await readCollection("signals");
   const archive = await readCollection("signalsArchive");
-  const combined = [...signals, ...archive];
+  const combined = [...signals, ...archive].filter((s) => Number(s.confidence || 0) >= minConfidence);
   const result = {
     performance: buildPerformance(combined),
   };
-  cache.set("signals:performance", result, 60);
+  cache.set("signals:performance:" + preference, result, 60);
   return res.json(result);
 });
 
