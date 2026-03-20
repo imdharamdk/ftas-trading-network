@@ -487,6 +487,14 @@ export default function Settings() {
                   </button>
                   <button
                     type="button"
+                    className="button button-secondary"
+                    disabled={maintenanceBusy === "crypto-expired-archive"}
+                    onClick={() => runArchiveAction("crypto-expired-archive", "/signals/archive", "ARCHIVE_EXPIRED")}
+                  >
+                    {maintenanceBusy === "crypto-expired-archive" ? "Working..." : "Archive Expired Signals"}
+                  </button>
+                  <button
+                    type="button"
                     className="button button-ghost"
                     disabled={maintenanceBusy === "crypto-clear"}
                     onClick={() => runArchiveAction("crypto-clear", "/signals/archive", "CLEAR_ARCHIVE")}
