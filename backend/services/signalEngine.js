@@ -528,6 +528,20 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const kdK    = stochKD?.k  ?? null;
   const kdD    = stochKD?.d  ?? null;
   const { daily, twelveH, oneH, thirtyM } = htf;
+
+  // ── SMC Fields ────────────────────────────────────────────────────────────
+  const smc           = analysis.smc || {};
+  const smcBOS        = smc.bos        || { bull: false, bear: false, level: null };
+  const smcCHoCH      = smc.choch      || { bull: false, bear: false, level: null };
+  const smcIDM        = smc.idm        || { bull: false, bear: false, sweepLevel: null, rejectionStrength: 0 };
+  const smcStructure  = smc.structure  || { trend: "NEUTRAL", lastSwingHigh: null, lastSwingLow: null };
+
+  const bosBull   = smcBOS.bull;
+  const bosBear   = smcBOS.bear;
+  const chochBull = smcCHoCH.bull;
+  const chochBear = smcCHoCH.bear;
+  const idmBull   = smcIDM.bull;
+  const idmBear   = smcIDM.bear;
   const bullRsiFloor = tfRule.minRsi ?? 40;
   const bullRsiCeil  = tfRule.maxRsi ?? 82;
   const requireVwapSupport   = tfRule.requireVwapSupport   || false;
@@ -660,14 +674,23 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const bullDivOverride = (rsiDivBull || macdDivBull) && bullTrend && bullMomentum && bullEntry;
   const bearDivOverride = (rsiDivBear || macdDivBear) && bearTrend && bearMomentum && bearEntry;
 
+  // ── SMC Hard Gate: BOS or CHoCH must be present ─────────────────────────
+  // BOS  = trend continuation confirmed (price breaks structure)
+  // CHoCH = reversal setup (structure changed) — also valid entry
+  // IDM alone is NOT enough — must have BOS or CHoCH to confirm direction
+  const smcBullGate = bosBull || chochBull;
+  const smcBearGate = bosBear || chochBear;
+
   const bullValid =
     bullBiasAligned && bullTrend && bullMomentum && bullEntry &&
     (bullSlope || bullDivOverride) &&
-    bullAnchors >= anchorRequirementBySide.LONG;
+    bullAnchors >= anchorRequirementBySide.LONG &&
+    smcBullGate;  // HARD GATE — BOS or CHoCH required
   const bearValid =
     bearBiasAligned && bearTrend && bearMomentum && bearEntry &&
     (bearSlope || bearDivOverride) &&
-    bearAnchors >= anchorRequirementBySide.SHORT;
+    bearAnchors >= anchorRequirementBySide.SHORT &&
+    smcBearGate;  // HARD GATE — BOS or CHoCH required
 
   if (!bullValid && !bearValid) return null;
 
@@ -798,6 +821,33 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
     if (bullValid) { bullScore += 3; bullConf.push("BB squeeze"); }
     if (bearValid) { bearScore += 3; bearConf.push("BB squeeze"); }
   }
+
+  // ── SMC Scoring ───────────────────────────────────────────────────────────
+  // BOS: trend continuation confirmed → moderate bonus (already gated above)
+  if (bosBull && bullValid) { bullScore += 8; bullConf.push("BOS 📈 structure break up"); }
+  if (bosBear && bearValid) { bearScore += 8; bearConf.push("BOS 📉 structure break down"); }
+
+  // CHoCH: reversal signal → HIGH bonus (rarer, stronger)
+  if (chochBull && bullValid) { bullScore += 12; bullConf.push("CHoCH 🔄 bearish→bullish structure shift"); }
+  if (chochBear && bearValid) { bearScore += 12; bearConf.push("CHoCH 🔄 bullish→bearish structure shift"); }
+
+  // IDM: liquidity sweep confirmed → refines entry quality → bonus
+  if (idmBull && bullValid) {
+    const strength = Math.round(smcIDM.rejectionStrength);
+    bullScore += 6;
+    bullConf.push("IDM 🎯 liquidity grab + rejection (strength: " + strength + "/10)");
+  }
+  if (idmBear && bearValid) {
+    const strength = Math.round(smcIDM.rejectionStrength);
+    bearScore += 6;
+    bearConf.push("IDM 🎯 liquidity grab + rejection (strength: " + strength + "/10)");
+  }
+
+  // Full SMC confluence: BOS + IDM together = highest quality entry
+  if (bosBull && idmBull && bullValid) { bullScore += 5; bullConf.push("SMC full confluence: BOS + IDM"); }
+  if (bosBear && idmBear && bearValid) { bearScore += 5; bearConf.push("SMC full confluence: BOS + IDM"); }
+  if (chochBull && idmBull && bullValid) { bullScore += 7; bullConf.push("SMC reversal confluence: CHoCH + IDM"); }
+  if (chochBear && idmBear && bearValid) { bearScore += 7; bearConf.push("SMC reversal confluence: CHoCH + IDM"); }
 
   // ── Candlestick patterns ──────────────────────────────────────────────────
   const strongBullPat = ["Morning Star","Morning Doji Star","Three White Soldiers","Bullish Engulfing","Piercing Line","Tweezer Bottom","Bullish Marubozu","Abandoned Baby (Bull)"];
