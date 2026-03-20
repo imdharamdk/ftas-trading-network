@@ -20,8 +20,16 @@ export function usePushNotifications() {
 
   // Check support + register SW on mount
   useEffect(() => {
+    const isSecure = typeof window !== "undefined" && (window.isSecureContext || window.location.hostname === "localhost");
+    if (!isSecure) {
+      setSupported(false);
+      setError("Push notifications require HTTPS (or localhost).");
+      return;
+    }
+
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
       setSupported(false);
+      setError("Your browser doesn't support push notifications.");
       return;
     }
     setSupported(true);
@@ -29,6 +37,7 @@ export function usePushNotifications() {
     navigator.serviceWorker.register("/sw.js")
       .then((reg) => {
         swReg.current = reg;
+        setError("");
         // Check if already subscribed
         return reg.pushManager.getSubscription();
       })
@@ -36,7 +45,9 @@ export function usePushNotifications() {
         setSubscribed(!!sub);
       })
       .catch((err) => {
-        console.warn("[push] SW registration failed:", err.message);
+        const msg = err?.message || "Service worker registration failed";
+        console.warn("[push] SW registration failed:", msg);
+        setError(msg);
       });
   }, []);
 

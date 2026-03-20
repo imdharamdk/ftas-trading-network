@@ -48,7 +48,7 @@ function useNow() {
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [passesRisk]);
+  }, []);
   return now;
 }
 

@@ -309,7 +309,7 @@ export default function Settings() {
         {/* ── Push Notifications ── */}
         <Section eyebrow="Browser" title="Push Notifications" accent="#2bd48f">
           {!supported ? (
-            <div className="banner banner-warning">⚠️ Your browser doesn't support push notifications. Try Chrome or Firefox.</div>
+            <div className="banner banner-warning">⚠️ {pushError || "Your browser doesn't support push notifications. Try Chrome or Firefox."}</div>
           ) : (
             <div style={{ display: "grid", gap: 14 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
