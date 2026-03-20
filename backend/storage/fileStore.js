@@ -26,16 +26,30 @@ function createId(prefix = "ftas") {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// ─── MongoDB connection state ──────────────────────────────────────────────────
+// FIX: Previously _mongoFailed was permanent (never retried after first failure).
+// Now: retry every MONGO_RETRY_INTERVAL_MS so a temporary outage heals itself.
 let _mongoClient = null;
 let _db          = null;
 let _mongoFailed = false;
+let _lastFailedAt = 0;
+const MONGO_RETRY_INTERVAL_MS = 5 * 60 * 1000; // retry every 5 min after failure
 
 async function getDb() {
-  if (_mongoFailed) return null;
+  // If failed recently, check if retry window has passed
+  if (_mongoFailed) {
+    if (Date.now() - _lastFailedAt < MONGO_RETRY_INTERVAL_MS) return null;
+    // Retry window passed — reset and try again
+    console.log("[fileStore] Retrying MongoDB connection...");
+    _mongoFailed = false;
+    _mongoClient = null;
+    _db = null;
+  }
   if (_db) return _db;
   if (!MONGODB_URI) {
     console.warn("[fileStore] MONGODB_URI not set — using local JSON files");
     _mongoFailed = true;
+    _lastFailedAt = Date.now();
     return null;
   }
   try {
@@ -51,6 +65,7 @@ async function getDb() {
   } catch (err) {
     console.error("[fileStore] MongoDB connection failed:", err.message);
     _mongoFailed = true;
+    _lastFailedAt = Date.now();
     return null;
   }
 }
@@ -67,28 +82,36 @@ async function mongoRead(name) {
   }
 }
 
+// FIX: Previous strategy was deleteMany → bulkWrite (data loss risk on crash).
+// New strategy: upsert all records first, then delete orphans.
+// This means data is never fully absent even if the process crashes mid-write.
 async function mongoWrite(name, records) {
   const db = await getDb();
   if (!db) return false;
   try {
     const col = db.collection(name);
+
+    if (records.length === 0) {
+      await col.deleteMany({});
+      return true;
+    }
+
+    // Step 1: Upsert all current records (safe — data always present)
+    const ops = records.map(r => ({
+      replaceOne: {
+        filter:      { _id: r.id },
+        replacement: { _id: r.id, data: r },
+        upsert:      true,
+      },
+    }));
+    await col.bulkWrite(ops, { ordered: false });
+
+    // Step 2: Remove stale records not in current set (safe — data already written)
     const ids = records.map(r => r.id).filter(Boolean);
-    // Delete records that are no longer in the list
     if (ids.length > 0) {
       await col.deleteMany({ _id: { $nin: ids } });
-    } else {
-      await col.deleteMany({});
     }
-    if (records.length > 0) {
-      const ops = records.map(r => ({
-        replaceOne: {
-          filter:      { _id: r.id },
-          replacement: { _id: r.id, data: r },
-          upsert:      true,
-        },
-      }));
-      await col.bulkWrite(ops, { ordered: false });
-    }
+
     return true;
   } catch (err) {
     console.error(`[fileStore] MongoDB write(${name}) failed:`, err.message);
@@ -107,7 +130,6 @@ async function localEnsure(name) {
 
     for (const legacyFile of legacyFiles) {
       const legacyPath = path.join(DATA_DIR, legacyFile);
-
       try {
         await fs.access(legacyPath);
         return legacyPath;
