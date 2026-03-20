@@ -1,16 +1,28 @@
 /**
  * FTAS WebSocket Server
  * Channels: crypto_signals | stock_signals | prices
- * Auth: ?token=JWT on ws upgrade
+ * Auth: ?token=JWT on ws upgrade (WS doesn't support custom headers)
  * Messages: JSON { type, channel, data, ts }
+ *
+ * FIX: Removed duplicate hasSignalAccess() — now imported from User model.
+ *      Previously wsServer had its own version that could drift out of sync
+ *      with the actual business logic in models/User.js.
+ * FIX: JWT_SECRET uses same shared handling as auth.js middleware.
  */
 const WebSocket = require("ws");
 const jwt       = require("jsonwebtoken");
-const { readCollection } = require("../storage/fileStore");
-const { getPrices }      = require("./binanceService");
-const { SIGNAL_STATUS }  = require("../models/Signal");
+const { readCollection }    = require("../storage/fileStore");
+const { getPrices }         = require("./binanceService");
+const { SIGNAL_STATUS }     = require("../models/Signal");
+// FIX: Import shared hasSignalAccess — single source of truth
+const { hasSignalAccess }   = require("../models/User");
 
-const JWT_SECRET = process.env.JWT_SECRET || "ftas_super_secret";
+// FIX: Same JWT_SECRET pattern as auth.js — must be consistent
+const JWT_SECRET = process.env.JWT_SECRET || (
+  process.env.NODE_ENV === "production"
+    ? (() => { console.error("[wsServer] FATAL: JWT_SECRET not set in production"); process.exit(1); })()
+    : "ftas_super_secret_dev_only"
+);
 
 let wss = null;
 const clientMeta = new WeakMap(); // ws → { user, channels: Set }
@@ -25,14 +37,6 @@ async function authenticateToken(token) {
     if (!user || !user.isActive) return null;
     return user;
   } catch { return null; }
-}
-
-function hasSignalAccess(user) {
-  if (!user) return false;
-  if (user.role === "ADMIN") return true;
-  if (user.subscriptionStatus !== "ACTIVE") return false;
-  if (user.subscriptionEndsAt && new Date(user.subscriptionEndsAt) < new Date()) return false;
-  return ["PRO","PREMIUM","FREE_TRIAL"].includes(user.plan);
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -113,14 +117,19 @@ function createWsServer(httpServer) {
       return;
     }
 
+    // FIX: Using imported hasSignalAccess from models/User.js
     const canAccess = hasSignalAccess(user);
     clientMeta.set(ws, { user, channels: new Set() });
     console.log(`[WS] +${user.email} (${user.role}) — ${getConnectedCount()} online`);
 
     send(ws, {
       type: "CONNECTED",
-      data: { userId: user.id, role: user.role, canAccessSignals: canAccess,
-        availableChannels: canAccess ? ["crypto_signals","stock_signals","prices"] : [] },
+      data: {
+        userId: user.id,
+        role: user.role,
+        canAccessSignals: canAccess,
+        availableChannels: canAccess ? ["crypto_signals", "stock_signals", "prices"] : [],
+      },
     });
 
     // Keep-alive ping every 30s
@@ -180,8 +189,19 @@ function broadcastClosedSignal(signal, isStock = false) {
   broadcast(isStock ? "stock_signals" : "crypto_signals", "SIGNAL_CLOSED", { signal });
 }
 
+// Broadcast chat messages to all subscribed clients
+function broadcastChatMessage(message) {
+  if (!wss) return;
+  const msg = JSON.stringify({ type: "chat:message", message, ts: Date.now() });
+  for (const client of wss.clients) {
+    if (client.readyState !== WebSocket.OPEN) continue;
+    try { client.send(msg); } catch { /* ignore */ }
+  }
+}
+
 module.exports = {
   createWsServer,
+  broadcastChatMessage,
   // Crypto engine calls these:
   broadcastNewSignal,
   broadcastClosedSignal,
