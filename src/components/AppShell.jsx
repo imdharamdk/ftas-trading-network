@@ -21,6 +21,7 @@ const NAV_ITEMS = [
   { to: "/crypto",    icon: "💹", label: "Crypto"    },
   { to: "/stocks",    icon: "🇮🇳", label: "Stocks"    },
   { to: "/news",      icon: "📰", label: "News"      },
+  { to: "/community", icon: "👥", label: "Community" },
 ];
 
 // Sidebar only (all users)
