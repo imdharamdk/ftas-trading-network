@@ -20,11 +20,14 @@ const { router: notificationRoutes } = require("./routes/notifications");
 const { router: telegramRoutes }     = require("./routes/telegram");
 const { router: priceAlertRoutes }   = require("./routes/priceAlerts");
 const facebookRoutes                 = require("./routes/facebook");
+const settingsRoutes                 = require("./routes/settings");
 const communityRoutes                = require("./routes/community");
 const { getStatus, start } = require("./services/signalEngine");
 const stockSignalEngine    = require("./services/stockSignalEngine");
 const { createWsServer, getConnectedCount } = require("./services/wsServer");
 const sseManager           = require("./services/sseManager");
+const { readCollection } = require("./storage/fileStore");
+const { envToBool, resolveAutoStart } = require("./services/engineAutostart");
 
 const PORT     = Number(process.env.PORT || 5000);
 const distPath = path.join(__dirname, "..", "dist");
@@ -223,6 +226,7 @@ function createApp() {
   app.use("/api/telegram",      telegramRoutes);
   app.use("/api/price-alerts",  priceAlertRoutes);
   app.use("/api/facebook",      facebookRoutes);
+  app.use("/api/settings",      settingsRoutes);
   app.use("/api/community",     communityRoutes);
 
   if (fs.existsSync(distPath)) {
@@ -267,25 +271,37 @@ async function startServer(port = PORT) {
     console.log(`WS ready at ws://localhost:${port}/ws`);
     console.log("Engine:", JSON.stringify(getStatus()));
 
-    const envToBool = (value) => {
-      if (value === undefined || value === null || value === "") return null;
-      const v = String(value).trim().toLowerCase();
-      if (["true", "1", "yes", "y"].includes(v)) return true;
-      if (["false", "0", "no", "n"].includes(v)) return false;
-      return null;
-    };
-    const defaultAutoStart = process.env.NODE_ENV === "production";
-    const autoStartCrypto = envToBool(process.env.AUTO_START_ENGINE);
-    const autoStartStock = envToBool(process.env.AUTO_START_STOCK_ENGINE);
+    (async () => {
+      const defaultAutoStart = process.env.NODE_ENV === "production";
+      const envCrypto = envToBool(process.env.AUTO_START_ENGINE);
+      const envStock = envToBool(process.env.AUTO_START_STOCK_ENGINE);
+      let storedCrypto = null;
+      let storedStock = null;
 
-    if ((autoStartCrypto ?? defaultAutoStart) === true) {
-      start();
-      console.log("Signal scanner started");
-    }
-    if ((autoStartStock ?? defaultAutoStart) === true) {
-      stockSignalEngine.start();
-      console.log("Stock/FO scanner started");
-    }
+      try {
+        const settings = await readCollection("appSettings");
+        const record = settings.find((s) => s?.id === "engines");
+        if (record && typeof record.autoStartCrypto === "boolean") storedCrypto = record.autoStartCrypto;
+        if (record && typeof record.autoStartStock === "boolean") storedStock = record.autoStartStock;
+      } catch {}
+
+      const resolved = resolveAutoStart({
+        envCrypto,
+        envStock,
+        storedCrypto,
+        storedStock,
+        defaultAutoStart,
+      });
+
+      if (resolved.autoStartCrypto) {
+        start();
+        console.log("Signal scanner started");
+      }
+      if (resolved.autoStartStock) {
+        stockSignalEngine.start();
+        console.log("Stock/FO scanner started");
+      }
+    })().catch(() => {});
   });
 }
 

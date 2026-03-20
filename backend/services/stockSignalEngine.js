@@ -92,13 +92,6 @@ const TIMEFRAME_RULES = {
   },
 };
 
-// ── Signal Expiry ──────────────────────────────────────────────────────────────
-const SIGNAL_EXPIRY_MS = {
-  "1m":  8  * 60 * 1000,   // was 5 min — slight more time to hit TP
-  "5m":  25 * 60 * 1000,   // was 15 min
-  default: 25 * 60 * 1000,
-};
-
 // ── TP targets — realistic R:R for scalps ─────────────────────────────────────
 // TP1 closer = higher hit rate, TP2/TP3 for runners
 const TP_R_MULTIPLIERS_1M = [0.45, 0.8, 1.2];   // was [0.5, 0.85, 1.3]
@@ -896,32 +889,15 @@ function getStatus() {
     lastScanAt: engineState.lastScanAt, running: engineState.running, scanCount: engineState.scanCount };
 }
 
-// ─── Fast Expiry Checker (every 30s) ─────────────────────────────────────────
+// ─── Expiry disabled for stocks ──────────────────────────────────────────────
 async function checkAndExpireSignals() {
-  try {
-    const signals = await readCollection(STOCK_COLLECTION);
-    if (!signals.filter(s => s.status === SIGNAL_STATUS.ACTIVE).length) return;
-    const nowMs = Date.now(), now = new Date().toISOString();
-    let hasExpired = false;
-    const updated = signals.map(sig => {
-      if (sig.status !== SIGNAL_STATUS.ACTIVE) return sig;
-      const expiryMs  = SIGNAL_EXPIRY_MS[sig.timeframe] || SIGNAL_EXPIRY_MS.default;
-      const createdMs = sig.createdAt ? new Date(sig.createdAt).getTime() : 0;
-      if (nowMs - createdMs > expiryMs) {
-        hasExpired = true;
-        return { ...sig, status: SIGNAL_STATUS.CLOSED, result: "EXPIRED", closedAt: now, updatedAt: now };
-      }
-      return sig;
-    });
-    if (hasExpired) { const { writeCollection } = require("../storage/fileStore"); await writeCollection(STOCK_COLLECTION, updated); }
-  } catch (e) { engineState.lastError = `Expiry check failed: ${e.message}`; }
+  return null;
 }
 
 function start() {
   if (engineState.timer) { engineState.running = true; return getStatus(); }
   engineState.intervalMs  = Number(process.env.SCAN_INTERVAL_MS || engineState.intervalMs || 60000);
   engineState.timer        = setInterval(() => { scanNow({ source: "ENGINE" }).catch(e => { engineState.lastError = e.message; }); }, engineState.intervalMs);
-  engineState.expiryTimer  = setInterval(() => { checkAndExpireSignals().catch(e => { engineState.lastError = e.message; }); }, 30 * 1000);
   engineState.running      = true;
   scanNow({ source: "ENGINE" }).catch(e => { engineState.lastError = e.message; });
   return getStatus();

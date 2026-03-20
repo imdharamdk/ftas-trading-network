@@ -89,6 +89,18 @@ function sortByCreatedAtDesc(records) {
   });
 }
 
+// Fast path: assume records are already newest-first (they are prepended on insert).
+function takeLatest(records, predicate, limit) {
+  const out = [];
+  const max = Number(limit || 0);
+  for (const item of records) {
+    if (!predicate(item)) continue;
+    out.push(item);
+    if (max && out.length >= max) break;
+  }
+  return out;
+}
+
 function buildOverview(signals) {
   const activeSignals   = signals.filter((s) => s.status === SIGNAL_STATUS.ACTIVE);
   const allClosed       = signals.filter((s) => s.status === SIGNAL_STATUS.CLOSED);
@@ -403,11 +415,15 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
 
   await expireStaleActives("signals");
   const rawSignals = await readCollection("signals");
-  const filtered = sortByCreatedAtDesc(rawSignals)
-    .filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE)
-    .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
+  const coin = req.query.coin ? String(req.query.coin).toUpperCase() : null;
+  const limit = Number(req.query.limit || 50);
+  const filtered = takeLatest(
+    rawSignals,
+    (signal) => signal.status === SIGNAL_STATUS.ACTIVE && (!coin || signal.coin === coin),
+    limit
+  );
 
-  const result = { signals: filtered.slice(0, Number(req.query.limit || 50)) };
+  const result = { signals: filtered };
   cache.set(cacheKey, result, 20); // 20s TTL
   return res.json(result);
 });
@@ -419,13 +435,15 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
 
   const rawSignals = await readCollection("signals");
   // History = closed signals that hit TP or SL (NOT expired)
-  const filtered = sortByCreatedAtDesc(rawSignals)
-    .filter((signal) => signal.status === SIGNAL_STATUS.CLOSED && signal.result !== "EXPIRED")
-    .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
+  const coin = req.query.coin ? String(req.query.coin).toUpperCase() : null;
+  const limit = Number(req.query.limit || 0);
+  const predicate = (signal) =>
+    signal.status === SIGNAL_STATUS.CLOSED &&
+    signal.result !== "EXPIRED" &&
+    (!coin || signal.coin === coin);
+  const signals = limit ? takeLatest(rawSignals, predicate, limit) : rawSignals.filter(predicate);
 
-  const result = {
-    signals: req.query.limit ? filtered.slice(0, Number(req.query.limit)) : filtered,
-  };
+  const result = { signals };
   cache.set(cacheKey, result, 30);
   return res.json(result);
 });
@@ -438,13 +456,13 @@ router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
   // Expire any stale actives first so this list is always up-to-date
   await expireStaleActives("signals");
   const rawSignals = await readCollection("signals");
-  const filtered = sortByCreatedAtDesc(rawSignals)
-    .filter((signal) => signal.result === "EXPIRED")
-    .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
+  const coin = req.query.coin ? String(req.query.coin).toUpperCase() : null;
+  const limit = Number(req.query.limit || 0);
+  const predicate = (signal) =>
+    signal.result === "EXPIRED" && (!coin || signal.coin === coin);
+  const signals = limit ? takeLatest(rawSignals, predicate, limit) : rawSignals.filter(predicate);
 
-  const result = {
-    signals: req.query.limit ? filtered.slice(0, Number(req.query.limit)) : filtered,
-  };
+  const result = { signals };
   cache.set(cacheKey, result, 20);
   return res.json(result);
 });

@@ -80,6 +80,10 @@ export default function Crypto() {
   const [tfFilter, setTfFilter]             = useState("ALL"); // "ALL"|"1m"|"5m"|"15m"|"30m"|"1h"
   const [historyLimit, setHistoryLimit]     = useState(50);
   const [expiredLimit, setExpiredLimit]     = useState(50);
+  const [historyLoaded, setHistoryLoaded]   = useState(false);
+  const [expiredLoaded, setExpiredLoaded]   = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [expiredLoading, setExpiredLoading] = useState(false);
 
   const ALL_TF = ["1m","5m","15m","30m","1h"];
 
@@ -210,18 +214,6 @@ export default function Crypto() {
         const allActive = activeRes.status === "fulfilled" ? (activeRes.value.signals || []) : [];
         setActiveSignals(allActive.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe)));
         setLoading(false); // show page immediately
-
-        // Phase 2: history (TP/SL only) + expired — parallel, background
-        const [historyRes, expiredRes] = await Promise.allSettled([
-          apiFetch("/signals/history?limit=500"),
-          apiFetch("/signals/expired?limit=500"),
-        ]);
-        if (!mounted) return;
-
-        const allHistory = historyRes.status === "fulfilled" ? (historyRes.value.signals || []) : [];
-        const allExpired = expiredRes.status === "fulfilled" ? (expiredRes.value.signals || []) : [];
-        setHistorySignals(allHistory.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe)));
-        setExpiredSignals(allExpired.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe)));
       } catch (e) {
         if (mounted) { setError(e.message); setLoading(false); }
       }
@@ -231,6 +223,37 @@ export default function Crypto() {
     const id = window.setInterval(load, 120_000);
     return () => { mounted = false; window.clearInterval(id); };
   }, []);
+
+  const loadHistory = useCallback(async () => {
+    if (historyLoaded || historyLoading) return;
+    setHistoryLoading(true);
+    try {
+      const res = await apiFetch("/signals/history?limit=500");
+      const allHistory = res.signals || [];
+      const ALL_TF = ["1m","5m","15m","30m","1h"];
+      setHistorySignals(allHistory.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe)));
+      setHistoryLoaded(true);
+    } catch {}
+    finally { setHistoryLoading(false); }
+  }, [historyLoaded, historyLoading]);
+
+  const loadExpired = useCallback(async () => {
+    if (expiredLoaded || expiredLoading) return;
+    setExpiredLoading(true);
+    try {
+      const res = await apiFetch("/signals/expired?limit=500");
+      const allExpired = res.signals || [];
+      const ALL_TF = ["1m","5m","15m","30m","1h"];
+      setExpiredSignals(allExpired.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe)));
+      setExpiredLoaded(true);
+    } catch {}
+    finally { setExpiredLoading(false); }
+  }, [expiredLoaded, expiredLoading]);
+
+  useEffect(() => {
+    if (tab === "closed") loadHistory();
+    if (tab === "expired") loadExpired();
+  }, [tab, loadHistory, loadExpired]);
 
   // ── Live price refresh (fallback when WS not connected) ───────────────────
   useEffect(() => {
@@ -598,7 +621,7 @@ export default function Crypto() {
           </div>
           <SignalTable
             compact
-            emptyLabel="No closed signals yet."
+            emptyLabel={historyLoading || !historyLoaded ? "Loading history..." : "No closed signals yet."}
             signals={visibleHistory}
           />
           {filteredClosed.length > historyLimit && (
@@ -638,7 +661,7 @@ export default function Crypto() {
           </div>
           <SignalTable
             compact
-            emptyLabel="No expired signals yet."
+            emptyLabel={expiredLoading || !expiredLoaded ? "Loading expired signals..." : "No expired signals yet."}
             signals={visibleExpired}
           />
           {filteredExpired.length > expiredLimit && (

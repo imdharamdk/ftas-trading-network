@@ -17,6 +17,7 @@ const COLLECTION_FILES = {
   chat_messages:      "chat-messages.json",
   communityPosts:     "community-posts.json",
   communityComments:  "community-comments.json",
+  appSettings:        "app-settings.json",
 };
 const LEGACY_COLLECTION_FILES = {
   users: ["user.json"],

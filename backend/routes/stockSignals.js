@@ -10,51 +10,9 @@ const cache = require("../services/apiCache");
 
 const router = express.Router();
 
-// ─── Stock signal expiry config ───────────────────────────────────────────────
-const SIGNAL_EXPIRY_MS = {
-  "1m":  8  * 60 * 1000,
-  "5m":  25 * 60 * 1000,
-  "15m": 90 * 60 * 1000,
-  "30m": 3  * 60 * 60 * 1000,
-  "1h":  6  * 60 * 60 * 1000,
-  "4h":  24 * 60 * 60 * 1000,
-  default: 6 * 60 * 60 * 1000,
-};
-
-function isTimeExpired(signal) {
-  if (!signal.createdAt) return false;
-  const age = Date.now() - new Date(signal.createdAt).getTime();
-  return age > (SIGNAL_EXPIRY_MS[signal.timeframe] || SIGNAL_EXPIRY_MS.default);
-}
-
-let lastExpireCheckAt = 0;
-let expireInFlight = null;
-const EXPIRE_CHECK_INTERVAL_MS = 30_000;
+// Stock signals should NOT auto-expire.
 async function expireStaleActives() {
-  const nowMs = Date.now();
-  if (expireInFlight) return expireInFlight;
-  if (nowMs - lastExpireCheckAt < EXPIRE_CHECK_INTERVAL_MS) return false;
-
-  expireInFlight = (async () => {
-    const now = new Date().toISOString();
-    let hadChanges = false;
-    await mutateCollection("stockSignals", (records) =>
-      records.map((sig) => {
-        if (sig.status !== SIGNAL_STATUS.ACTIVE || !isTimeExpired(sig)) return sig;
-        hadChanges = true;
-        return { ...sig, status: SIGNAL_STATUS.CLOSED, result: "EXPIRED", closedAt: now, updatedAt: now };
-      })
-    );
-    lastExpireCheckAt = nowMs;
-    if (hadChanges) cache.invalidatePrefix("stocks:");
-    return hadChanges;
-  })();
-
-  try {
-    return await expireInFlight;
-  } finally {
-    expireInFlight = null;
-  }
+  return false;
 }
 
 function isWinningResult(result) {
@@ -67,11 +25,23 @@ function sortByCreatedAtDesc(records) {
   });
 }
 
+// Fast path: assume records are already newest-first (they are prepended on insert).
+function takeLatest(records, predicate, limit) {
+  const out = [];
+  const max = Number(limit || 0);
+  for (const item of records) {
+    if (!predicate(item)) continue;
+    out.push(item);
+    if (max && out.length >= max) break;
+  }
+  return out;
+}
+
 function buildOverview(signals) {
   const activeSignals   = signals.filter((s) => s.status === SIGNAL_STATUS.ACTIVE);
-  const allClosed       = signals.filter((s) => s.status === SIGNAL_STATUS.CLOSED);
-  const resolvedSignals = allClosed.filter((s) => s.result !== "EXPIRED");
-  const expiredSignals  = allClosed.filter((s) => s.result === "EXPIRED");
+  const allClosed       = signals.filter((s) => s.status === SIGNAL_STATUS.CLOSED && s.result !== "EXPIRED");
+  const resolvedSignals = allClosed;
+  const expiredSignals  = [];
   const wins            = resolvedSignals.filter((s) => isWinningResult(s.result));
   const losses          = resolvedSignals.filter((s) => s.result === "SL_HIT");
   const longs           = signals.filter((s) => s.side === "LONG");
@@ -211,14 +181,18 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
 
   await expireStaleActives();
   const signals = await readCollection("stockSignals");
-  const filtered = sortByCreatedAtDesc(signals)
-    .filter((signal) => signal.status === SIGNAL_STATUS.ACTIVE)
-    .filter((signal) => !isCryptoCoin(signal.coin))
-    .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
+  const coin = req.query.coin ? String(req.query.coin).toUpperCase() : null;
+  const limit = Number(req.query.limit || 50);
+  const filtered = takeLatest(
+    signals,
+    (signal) =>
+      signal.status === SIGNAL_STATUS.ACTIVE &&
+      !isCryptoCoin(signal.coin) &&
+      (!coin || signal.coin === coin),
+    limit
+  );
 
-  const result = {
-    signals: filtered.slice(0, Number(req.query.limit || 50)),
-  };
+  const result = { signals: filtered };
   cache.set(cacheKey, result, 20);
   return res.json(result);
 });
@@ -230,14 +204,14 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
 
   const signals = await readCollection("stockSignals");
   // History = TP/SL hits only — no expired
-  const filtered = sortByCreatedAtDesc(signals)
-    .filter((signal) => signal.status === SIGNAL_STATUS.CLOSED && signal.result !== "EXPIRED")
-    .filter((signal) => !isCryptoCoin(signal.coin))
-    .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
-
-  const result = {
-    signals: req.query.limit ? filtered.slice(0, Number(req.query.limit)) : filtered,
-  };
+  const coin = req.query.coin ? String(req.query.coin).toUpperCase() : null;
+  const limit = Number(req.query.limit || 0);
+  const predicate = (signal) =>
+    signal.status === SIGNAL_STATUS.CLOSED &&
+    signal.result !== "EXPIRED" &&
+    !isCryptoCoin(signal.coin) &&
+    (!coin || signal.coin === coin);
+  const result = { signals: limit ? takeLatest(signals, predicate, limit) : signals.filter(predicate) };
   cache.set(cacheKey, result, 30);
   return res.json(result);
 });
@@ -247,16 +221,8 @@ router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
 
-  await expireStaleActives();
-  const signals = await readCollection("stockSignals");
-  const filtered = sortByCreatedAtDesc(signals)
-    .filter((signal) => signal.result === "EXPIRED")
-    .filter((signal) => !isCryptoCoin(signal.coin))
-    .filter((signal) => !req.query.coin || signal.coin === String(req.query.coin).toUpperCase());
-
-  const result = {
-    signals: req.query.limit ? filtered.slice(0, Number(req.query.limit)) : filtered,
-  };
+  // Expiry disabled for stocks — always return empty
+  const result = { signals: [] };
   cache.set(cacheKey, result, 20);
   return res.json(result);
 });
@@ -283,7 +249,7 @@ router.get("/stats/overview", requireAuth, async (req, res) => {
 
   await expireStaleActives(); // ensure stale actives are marked expired before counting
   const raw = await readCollection("stockSignals");
-  const signals = raw.filter((s) => !isCryptoCoin(s.coin));
+  const signals = raw.filter((s) => !isCryptoCoin(s.coin) && s.result !== "EXPIRED");
   const result = {
     stats: buildOverview(signals),
   };
@@ -296,7 +262,7 @@ router.get("/stats/analytics", requireAuth, async (req, res) => {
   if (cached) return res.json(cached);
 
   const raw = await readCollection("stockSignals");
-  const signals = raw.filter((s) => !isCryptoCoin(s.coin));
+  const signals = raw.filter((s) => !isCryptoCoin(s.coin) && s.result !== "EXPIRED");
   const result = {
     analytics: buildAnalytics(signals),
   };
@@ -309,7 +275,7 @@ router.get("/stats/performance", requireAuth, async (req, res) => {
   if (cached) return res.json(cached);
 
   const raw = await readCollection("stockSignals");
-  const signals = raw.filter((s) => !isCryptoCoin(s.coin));
+  const signals = raw.filter((s) => !isCryptoCoin(s.coin) && s.result !== "EXPIRED");
   const result = {
     performance: buildPerformance(signals),
   };

@@ -128,6 +128,8 @@ export default function Settings() {
   const [stockEngine, setStockEngine] = useState(null);
   const [engineBusy, setEngineBusy] = useState(false);
   const [engineMsg, setEngineMsg] = useState("");
+  const [engineSettings, setEngineSettings] = useState(null);
+  const [engineSettingsBusy, setEngineSettingsBusy] = useState(false);
 
   const loadAlerts = useCallback(async () => {
     setAlertsLoading(true);
@@ -164,12 +166,21 @@ export default function Settings() {
     setStockEngine(stockRes.status === "fulfilled" ? stockRes.value.engine : null);
   }, [isAdmin]);
 
+  const loadEngineSettings = useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      const res = await apiFetch("/settings/engines");
+      setEngineSettings(res);
+    } catch {}
+  }, [isAdmin]);
+
   useEffect(() => {
     loadAlerts();
     loadTelegram();
     loadFacebook();
     loadEngines();
-  }, [loadAlerts, loadTelegram, loadFacebook, loadEngines]);
+    loadEngineSettings();
+  }, [loadAlerts, loadTelegram, loadFacebook, loadEngines, loadEngineSettings]);
 
   const bothEnginesRunning = Boolean(cryptoEngine?.running) && Boolean(stockEngine?.running);
 
@@ -197,6 +208,25 @@ export default function Settings() {
     } finally {
       setEngineBusy(false);
       setTimeout(() => setEngineMsg(""), 4000);
+    }
+  };
+
+  const autoStartEnabled = Boolean(engineSettings?.effective?.autoStartCrypto) && Boolean(engineSettings?.effective?.autoStartStock);
+
+  const saveEngineAutoStart = async (enabled) => {
+    if (!isAdmin) return;
+    setEngineSettingsBusy(true);
+    try {
+      await apiFetch("/settings/engines", {
+        method: "POST",
+        body: { autoStartCrypto: enabled, autoStartStock: enabled },
+      });
+      await loadEngineSettings();
+    } catch (e) {
+      setEngineMsg(`❌ ${e.message}`);
+      setTimeout(() => setEngineMsg(""), 4000);
+    } finally {
+      setEngineSettingsBusy(false);
     }
   };
 
@@ -383,6 +413,19 @@ export default function Settings() {
               <button type="button" className="button button-ghost" onClick={loadEngines} disabled={engineBusy}>
                 Refresh Status
               </button>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginTop: 14 }}>
+              <div>
+                <p style={{ fontWeight: 600, marginBottom: 4 }}>Auto-start on server boot</p>
+                <p style={{ fontSize: 13, color: "#64748b" }}>
+                  Server restart ke baad dono engines automatic start honge.
+                </p>
+              </div>
+              <Toggle
+                checked={autoStartEnabled}
+                onChange={(v) => saveEngineAutoStart(v)}
+                disabled={engineSettingsBusy}
+              />
             </div>
             <p className="panel-note" style={{ marginTop: 10 }}>
               Engines run automatically on interval after start. Auto-start on server boot can be enabled with{" "}
