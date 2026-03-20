@@ -1,3 +1,4 @@
+import ErrorBoundary from "./components/ErrorBoundary";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { SessionProvider } from "./context/SessionContext";
 import { useSession } from "./context/useSession";
@@ -39,6 +40,7 @@ function SessionGate({ children, guestOnly = false }) {
 
 export default function App() {
   return (
+    <ErrorBoundary>
     <SessionProvider>
       <BrowserRouter>
         <Routes>
@@ -98,5 +100,6 @@ export default function App() {
         </Routes>
       </BrowserRouter>
     </SessionProvider>
+    </ErrorBoundary>
   );
 }
