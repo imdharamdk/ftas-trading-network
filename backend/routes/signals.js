@@ -19,6 +19,14 @@ const { createManualSignal, generateForCoin, getPausedCoins, getStatus, pauseCoi
 
 const router = express.Router();
 
+// ─── /api/config — expose shared constants to frontend ───────────────────────
+// Frontend reads this at startup so SIGNAL_EXPIRY_MS stays in sync with backend
+router.get("/config", (_req, res) => {
+  const { SIGNAL_EXPIRY_MS } = require("../constants");
+  return res.json({ signalExpiryMs: SIGNAL_EXPIRY_MS });
+});
+
+
 // FIXED: dropExpiredSignals now ONLY filters for display — never deletes from storage.
 // EXPIRED signals must stay in storage so stats (win rate, total closed, expired count) are correct.
 // Deletion only happens via explicit admin "Archive Closed" action.
@@ -27,20 +35,8 @@ function dropExpiredSignals(signals) {
   return source.filter((signal) => signal.result !== "EXPIRED");
 }
 
-// ─── Time-based expiry config (must match signalEngine values) ────────────────
-const SIGNAL_EXPIRY_MS = {
-  "1m":  8  * 60 * 1000,
-  "5m":  25 * 60 * 1000,
-  "15m": 90 * 60 * 1000,
-  "30m": 3  * 60 * 60 * 1000,
-  "1h":  6  * 60 * 60 * 1000,
-  "4h":  24 * 60 * 60 * 1000,
-  default: 6 * 60 * 60 * 1000,
-};
-
-function getExpiryMs(timeframe) {
-  return SIGNAL_EXPIRY_MS[timeframe] || SIGNAL_EXPIRY_MS.default;
-}
+// FIX: Use shared constants — no more copy-paste duplication
+const { getExpiryMs } = require("../constants");
 
 function isTimeExpired(signal) {
   if (!signal.createdAt) return false;
