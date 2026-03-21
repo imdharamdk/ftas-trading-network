@@ -29,6 +29,7 @@ const { createWsServer, getConnectedCount } = require("./services/wsServer");
 const sseManager           = require("./services/sseManager");
 const { readCollection } = require("./storage/fileStore");
 const { envToBool, resolveAutoStart } = require("./services/engineAutostart");
+const { startMaintenanceScheduler } = require("./services/maintenanceScheduler");
 
 const PORT     = Number(process.env.PORT || 5000);
 const distPath = path.join(__dirname, "..", "dist");
@@ -325,6 +326,8 @@ async function startServer(port = PORT) {
         console.log("Stock/FO scanner started");
       }
     })().catch(() => {});
+
+    startMaintenanceScheduler();
   });
 }
 

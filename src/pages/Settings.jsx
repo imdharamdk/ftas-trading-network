@@ -135,6 +135,11 @@ export default function Settings() {
   const [engineSettingsBusy, setEngineSettingsBusy] = useState(false);
   const [maintenanceBusy, setMaintenanceBusy] = useState("");
   const [maintenanceMsg, setMaintenanceMsg] = useState("");
+  const [maintenanceSettings, setMaintenanceSettings] = useState({ autoCloseSignals: false, autoClearHistory: false, lastAutoCloseAt: null, lastAutoClearAt: null });
+  const [maintenanceSettingsBusy, setMaintenanceSettingsBusy] = useState(false);
+  const [maintenanceSettingsMsg, setMaintenanceSettingsMsg] = useState("");
+  const [maintenanceRunBusy, setMaintenanceRunBusy] = useState(false);
+  const [maintenanceRunMsg, setMaintenanceRunMsg] = useState("");
 
   // Risk preference (all users)
   const [riskDraft, setRiskDraft] = useState(user?.riskPreference || "BALANCED");
@@ -215,13 +220,29 @@ export default function Settings() {
     } catch {}
   }, [isAdmin]);
 
+  const loadMaintenanceSettings = useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      const res = await apiFetch("/settings/maintenance");
+      if (res?.settings) {
+        setMaintenanceSettings({
+          autoCloseSignals: Boolean(res.settings.autoCloseSignals),
+          autoClearHistory: Boolean(res.settings.autoClearHistory),
+          lastAutoCloseAt: res.settings.lastAutoCloseAt || null,
+          lastAutoClearAt: res.settings.lastAutoClearAt || null,
+        });
+      }
+    } catch {}
+  }, [isAdmin]);
+
   useEffect(() => {
     loadAlerts();
     loadTelegram();
     loadFacebook();
     loadEngines();
     loadEngineSettings();
-  }, [loadAlerts, loadTelegram, loadFacebook, loadEngines, loadEngineSettings]);
+    loadMaintenanceSettings();
+  }, [loadAlerts, loadTelegram, loadFacebook, loadEngines, loadEngineSettings, loadMaintenanceSettings]);
 
   useEffect(() => {
     setRiskDraft(user?.riskPreference || "BALANCED");
@@ -291,6 +312,66 @@ export default function Settings() {
     }
   };
 
+  const saveMaintenanceAutoClose = async (enabled) => {
+    if (!isAdmin) return;
+    setMaintenanceSettingsBusy(true);
+    setMaintenanceSettingsMsg("");
+    try {
+      const res = await apiFetch("/settings/maintenance", {
+        method: "POST",
+        body: { autoCloseSignals: enabled, autoClearHistory: maintenanceSettings.autoClearHistory },
+      });
+      if (res?.settings) setMaintenanceSettings(res.settings);
+      setMaintenanceSettingsMsg("✅ Maintenance settings updated");
+    } catch (e) {
+      setMaintenanceSettingsMsg(`❌ ${e.message}`);
+    } finally {
+      setMaintenanceSettingsBusy(false);
+      setTimeout(() => setMaintenanceSettingsMsg(""), 4000);
+    }
+  };
+
+  const saveMaintenanceAutoClear = async (enabled) => {
+    if (!isAdmin) return;
+    setMaintenanceSettingsBusy(true);
+    setMaintenanceSettingsMsg("");
+    try {
+      const res = await apiFetch("/settings/maintenance", {
+        method: "POST",
+        body: { autoCloseSignals: maintenanceSettings.autoCloseSignals, autoClearHistory: enabled },
+      });
+      if (res?.settings) setMaintenanceSettings(res.settings);
+      setMaintenanceSettingsMsg("✅ Maintenance settings updated");
+    } catch (e) {
+      setMaintenanceSettingsMsg(`❌ ${e.message}`);
+    } finally {
+      setMaintenanceSettingsBusy(false);
+      setTimeout(() => setMaintenanceSettingsMsg(""), 4000);
+    }
+  };
+
+  const runMaintenanceNow = async () => {
+    if (!isAdmin) return;
+    setMaintenanceRunBusy(true);
+    setMaintenanceRunMsg("");
+    try {
+      const action = maintenanceSettings.autoClearHistory ? "AUTO_CLOSE_AND_CLEAR" : "AUTO_CLOSE";
+      const res = await apiFetch("/settings/maintenance/run", { method: "POST", body: { action } });
+      const result = res?.result || {};
+      const closedTotal = (result.cryptoClosed || 0) + (result.stockClosed || 0);
+      const clearedTotal = (result.cryptoCleared || 0) + (result.stockCleared || 0);
+      let msg = `✅ Auto-close completed. Closed ${closedTotal} signal(s).`;
+      if (action === "AUTO_CLOSE_AND_CLEAR") msg += ` Cleared ${clearedTotal} signal(s).`;
+      setMaintenanceRunMsg(msg);
+      await loadMaintenanceSettings();
+    } catch (e) {
+      setMaintenanceRunMsg(`❌ ${e.message}`);
+    } finally {
+      setMaintenanceRunBusy(false);
+      setTimeout(() => setMaintenanceRunMsg(""), 5000);
+    }
+  };
+
   const runArchiveAction = async (key, url, action) => {
     setMaintenanceBusy(key);
     setMaintenanceMsg("");
@@ -335,6 +416,13 @@ export default function Settings() {
     } catch (e) { setTgMsg(`❌ ${e.message}`); }
     finally { setTgBusy(false); setTimeout(() => setTgMsg(""), 4000); }
   };
+
+  const lastAutoCloseLabel = maintenanceSettings?.lastAutoCloseAt
+    ? new Date(maintenanceSettings.lastAutoCloseAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
+    : "—";
+  const lastAutoClearLabel = maintenanceSettings?.lastAutoClearAt
+    ? new Date(maintenanceSettings.lastAutoClearAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
+    : "—";
 
   return (
     <AppShell title="Settings" subtitle="Notifications, alerts, and integrations">
@@ -600,6 +688,62 @@ export default function Settings() {
             <p className="panel-note">
               Archive moves closed signals to a separate file so pages load faster. Active signals remain untouched.
             </p>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+              <div>
+                <p style={{ fontWeight: 600, marginBottom: 4 }}>Auto close signals (5:30 AM IST)</p>
+                <p style={{ fontSize: 13, color: "#64748b" }}>
+                  Daily job closes all ACTIVE crypto + stock signals at 5:30 AM IST and marks them expired.
+                </p>
+                <p style={{ fontSize: 12, color: "#94a3b8", marginTop: 6 }}>Last auto-close: {lastAutoCloseLabel}</p>
+              </div>
+              <Toggle
+                checked={maintenanceSettings.autoCloseSignals}
+                onChange={saveMaintenanceAutoClose}
+                disabled={maintenanceSettingsBusy}
+              />
+            </div>
+            {maintenanceSettingsMsg && (
+              <p style={{ fontSize: 13, color: maintenanceSettingsMsg.startsWith("✅") ? "#2bd48f" : "#f87171" }}>
+                {maintenanceSettingsMsg}
+              </p>
+            )}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14, marginTop: 6 }}>
+              <div>
+                <p style={{ fontWeight: 600, marginBottom: 4 }}>Auto clear history (5:30 AM IST)</p>
+                <p style={{ fontSize: 13, color: "#64748b" }}>
+                  Removes CLOSED/EXPIRED signals daily. ACTIVE signals remain.
+                </p>
+                <p style={{ fontSize: 12, color: "#94a3b8", marginTop: 6 }}>Last auto-clear: {lastAutoClearLabel}</p>
+              </div>
+              <Toggle
+                checked={maintenanceSettings.autoClearHistory}
+                onChange={saveMaintenanceAutoClear}
+                disabled={maintenanceSettingsBusy}
+              />
+            </div>
+            {maintenanceSettings.autoCloseSignals && maintenanceSettings.autoClearHistory && (
+              <p className="panel-note" style={{ marginBottom: 10, color: "#fbbf24" }}>
+                When both are enabled, all signals will be closed and then cleared at 5:30 AM IST.
+              </p>
+            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={runMaintenanceNow}
+                disabled={maintenanceRunBusy}
+              >
+                {maintenanceRunBusy ? "Running..." : "Run Now"}
+              </button>
+              <span style={{ fontSize: 12, color: "#94a3b8" }}>
+                Run now will also clear history if auto-clear is enabled.
+              </span>
+            </div>
+            {maintenanceRunMsg && (
+              <p style={{ fontSize: 13, color: maintenanceRunMsg.startsWith("✅") ? "#2bd48f" : "#f87171" }}>
+                {maintenanceRunMsg}
+              </p>
+            )}
             <div className="section-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
               <div className="panel" style={{ margin: 0 }}>
                 <div className="panel-header">
