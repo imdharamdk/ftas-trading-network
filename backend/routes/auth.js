@@ -10,7 +10,7 @@ const {
   normalizeRiskPreference,
   sanitizeUser,
 } = require("../models/User");
-const { mutateCollection, readCollection } = require("../storage/fileStore");
+const { mutateCollection, readCollection, writeCollection } = require("../storage/fileStore");
 
 const router = express.Router();
 
@@ -108,49 +108,27 @@ router.get("/me", requireAuth, async (req, res) => {
   });
 });
 
-// Update self preferences (risk profile, etc.)
+// Update self preferences (admin-only risk profile)
 router.patch("/me", requireAuth, async (req, res) => {
   try {
-    const allowed = ["riskPreference"];
-    const result = await mutateCollection("users", (records) => {
-      let updatedUser = null;
-
-      const nextRecords = records.map((user) => {
-        if (user.id !== req.userId) {
-          return user;
-        }
-
-        updatedUser = {
-          ...user,
-          updatedAt: new Date().toISOString(),
-        };
-
-        allowed.forEach((field) => {
-          if (req.body[field] !== undefined) {
-            if (field === "riskPreference") {
-              updatedUser[field] = normalizeRiskPreference(req.body[field]);
-            } else {
-              updatedUser[field] = req.body[field];
-            }
-          }
-        });
-
-        return updatedUser;
-      });
-
-      return {
-        records: nextRecords,
-        value: updatedUser,
-      };
-    });
-
-    if (!result) {
-      return res.status(404).json({ message: "User not found" });
+    if (req.body?.riskPreference === undefined) {
+      return res.status(400).json({ message: "Nothing to update" });
     }
 
-    invalidateUserCache(req.userId);
+    if (req.user?.role !== USER_ROLES.ADMIN) {
+      return res.status(403).json({ message: "Risk profile can only be set by admin" });
+    }
+
+    const preference = normalizeRiskPreference(req.body.riskPreference);
+    const settings = await readCollection("appSettings");
+    const next = [
+      ...settings.filter((s) => s?.id !== "risk"),
+      { id: "risk", preference, updatedAt: new Date().toISOString() },
+    ];
+    await writeCollection("appSettings", next);
+
     return res.json({
-      user: sanitizeUser(result),
+      user: { ...req.user, riskPreference: preference, effectiveRiskPreference: preference },
     });
   } catch (error) {
     return res.status(500).json({ message: error.message });
@@ -166,7 +144,7 @@ router.get("/users", requireAuth, requireAdmin, async (req, res) => {
 
 router.patch("/users/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const allowed = ["isActive", "name", "plan", "role", "subscriptionEndsAt", "subscriptionStatus", "riskPreference"];
+    const allowed = ["isActive", "name", "plan", "role", "subscriptionEndsAt", "subscriptionStatus"];
     const result = await mutateCollection("users", (records) => {
       let updatedUser = null;
 

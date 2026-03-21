@@ -2,6 +2,7 @@ const express = require("express");
 const { requireAdmin, requireAuth } = require("../middleware/auth");
 const { readCollection, writeCollection } = require("../storage/fileStore");
 const { envToBool, resolveAutoStart } = require("../services/engineAutostart");
+const { normalizeRiskPreference } = require("../models/User");
 
 const router = express.Router();
 
@@ -61,6 +62,7 @@ router.get("/maintenance", requireAuth, requireAdmin, async (_req, res) => {
       autoClearHistory: Boolean(record.autoClearHistory),
       lastAutoCloseAt: record.lastAutoCloseAt || null,
       lastAutoClearAt: record.lastAutoClearAt || null,
+      lastRunSummary: record.lastRunSummary || null,
     },
   });
 });
@@ -83,6 +85,7 @@ router.post("/maintenance", requireAuth, requireAdmin, async (req, res) => {
       lastAutoCloseDate: record.lastAutoCloseDate || null,
       lastAutoClearAt: record.lastAutoClearAt || null,
       lastAutoClearDate: record.lastAutoClearDate || null,
+      lastRunSummary: record.lastRunSummary || null,
       updatedAt: new Date().toISOString(),
     },
   ];
@@ -94,6 +97,7 @@ router.post("/maintenance", requireAuth, requireAdmin, async (req, res) => {
       autoClearHistory,
       lastAutoCloseAt: record.lastAutoCloseAt || null,
       lastAutoClearAt: record.lastAutoClearAt || null,
+      lastRunSummary: record.lastRunSummary || null,
     },
   });
 });
@@ -114,6 +118,24 @@ router.post("/maintenance/run", requireAuth, requireAdmin, async (req, res) => {
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }
+});
+
+router.get("/risk", requireAuth, async (_req, res) => {
+  const settings = await readCollection("appSettings");
+  const record = settings.find((s) => s?.id === "risk") || {};
+  const preference = normalizeRiskPreference(record.preference);
+  return res.json({ preference, updatedAt: record.updatedAt || null });
+});
+
+router.post("/risk", requireAuth, requireAdmin, async (req, res) => {
+  const preference = normalizeRiskPreference(req.body?.preference);
+  const settings = await readCollection("appSettings");
+  const next = [
+    ...settings.filter((s) => s?.id !== "risk"),
+    { id: "risk", preference, updatedAt: new Date().toISOString() },
+  ];
+  await writeCollection("appSettings", next);
+  return res.json({ preference });
 });
 
 module.exports = router;

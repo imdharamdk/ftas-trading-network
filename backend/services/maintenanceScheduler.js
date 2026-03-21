@@ -54,6 +54,27 @@ function getIstDateKey(parts) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+function buildRunSummary(result, { source, action, ranAt }) {
+  const cryptoClosed = Number(result?.cryptoClosed || 0);
+  const stockClosed = Number(result?.stockClosed || 0);
+  const cryptoCleared = Number(result?.cryptoCleared || 0);
+  const stockCleared = Number(result?.stockCleared || 0);
+  const closedTotal = cryptoClosed + stockClosed;
+  const clearedTotal = cryptoCleared + stockCleared;
+
+  return {
+    source,
+    action,
+    ranAt,
+    closedTotal,
+    clearedTotal,
+    cryptoClosed,
+    stockClosed,
+    cryptoCleared,
+    stockCleared,
+  };
+}
+
 async function closeActiveInCollection(name, isStock, reason) {
   const now = new Date().toISOString();
   const closed = [];
@@ -156,6 +177,11 @@ async function runAutoCloseIfDue() {
 
   if (result?.skipped) return;
 
+  const action = autoCloseDue && autoClearDue
+    ? "AUTO_CLOSE_AND_CLEAR"
+    : (autoCloseDue ? "AUTO_CLOSE" : "CLEAR_HISTORY");
+  const summary = buildRunSummary(result, { source: "AUTO", action, ranAt: nowIso });
+
   const next = [
     ...settings.filter((s) => s?.id !== "maintenance"),
     {
@@ -166,6 +192,7 @@ async function runAutoCloseIfDue() {
       lastAutoCloseAt: autoCloseDue ? nowIso : (record.lastAutoCloseAt || null),
       lastAutoClearDate: autoClearDue ? dateKey : (record.lastAutoClearDate || null),
       lastAutoClearAt: autoClearDue ? nowIso : (record.lastAutoClearAt || null),
+      lastRunSummary: summary,
       updatedAt: nowIso,
     },
   ];
@@ -193,6 +220,8 @@ async function runMaintenanceNow(action = "AUTO_CLOSE") {
 
   if (result?.skipped) return result;
 
+  const summary = buildRunSummary(result, { source: "MANUAL", action, ranAt: nowIso });
+
   const next = [
     ...settings.filter((s) => s?.id !== "maintenance"),
     {
@@ -203,6 +232,7 @@ async function runMaintenanceNow(action = "AUTO_CLOSE") {
       lastAutoCloseAt: autoClose ? nowIso : (record.lastAutoCloseAt || null),
       lastAutoClearDate: autoClear ? dateKey : (record.lastAutoClearDate || null),
       lastAutoClearAt: autoClear ? nowIso : (record.lastAutoClearAt || null),
+      lastRunSummary: summary,
       updatedAt: nowIso,
     },
   ];

@@ -10,29 +10,84 @@
 const express   = require("express");
 const webpush   = require("web-push");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
-const { mutateCollection, readCollection } = require("../storage/fileStore");
+const { mutateCollection, readCollection, writeCollection } = require("../storage/fileStore");
 
 const router = express.Router();
 
 // ── VAPID setup ───────────────────────────────────────────────────────────────
 // Generate keys once: node -e "const wp=require('web-push'); console.log(wp.generateVAPIDKeys())"
 // Then set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY in Render env vars
-const VAPID_PUBLIC_KEY  = process.env.VAPID_PUBLIC_KEY  || "";
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "";
-const VAPID_EMAIL       = process.env.VAPID_EMAIL || "mailto:admin@ftas.app";
+let VAPID_PUBLIC_KEY  = process.env.VAPID_PUBLIC_KEY  || "";
+let VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "";
+let VAPID_EMAIL       = process.env.VAPID_EMAIL || "mailto:admin@ftas.app";
 
-if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+
+let vapidReady = false;
+let vapidInit = null;
+
+function applyVapidKeys(publicKey, privateKey, email) {
+  if (!publicKey || !privateKey) return false;
+  VAPID_PUBLIC_KEY = publicKey;
+  VAPID_PRIVATE_KEY = privateKey;
+  VAPID_EMAIL = email || VAPID_EMAIL;
   webpush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
-  console.log("[push] VAPID configured ✅");
-} else {
-  console.warn("[push] VAPID keys not set — push notifications disabled");
+  vapidReady = true;
+  return true;
+}
+
+async function ensureVapidKeys() {
+  if (vapidReady && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) return true;
+  if (vapidInit) return vapidInit;
+
+  vapidInit = (async () => {
+    if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+      applyVapidKeys(VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_EMAIL);
+      console.log("[push] VAPID configured ✅");
+      return true;
+    }
+
+    try {
+      const settings = await readCollection("appSettings");
+      const record = settings.find((s) => s?.id === "vapid") || {};
+      if (record.publicKey && record.privateKey) {
+        applyVapidKeys(record.publicKey, record.privateKey, record.email || VAPID_EMAIL);
+        console.log("[push] VAPID loaded from app settings ✅");
+        return true;
+      }
+    } catch {}
+
+    try {
+      const generated = webpush.generateVAPIDKeys();
+      if (applyVapidKeys(generated.publicKey, generated.privateKey, VAPID_EMAIL)) {
+        const settings = await readCollection("appSettings");
+        const next = [
+          ...settings.filter((s) => s?.id !== "vapid"),
+          { id: "vapid", publicKey: VAPID_PUBLIC_KEY, privateKey: VAPID_PRIVATE_KEY, email: VAPID_EMAIL, updatedAt: new Date().toISOString() },
+        ];
+        await writeCollection("appSettings", next);
+        console.log("[push] VAPID generated and stored ✅");
+        return true;
+      }
+    } catch (err) {
+      console.warn("[push] VAPID generation failed:", err.message);
+    }
+
+    return false;
+  })();
+
+  try {
+    return await vapidInit;
+  } finally {
+    vapidInit = null;
+  }
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 // Return VAPID public key to frontend
-router.get("/vapid-public-key", (req, res) => {
-  if (!VAPID_PUBLIC_KEY) return res.status(503).json({ message: "Push notifications not configured" });
+router.get("/vapid-public-key", async (req, res) => {
+  const ready = await ensureVapidKeys();
+  if (!ready || !VAPID_PUBLIC_KEY) return res.status(503).json({ message: "Push notifications not configured" });
   res.json({ publicKey: VAPID_PUBLIC_KEY });
 });
 
@@ -86,7 +141,8 @@ router.post("/test", requireAuth, requireAdmin, async (req, res) => {
  * Send push notification to all subscribed users with signal access
  */
 async function broadcastSignalPush(signal) {
-  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return;
+  const ready = await ensureVapidKeys();
+  if (!ready) return;
   try {
     const subs    = await readCollection("pushSubscriptions");
     const { hasSignalAccess } = require("../models/User");
@@ -120,7 +176,8 @@ async function broadcastSignalPush(signal) {
 }
 
 async function sendPushToUser(userId, data) {
-  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return [];
+  const ready = await ensureVapidKeys();
+  if (!ready) return [];
   try {
     const subs = await readCollection("pushSubscriptions");
     const userSubs = subs.filter(s => s.userId === userId);

@@ -60,7 +60,6 @@ function PriceAlertForm({ onAdded }) {
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
   };
-
   return (
     <form onSubmit={submit} style={{ display: "grid", gap: 10 }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
@@ -101,7 +100,7 @@ const inputStyle = {
 
 // ─── Main Settings Page ───────────────────────────────────────────────────────
 export default function Settings() {
-  const { user, logout, refreshUser } = useSession();
+  const { user, logout } = useSession();
   const isAdmin  = user?.role === "ADMIN";
 
   const { permission, subscribed, supported, loading: pushLoading, error: pushError, subscribe, unsubscribe } = usePushNotifications();
@@ -135,14 +134,14 @@ export default function Settings() {
   const [engineSettingsBusy, setEngineSettingsBusy] = useState(false);
   const [maintenanceBusy, setMaintenanceBusy] = useState("");
   const [maintenanceMsg, setMaintenanceMsg] = useState("");
-  const [maintenanceSettings, setMaintenanceSettings] = useState({ autoCloseSignals: false, autoClearHistory: false, lastAutoCloseAt: null, lastAutoClearAt: null });
+  const [maintenanceSettings, setMaintenanceSettings] = useState({ autoCloseSignals: false, autoClearHistory: false, lastAutoCloseAt: null, lastAutoClearAt: null, lastRunSummary: null });
   const [maintenanceSettingsBusy, setMaintenanceSettingsBusy] = useState(false);
   const [maintenanceSettingsMsg, setMaintenanceSettingsMsg] = useState("");
   const [maintenanceRunBusy, setMaintenanceRunBusy] = useState(false);
   const [maintenanceRunMsg, setMaintenanceRunMsg] = useState("");
 
   // Risk preference (all users)
-  const [riskDraft, setRiskDraft] = useState(user?.riskPreference || "BALANCED");
+  const [riskDraft, setRiskDraft] = useState("BALANCED");
   const [riskBusy, setRiskBusy] = useState(false);
   const [riskMsg, setRiskMsg] = useState("");
 
@@ -230,8 +229,17 @@ export default function Settings() {
           autoClearHistory: Boolean(res.settings.autoClearHistory),
           lastAutoCloseAt: res.settings.lastAutoCloseAt || null,
           lastAutoClearAt: res.settings.lastAutoClearAt || null,
+          lastRunSummary: res.settings.lastRunSummary || null,
         });
       }
+    } catch {}
+  }, [isAdmin]);
+
+  const loadRiskSettings = useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      const res = await apiFetch("/settings/risk");
+      if (res?.preference) setRiskDraft(res.preference);
     } catch {}
   }, [isAdmin]);
 
@@ -242,11 +250,8 @@ export default function Settings() {
     loadEngines();
     loadEngineSettings();
     loadMaintenanceSettings();
-  }, [loadAlerts, loadTelegram, loadFacebook, loadEngines, loadEngineSettings, loadMaintenanceSettings]);
-
-  useEffect(() => {
-    setRiskDraft(user?.riskPreference || "BALANCED");
-  }, [user?.riskPreference]);
+    loadRiskSettings();
+  }, [loadAlerts, loadTelegram, loadFacebook, loadEngines, loadEngineSettings, loadMaintenanceSettings, loadRiskSettings]);
 
   const bothEnginesRunning = Boolean(cryptoEngine?.running) && Boolean(stockEngine?.running);
 
@@ -298,12 +303,13 @@ export default function Settings() {
   };
 
   const saveRiskPreference = async () => {
+    if (!isAdmin) return;
     setRiskBusy(true);
     setRiskMsg("");
     try {
-      await apiFetch("/auth/me", { method: "PATCH", body: { riskPreference: riskDraft } });
-      await refreshUser();
-      setRiskMsg("✅ Risk preference updated");
+      const res = await apiFetch("/settings/risk", { method: "POST", body: { preference: riskDraft } });
+      if (res?.preference) setRiskDraft(res.preference);
+      setRiskMsg("✅ Risk profile updated");
     } catch (e) {
       setRiskMsg(`❌ ${e.message}`);
     } finally {
@@ -423,6 +429,14 @@ export default function Settings() {
   const lastAutoClearLabel = maintenanceSettings?.lastAutoClearAt
     ? new Date(maintenanceSettings.lastAutoClearAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
     : "—";
+  const lastRunSummary = maintenanceSettings?.lastRunSummary || null;
+  const lastRunAtLabel = lastRunSummary?.ranAt
+    ? new Date(lastRunSummary.ranAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
+    : "—";
+  const lastRunAction = lastRunSummary?.action || "—";
+  const lastRunSource = lastRunSummary?.source || "—";
+  const lastRunClosed = Number(lastRunSummary?.closedTotal || 0);
+  const lastRunCleared = Number(lastRunSummary?.clearedTotal || 0);
 
   return (
     <AppShell title="Settings" subtitle="Notifications, alerts, and integrations">
@@ -605,7 +619,8 @@ export default function Settings() {
         </Section>
 
         {/* ── Risk Preference ── */}
-        <Section eyebrow="Signals" title="Risk Profile" accent="#8b5cf6">
+        {isAdmin && (
+          <Section eyebrow="Signals" title="Risk Profile" accent="#8b5cf6">
           <div style={{ display: "grid", gap: 12 }}>
             <p style={{ fontSize: 13, color: "#64748b" }}>
               Choose how strict signal filtering should be. Higher risk = more signals, lower win-rate. Conservative = fewer, higher quality.
@@ -625,12 +640,13 @@ export default function Settings() {
                 {riskBusy ? "Saving..." : "Save Preference"}
               </button>
               <span style={{ fontSize: 12, color: "#64748b" }}>
-                Current: <strong style={{ color: "#e2e8f0" }}>{user?.riskPreference || "BALANCED"}</strong>
+                Current: <strong style={{ color: "#e2e8f0" }}>{riskDraft}</strong>
               </span>
             </div>
             {riskMsg && <p style={{ fontSize: 13, color: riskMsg.startsWith("✅") ? "#2bd48f" : "#f87171" }}>{riskMsg}</p>}
           </div>
         </Section>
+        )}
 
         {/* ── Engines (Admin only) ── */}
         {isAdmin && (
@@ -743,6 +759,22 @@ export default function Settings() {
               <p style={{ fontSize: 13, color: maintenanceRunMsg.startsWith("✅") ? "#2bd48f" : "#f87171" }}>
                 {maintenanceRunMsg}
               </p>
+            )}
+            {lastRunSummary && (
+              <div style={{
+                background: "rgba(59,130,246,0.12)",
+                border: "1px solid rgba(59,130,246,0.3)",
+                borderRadius: 10,
+                padding: "10px 14px",
+                marginBottom: 12,
+                color: "#bfdbfe",
+                fontSize: 12,
+              }}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Last maintenance run</div>
+                <div>Time: {lastRunAtLabel} IST</div>
+                <div>Source: {lastRunSource} | Action: {lastRunAction}</div>
+                <div>Closed: {lastRunClosed} | Cleared: {lastRunCleared}</div>
+              </div>
             )}
             <div className="section-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
               <div className="panel" style={{ margin: 0 }}>

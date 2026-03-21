@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken");
 const { readCollection } = require("../storage/fileStore");
-const { hasSignalAccess, sanitizeUser } = require("../models/User");
+const { hasSignalAccess, sanitizeUser, normalizeRiskPreference } = require("../models/User");
 
 const JWT_SECRET = process.env.JWT_SECRET || "";
 
@@ -26,6 +26,24 @@ const EFFECTIVE_SECRET = JWT_SECRET || "ftas_super_secret_dev_only";
 // long enough to avoid hammering the DB on every request.
 const USER_CACHE     = new Map(); // userId → { user, expiresAt }
 const USER_CACHE_TTL = 90 * 1000; // 90 seconds
+
+const RISK_CACHE_TTL = 30 * 1000; // 30 seconds
+let RISK_CACHE = { value: null, expiresAt: 0 };
+
+async function getGlobalRiskPreference() {
+  if (Date.now() < RISK_CACHE.expiresAt && RISK_CACHE.value) {
+    return RISK_CACHE.value;
+  }
+  try {
+    const settings = await readCollection("appSettings");
+    const record = settings.find((s) => s?.id === "risk") || {};
+    const pref = normalizeRiskPreference(record.preference);
+    RISK_CACHE = { value: pref, expiresAt: Date.now() + RISK_CACHE_TTL };
+    return pref;
+  } catch {
+    return null;
+  }
+}
 
 function getCachedUser(userId) {
   const entry = USER_CACHE.get(userId);
@@ -94,6 +112,15 @@ async function requireAuth(req, res, next) {
     req.user    = sanitizeUser(user);
     req.userId  = user.id;
     req.rawUser = user;
+
+    try {
+      const pref = await getGlobalRiskPreference();
+      if (pref) {
+        req.user.riskPreference = pref;
+        req.user.effectiveRiskPreference = pref;
+      }
+    } catch {}
+
     return next();
   } catch {
     return res.status(401).json({ message: "Invalid token" });
