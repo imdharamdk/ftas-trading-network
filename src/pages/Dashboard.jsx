@@ -43,6 +43,7 @@ const fallbackPaymentSettings = {
 const EXPIRY_PROMPT_STORAGE_KEY = "ftas_expiry_prompt_dismissed";
 const ANALYTICS_REFRESH_MS = 10 * 60 * 1000;
 const MISSED_SIGNALS_LAST_SEEN_KEY = "ftas_missed_signals_last_seen";
+const AUTO_RECO_APPLY_STORAGE_KEY = "ftas_auto_reco_applied_v1";
 
 function deferTask(fn) {
   if (typeof window !== "undefined" && "requestIdleCallback" in window) {
@@ -77,6 +78,82 @@ function buildPlanUpdate(plan) {
 
 function hasActivePaidPlan(user) {
   return user?.subscriptionStatus === "ACTIVE" && ["PRO", "PREMIUM"].includes(user?.plan);
+}
+
+function normalizeDashboardSignalPrefs(value = {}) {
+  return {
+    minConfidence: Number(value?.minConfidence || 0),
+    sides: Array.isArray(value?.sides) && value.sides.length ? value.sides : ["LONG", "SHORT"],
+    timeframes: Array.isArray(value?.timeframes) ? value.timeframes : [],
+    blockedTimeframes: Array.isArray(value?.blockedTimeframes) ? value.blockedTimeframes : [],
+    excludedCoins: Array.isArray(value?.excludedCoins) ? value.excludedCoins : [],
+    onlyStrong: Boolean(value?.onlyStrong),
+  };
+}
+
+function buildSignalPreferencePayload(prefs = {}) {
+  const normalized = normalizeDashboardSignalPrefs(prefs);
+  return {
+    minConfidence: Number(normalized.minConfidence || 0),
+    onlyStrong: Boolean(normalized.onlyStrong),
+    sides: normalized.sides,
+    timeframes: normalized.timeframes,
+    blockedTimeframes: normalized.blockedTimeframes,
+    excludedCoins: normalized.excludedCoins,
+  };
+}
+
+function deriveAutoRecommendationPrefs(recommendations = [], currentPrefs = {}) {
+  const next = normalizeDashboardSignalPrefs(currentPrefs);
+  const actions = [];
+
+  recommendations.forEach((item) => {
+    const rec = String(item || "").trim();
+    if (!rec) return;
+
+    const confidenceMatch = rec.match(/signals in\s+([0-9]+)(?:-([0-9]+)|\+)\s+confidence band/i);
+    if (confidenceMatch) {
+      const lower = Number(confidenceMatch[1] || 0);
+      const upper = Number(confidenceMatch[2] || lower);
+      const target = Math.min(100, Math.max(next.minConfidence, upper + 1));
+      if (target > next.minConfidence) {
+        next.minConfidence = target;
+        actions.push("raise_min_conf_" + String(target));
+      }
+      return;
+    }
+
+    const sideMatch = rec.match(/\b(LONG|SHORT)\b\s+side is underperforming/i);
+    if (sideMatch) {
+      const weakSide = sideMatch[1].toUpperCase();
+      if (next.sides.includes(weakSide) && next.sides.length > 1) {
+        next.sides = next.sides.filter((side) => side !== weakSide);
+        actions.push("disable_side_" + weakSide);
+      }
+      return;
+    }
+
+    const timeframeMatch = rec.match(/^([0-9]+[mhd])\s+setups are underperforming/i);
+    if (timeframeMatch) {
+      const weakTimeframe = timeframeMatch[1].toLowerCase();
+      if (!next.blockedTimeframes.includes(weakTimeframe)) {
+        next.blockedTimeframes = [...next.blockedTimeframes, weakTimeframe];
+        actions.push("block_tf_" + weakTimeframe);
+      }
+      return;
+    }
+
+    const coinMatch = rec.match(/^([A-Z0-9:_-]+)\s+is causing repeated stop losses/i);
+    if (coinMatch) {
+      const weakCoin = coinMatch[1].toUpperCase();
+      if (!next.excludedCoins.includes(weakCoin)) {
+        next.excludedCoins = [...next.excludedCoins, weakCoin];
+        actions.push("exclude_coin_" + weakCoin);
+      }
+    }
+  });
+
+  return { actions, next };
 }
 
 const FEATURES = [
@@ -157,6 +234,8 @@ export default function Dashboard() {
     minConfidence: 0,
     sides: ["LONG", "SHORT"],
     timeframes: [],
+    blockedTimeframes: [],
+    excludedCoins: [],
     onlyStrong: false,
   });
   const [missedSignals, setMissedSignals] = useState([]);
@@ -191,12 +270,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!user?.signalPreferences) return;
-    setSignalPrefs({
-      minConfidence: Number(user.signalPreferences.minConfidence || 0),
-      sides: Array.isArray(user.signalPreferences.sides) ? user.signalPreferences.sides : ["LONG", "SHORT"],
-      timeframes: Array.isArray(user.signalPreferences.timeframes) ? user.signalPreferences.timeframes : [],
-      onlyStrong: Boolean(user.signalPreferences.onlyStrong),
-    });
+    setSignalPrefs(normalizeDashboardSignalPrefs(user.signalPreferences));
   }, [user?.signalPreferences]);
 
   useEffect(() => {
@@ -208,6 +282,49 @@ export default function Dashboard() {
       return { ...c, amount: c.amount || String(selectedPlan?.amountUsd || ""), method: selectedMethod?.value || c.method, plan: selectedPlan?.code || c.plan };
     });
   }, [availablePaymentMethods, availablePaymentSettings, availablePlans]);
+
+  useEffect(() => {
+    const recommendations = performance?.recommendations || [];
+    if (!user?.id || !recommendations.length) return;
+    if (actionBusy === "signal-preferences") return;
+
+    const currentPrefs = normalizeDashboardSignalPrefs(user?.signalPreferences || signalPrefs);
+    const { actions, next } = deriveAutoRecommendationPrefs(recommendations, currentPrefs);
+    if (!actions.length) return;
+
+    const signature = user.id + ":" + JSON.stringify(recommendations) + ":" + JSON.stringify(next);
+    if (typeof window !== "undefined" && window.localStorage.getItem(AUTO_RECO_APPLY_STORAGE_KEY) === signature) return;
+
+    let active = true;
+    (async () => {
+      try {
+        setActionBusy("signal-preferences");
+        setError("");
+        await apiFetch("/auth/me/preferences", {
+          method: "PATCH",
+          body: buildSignalPreferencePayload(next),
+        });
+
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(AUTO_RECO_APPLY_STORAGE_KEY, signature);
+        }
+        if (!active) return;
+
+        setSignalPrefs(next);
+        setFeedback("AI recommendations auto-applied (" + actions.length + " changes)");
+        setTimeout(() => setFeedback(""), 4000);
+        await refreshUser();
+      } catch (e) {
+        if (active) setError(e.message);
+      } finally {
+        if (active) setActionBusy("");
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [actionBusy, performance?.recommendations, refreshUser, signalPrefs, user?.id, user?.signalPreferences]);
 
   const loadPublicData = useCallback(async () => {
     // Phase 1: fast endpoints first so dashboard renders quickly
@@ -325,12 +442,7 @@ export default function Dashboard() {
     setActionBusy("signal-preferences");
     setError("");
     try {
-      const payload = {
-        minConfidence: Number(signalPrefs.minConfidence || 0),
-        onlyStrong: Boolean(signalPrefs.onlyStrong),
-        sides: signalPrefs.sides,
-        timeframes: signalPrefs.timeframes,
-      };
+      const payload = buildSignalPreferencePayload(signalPrefs);
       await apiFetch("/auth/me/preferences", { method: "PATCH", body: payload });
       await refreshWithFeedback("Signal preferences updated");
     } catch (e) {
