@@ -42,6 +42,7 @@ const fallbackPaymentSettings = {
 
 const EXPIRY_PROMPT_STORAGE_KEY = "ftas_expiry_prompt_dismissed";
 const ANALYTICS_REFRESH_MS = 10 * 60 * 1000;
+const MISSED_SIGNALS_LAST_SEEN_KEY = "ftas_missed_signals_last_seen";
 
 function deferTask(fn) {
   if (typeof window !== "undefined" && "requestIdleCallback" in window) {
@@ -152,6 +153,15 @@ export default function Dashboard() {
   const [manualForm, setManualForm] = useState(defaultManualForm);
   const analyticsFetchedAtRef = useRef(0);
 
+  const [signalPrefs, setSignalPrefs] = useState({
+    minConfidence: 0,
+    sides: ["LONG", "SHORT"],
+    timeframes: [],
+    onlyStrong: false,
+  });
+  const [missedSignals, setMissedSignals] = useState([]);
+  const [activityEvents, setActivityEvents] = useState([]);
+
   // ── WebSocket — realtime stats ────────────────────────────────────────────
   const onStatsUpdate = useCallback(({ crypto, stocks }) => {
     if (crypto) setOverview(prev => prev ? { ...prev, ...crypto } : crypto);
@@ -178,6 +188,16 @@ export default function Dashboard() {
     if (subscriptionExpiresSoon && !expiryPromptDismissed) setShowExpiryPrompt(true);
     else setShowExpiryPrompt(false);
   }, [subscriptionExpiresSoon, expiryPromptDismissed]);
+
+  useEffect(() => {
+    if (!user?.signalPreferences) return;
+    setSignalPrefs({
+      minConfidence: Number(user.signalPreferences.minConfidence || 0),
+      sides: Array.isArray(user.signalPreferences.sides) ? user.signalPreferences.sides : ["LONG", "SHORT"],
+      timeframes: Array.isArray(user.signalPreferences.timeframes) ? user.signalPreferences.timeframes : [],
+      onlyStrong: Boolean(user.signalPreferences.onlyStrong),
+    });
+  }, [user?.signalPreferences]);
 
   useEffect(() => {
     if (!availablePaymentSettings) return;
@@ -251,6 +271,7 @@ export default function Dashboard() {
         await Promise.all([
           loadPublicData().catch(e => { if (active) setError(e?.message || ""); }),
           loadPrivateData().catch(() => {}),
+          loadPersonalizationData().catch(() => {}),
         ]);
       } catch (e) {
         if (active) setError(e.message);
@@ -277,6 +298,46 @@ export default function Dashboard() {
     const pve = await loadPrivateData();
     setError(pe?.message || pve?.message || "");
     await refreshUser();
+  }
+
+  async function loadPersonalizationData() {
+    try {
+      const nowIso = new Date().toISOString();
+      const since = window.localStorage.getItem(MISSED_SIGNALS_LAST_SEEN_KEY) || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const [activityRes, missedRes] = await Promise.allSettled([
+        apiFetch("/auth/me/activity?limit=25"),
+        apiFetch(`/signals/missed?since=${encodeURIComponent(since)}&scope=all&limit=30&fields=lite`),
+      ]);
+
+      if (activityRes.status === "fulfilled") {
+        setActivityEvents(activityRes.value.events || []);
+      }
+      if (missedRes.status === "fulfilled") {
+        setMissedSignals(missedRes.value.signals || []);
+      }
+
+      window.localStorage.setItem(MISSED_SIGNALS_LAST_SEEN_KEY, nowIso);
+    } catch {}
+  }
+
+  async function handleSignalPreferenceSave(event) {
+    event.preventDefault();
+    setActionBusy("signal-preferences");
+    setError("");
+    try {
+      const payload = {
+        minConfidence: Number(signalPrefs.minConfidence || 0),
+        onlyStrong: Boolean(signalPrefs.onlyStrong),
+        sides: signalPrefs.sides,
+        timeframes: signalPrefs.timeframes,
+      };
+      await apiFetch("/auth/me/preferences", { method: "PATCH", body: payload });
+      await refreshWithFeedback("Signal preferences updated");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setActionBusy("");
+    }
   }
 
   async function handlePaymentSubmit(event) {
@@ -725,6 +786,98 @@ export default function Dashboard() {
               <div className="list-card" key={item}><strong>{item}</strong></div>
             ))}
             {!performance?.recommendations?.length ? <div className="empty-state">Recommendations appear after more trades close.</div> : null}
+          </div>
+        </article>
+      </section>
+
+      <section className="section-grid">
+        <article className="panel">
+          <div className="panel-header">
+            <div><span className="eyebrow">Personalization</span><h2>Signal Preferences</h2></div>
+            <span className="pill pill-accent">Applied in API</span>
+          </div>
+          <form className="form-grid" onSubmit={handleSignalPreferenceSave}>
+            <label>
+              <span>Minimum confidence</span>
+              <input
+                max="100"
+                min="0"
+                onChange={(e) => setSignalPrefs((c) => ({ ...c, minConfidence: e.target.value }))}
+                type="number"
+                value={signalPrefs.minConfidence}
+              />
+            </label>
+
+            <label>
+              <span>Allowed sides</span>
+              <div className="button-row">
+                <button
+                  className={`button ${signalPrefs.sides.includes("LONG") ? "button-primary" : "button-ghost"}`}
+                  onClick={() => setSignalPrefs((c) => ({
+                    ...c,
+                    sides: c.sides.includes("LONG") ? c.sides.filter((v) => v !== "LONG") : [...c.sides, "LONG"],
+                  }))}
+                  type="button"
+                >
+                  LONG
+                </button>
+                <button
+                  className={`button ${signalPrefs.sides.includes("SHORT") ? "button-primary" : "button-ghost"}`}
+                  onClick={() => setSignalPrefs((c) => ({
+                    ...c,
+                    sides: c.sides.includes("SHORT") ? c.sides.filter((v) => v !== "SHORT") : [...c.sides, "SHORT"],
+                  }))}
+                  type="button"
+                >
+                  SHORT
+                </button>
+              </div>
+            </label>
+
+            <label className="auth-checkbox">
+              <input
+                checked={signalPrefs.onlyStrong}
+                onChange={(e) => setSignalPrefs((c) => ({ ...c, onlyStrong: e.target.checked }))}
+                type="checkbox"
+              />
+              <span>Show only strong signals</span>
+            </label>
+
+            <button className="button button-primary" disabled={actionBusy === "signal-preferences"} type="submit">
+              {actionBusy === "signal-preferences" ? "Saving..." : "Save preferences"}
+            </button>
+          </form>
+        </article>
+
+        <article className="panel">
+          <div className="panel-header">
+            <div><span className="eyebrow">Recovery</span><h2>Missed Signals</h2></div>
+            <span className="pill pill-neutral">{missedSignals.length} found</span>
+          </div>
+          <div className="list-stack">
+            {missedSignals.slice(0, 8).map((signal) => (
+              <div className="list-card" key={signal.id}>
+                <div><strong>{signal.coin} • {signal.side}</strong><span>{signal.timeframe} • {signal.confidence}%</span></div>
+                <span className="pill pill-neutral">{signal.status}</span>
+              </div>
+            ))}
+            {!missedSignals.length ? <div className="empty-state">No missed signals since your last visit.</div> : null}
+          </div>
+        </article>
+
+        <article className="panel">
+          <div className="panel-header">
+            <div><span className="eyebrow">Security</span><h2>Account Activity</h2></div>
+            <span className="pill pill-warning">{activityEvents.length} events</span>
+          </div>
+          <div className="list-stack">
+            {activityEvents.slice(0, 8).map((event) => (
+              <div className="list-card" key={event.id}>
+                <div><strong>{event.type}</strong><span>{event.status}{event.reason ? ` • ${event.reason}` : ""}</span></div>
+                <span className={`pill ${event.level === "WARN" ? "pill-warning" : "pill-neutral"}`}>{new Date(event.createdAt).toLocaleDateString("en-IN")}</span>
+              </div>
+            ))}
+            {!activityEvents.length ? <div className="empty-state">No recent activity.</div> : null}
           </div>
         </article>
       </section>
