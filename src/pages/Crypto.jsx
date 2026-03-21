@@ -199,7 +199,7 @@ export default function Crypto() {
     } catch (e) { alert(e.message); }
   }
 
-  const signalCoinsKey = getSignalCoins(activeSignals).join(",");
+  const signalCoinsKey = useMemo(() => getSignalCoins(activeSignals).join(","), [activeSignals]);
 
   // ── Data loader ────────────────────────────────────────────────────────────
   useEffect(() => {
