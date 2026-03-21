@@ -9,6 +9,17 @@ function buildResendClient() {
   return new Resend(process.env.RESEND_API_KEY || "re_xxxxxxxxx");
 }
 
+function formatResendError(error) {
+  if (!error) return "resend_failed";
+  const statusCode = error.statusCode || error.status || null;
+  const code = error.name || error.code || null;
+  const message = error.message || "resend_failed";
+  if (statusCode && code) return `${statusCode}:${code}:${message}`;
+  if (statusCode) return `${statusCode}:${message}`;
+  if (code) return `${code}:${message}`;
+  return message;
+}
+
 async function sendResetCodeEmail({ toEmail, code, expiresInMinutes }) {
   if (!hasResendConfig()) {
     return { sent: false, skipped: true, reason: "missing_resend_config" };
@@ -34,7 +45,7 @@ async function sendResetCodeEmail({ toEmail, code, expiresInMinutes }) {
 
   try {
     const resend = buildResendClient();
-    const response = await resend.emails.send({
+    const { data, error } = await resend.emails.send({
       from: process.env.RESEND_FROM_EMAIL,
       to: [toEmail],
       subject,
@@ -42,15 +53,23 @@ async function sendResetCodeEmail({ toEmail, code, expiresInMinutes }) {
       text,
     });
 
+    if (error) {
+      return {
+        sent: false,
+        skipped: false,
+        reason: formatResendError(error),
+      };
+    }
+
     return {
       sent: true,
-      id: response?.data?.id || response?.id || null,
+      id: data?.id || null,
     };
   } catch (error) {
     return {
       sent: false,
       skipped: false,
-      reason: error?.message || "resend_failed",
+      reason: formatResendError(error),
     };
   }
 }

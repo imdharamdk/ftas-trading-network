@@ -205,8 +205,8 @@ router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
         expiresInMinutes: RESET_CODE_TTL_MINUTES,
       });
 
-      if (!emailResult.sent && !emailResult.skipped) {
-        console.warn("[auth/forgot-password] resend send failed:", emailResult.reason);
+      if (!emailResult.sent) {
+        console.warn("[auth/forgot-password] resend send skipped/failed:", emailResult.reason);
       }
     }
 
