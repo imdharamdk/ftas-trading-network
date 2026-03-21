@@ -1,8 +1,8 @@
 /**
  * FTAS Facebook Publisher
- * 
+ *
  * Naye signals automatically Facebook Page pe post karta hai via Graph API.
- * 
+ *
  * Setup (one-time manual steps):
  * 1. developers.facebook.com → Create App → Business type
  * 2. Add "Facebook Login" + "Pages API" products
@@ -14,7 +14,8 @@
  * 6. Set Render env vars:
  *    FB_PAGE_ID=your_numeric_page_id
  *    FB_PAGE_ACCESS_TOKEN=your_long_lived_page_token
- * 
+ *    FB_AUTO_POST=true
+ *
  * Token refresh: tokens expire in 60 days — set a reminder to refresh.
  * For never-expiring tokens, create a System User in Business Manager.
  */
@@ -31,31 +32,47 @@ if (!FB_ENABLED) {
 }
 
 // ─── Global Post Queue (Rate Limit Protection) ─────────────────────────────
-// Facebook free pages mein strict rate limit hoti hai — multiple signals ek
-// saath fire karna "spam" detect karwata hai.
-// Solution: ek serial queue + minimum gap between posts.
+// Facebook strict rate limit lagaata hai agar posts ek saath aayein.
+// Solution: serial queue + 3 min minimum gap + 10 min cool-down after 368 error.
 //
-// FB_POST_MIN_GAP_MS  — minimum ms between any two posts (default 90s)
-// FB_POST_QUEUE_LIMIT — max pending items in queue before dropping (default 10)
-//
-const FB_POST_MIN_GAP_MS  = Number(process.env.FB_POST_MIN_GAP_MS  || 90_000);   // 90 seconds
-const FB_POST_QUEUE_LIMIT = Number(process.env.FB_POST_QUEUE_LIMIT || 10);
+// Env vars to tune:
+//   FB_POST_MIN_GAP_MS  — gap between posts in ms (default: 180000 = 3 min)
+//   FB_POST_QUEUE_LIMIT — max pending posts in queue (default: 3)
 
-let _lastPostAt   = 0;          // timestamp of last successful/attempted post
-let _postQueue    = [];         // pending { message, options, resolve, reject }
-let _queueRunning = false;
+const FB_POST_MIN_GAP_MS  = Number(process.env.FB_POST_MIN_GAP_MS  || 3 * 60_000); // 3 min
+const FB_POST_QUEUE_LIMIT = Number(process.env.FB_POST_QUEUE_LIMIT || 3);
+
+let _lastPostAt     = 0;
+let _postQueue      = [];
+let _queueRunning   = false;
+let _rateLimitUntil = 0; // epoch ms — 368 error ke baad yahan tak wait karo
+
+function _flushQueue(reason) {
+  if (_postQueue.length > 0) {
+    console.warn(`[fb] flushing ${_postQueue.length} queued post(s) — ${reason}`);
+    _postQueue.forEach(item => item.resolve(null));
+    _postQueue = [];
+  }
+}
 
 async function _drainQueue() {
   if (_queueRunning) return;
   _queueRunning = true;
 
   while (_postQueue.length > 0) {
-    const now   = Date.now();
-    const wait  = Math.max(0, _lastPostAt + FB_POST_MIN_GAP_MS - now);
+    // 368 rate-limit cool-down still active?
+    const coolDownLeft = Math.max(0, _rateLimitUntil - Date.now());
+    if (coolDownLeft > 0) {
+      console.warn(`[fb] 368 cool-down active — ${Math.round(coolDownLeft / 1000)}s left. Flushing queue.`);
+      _flushQueue("rate limit cool-down — posts dropped");
+      break;
+    }
 
-    if (wait > 0) {
-      console.log(`[fb] queue: waiting ${Math.round(wait / 1000)}s before next post (rate limit gap)`);
-      await new Promise(r => setTimeout(r, wait));
+    // Minimum gap between posts
+    const gapWait = Math.max(0, _lastPostAt + FB_POST_MIN_GAP_MS - Date.now());
+    if (gapWait > 0) {
+      console.log(`[fb] queue: waiting ${Math.round(gapWait / 1000)}s before next post`);
+      await new Promise(r => setTimeout(r, gapWait));
     }
 
     const item = _postQueue.shift();
@@ -64,6 +81,12 @@ async function _drainQueue() {
     _lastPostAt = Date.now();
     try {
       const result = await _postToFacebookDirect(item.message, item.options);
+      // Rate limit hit ho gayi during this post?
+      if (result?.error?.code === 368) {
+        _rateLimitUntil = Date.now() + 10 * 60_000; // 10 min cool-down
+        console.warn("[fb] 368 rate limit — 10min cool-down set, flushing remaining queue");
+        _flushQueue("rate limit after post — remaining posts dropped");
+      }
       item.resolve(result);
     } catch (err) {
       item.reject(err);
@@ -73,28 +96,31 @@ async function _drainQueue() {
   _queueRunning = false;
 }
 
-// Enqueue a post — returns a Promise that resolves when the post is actually sent.
 function enqueuePost(message, options = {}) {
   return new Promise((resolve, reject) => {
+    // Already in cool-down?
+    const coolDownLeft = Math.max(0, _rateLimitUntil - Date.now());
+    if (coolDownLeft > 0) {
+      console.warn(`[fb] rate limit cool-down (${Math.round(coolDownLeft / 1000)}s left) — dropping post`);
+      return resolve(null);
+    }
     if (_postQueue.length >= FB_POST_QUEUE_LIMIT) {
-      console.warn(`[fb] queue full (${FB_POST_QUEUE_LIMIT} items) — dropping post to avoid backlog`);
+      console.warn(`[fb] queue full (${FB_POST_QUEUE_LIMIT} max) — dropping post`);
       return resolve(null);
     }
     _postQueue.push({ message, options, resolve, reject });
-    console.log(`[fb] queued post — queue size now: ${_postQueue.length}`);
+    console.log(`[fb] queued post (queue size: ${_postQueue.length})`);
     _drainQueue().catch(err => console.error("[fb] queue drain error:", err.message));
   });
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 function pickFbUsageHeaders(headers) {
   if (!headers) return {};
   const out = {};
   const keys = [
-    "x-app-usage",
-    "x-page-usage",
-    "x-business-use-case-usage",
-    "x-ad-account-usage",
-    "x-fb-trace-id",
+    "x-app-usage", "x-page-usage", "x-business-use-case-usage",
+    "x-ad-account-usage", "x-fb-trace-id",
   ];
   for (const k of keys) {
     if (headers[k]) out[k] = headers[k];
@@ -103,7 +129,6 @@ function pickFbUsageHeaders(headers) {
 }
 
 // ─── Stock vs Crypto Detection ─────────────────────────────────────────────
-// FIX: Make detection resilient when source is missing or older data is mixed.
 const CRYPTO_QUOTE_SUFFIXES = ["USDT", "BUSD", "USDC", "USDP", "FDUSD", "TUSD", "DAI"];
 const CRYPTO_QUOTE_RE = new RegExp(`(${CRYPTO_QUOTE_SUFFIXES.join("|")})$`, "i");
 
@@ -115,32 +140,17 @@ function isStockSignal(signal) {
   const assetClass = String(signal.assetClass || "").toUpperCase();
   if (assetClass === "STOCK") return true;
   if (assetClass === "CRYPTO") return false;
-
-  // Primary check: source field (most reliable after fix)
   if (signal.source === "SMART_ENGINE" || signal.source === "SMART_MANUAL") return true;
-
-  // Secondary check: exchange field like NSE/BSE/MCX
   if (signal.exchange === "NSE" || signal.exchange === "BSE" || signal.exchange === "MCX") return true;
-
-  // Tertiary check: crypto symbols end with stable-quote suffixes
   const coin = String(signal.coin || "").toUpperCase();
   if (isCryptoSymbol(coin)) return false;
-
-  // Default: treat non-crypto symbols as stock
   return Boolean(coin);
 }
 
-// ─── Symbol cleanup ────────────────────────────────────────────────────────
-// Crypto: "BTCUSDT" → "BTC"
-// Stock:  "RELIANCE-EQ" → "RELIANCE", "NIFTY25APRFUT" → "NIFTY25APRFUT" (keep as-is)
 function cleanSymbol(signal) {
   const coin  = String(signal.coin || "");
   const stock = isStockSignal(signal);
-  if (!stock) {
-    // Crypto — remove stable-quote suffix
-    return coin.replace(CRYPTO_QUOTE_RE, "").trim() || coin;
-  }
-  // Stock — remove exchange suffix like -EQ, -BE, -N1 etc.
+  if (!stock) return coin.replace(CRYPTO_QUOTE_RE, "").trim() || coin;
   return coin.replace(/-(EQ|BE|N1|BL|IL|SM|GR|ST)$/i, "").trim() || coin;
 }
 
@@ -153,10 +163,7 @@ function formatSignalPost(signal) {
   const conf     = signal.confidence;
   const strength = signal.strength || "MEDIUM";
   const lev      = signal.leverage ? `${signal.leverage}x` : "—";
-
   const strengthEmoji = strength === "STRONG" ? "⚡ STRONG" : "✅ MEDIUM";
-
-  // FIX: typeLabel correctly reflects signal type
   const typeLabel = isStock ? "🇮🇳 Indian Stock Signal" : "💹 Crypto Futures Signal";
 
   function fmt(n) {
@@ -183,14 +190,12 @@ function formatSignalPost(signal) {
     ``,
   ];
 
-  // Add top confirmations (max 3)
   if (Array.isArray(signal.confirmations) && signal.confirmations.length > 0) {
     lines.push(`📊 Reasons:`);
     signal.confirmations.slice(0, 3).forEach(c => lines.push(`  • ${c}`));
     lines.push(``);
   }
 
-  // FIX: hashtags now correctly split between stock and crypto
   const hashTags = isStock
     ? `#FTAS #TradingSignals #StockMarket #NSE #IndianStocks #${symbol}`
     : `#FTAS #TradingSignals #Crypto #CryptoTrading #${symbol} #Bitcoin`;
@@ -208,69 +213,51 @@ function formatSignalPost(signal) {
   return lines.join("\n");
 }
 
-// ─── Direct Post (internal — called by queue only) ─────────────────────────
+// ─── Direct Post (internal — called by queue OR test route) ───────────────
 async function _postToFacebookDirect(message, options = {}) {
   if (!FB_ENABLED) return null;
 
-  const endpoint = `${FB_GRAPH_URL}/${FB_PAGE_ID}/feed`;
-  const pageTail = FB_PAGE_ID ? `...${FB_PAGE_ID.slice(-4)}` : "unknown";
-  const startedAt = new Date().toISOString();
-  console.log(`[fb] → POST /feed page=${pageTail} at ${startedAt}`);
+  const endpoint   = `${FB_GRAPH_URL}/${FB_PAGE_ID}/feed`;
+  const pageTail   = FB_PAGE_ID ? `...${FB_PAGE_ID.slice(-4)}` : "unknown";
+  console.log(`[fb] → POST /feed page=${pageTail}`);
 
-  const maxRetries = Number(process.env.FB_RETRY_MAX || 3);
+  const maxRetries  = Number(process.env.FB_RETRY_MAX    || 1);   // low retry — queue handles spacing
   const baseDelayMs = Number(process.env.FB_RETRY_BASE_MS || 5000);
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const response = await axios.post(
         endpoint,
-        {
-          message,
-          access_token: FB_ACCESS_TOKEN,
-        },
+        { message, access_token: FB_ACCESS_TOKEN },
         { timeout: 10_000 }
       );
-
       const postId = response.data?.id;
-      console.log(`[fb] ✅ Posted to Facebook: ${postId}`);
+      console.log(`[fb] ✅ Posted: ${postId}`);
       const usage = pickFbUsageHeaders(response.headers || {});
-      if (Object.keys(usage).length) {
-        console.log("[fb] rate-limit headers:", usage);
-      }
+      if (Object.keys(usage).length) console.log("[fb] usage headers:", usage);
       return options.returnUsage ? { postId, usage } : postId;
     } catch (err) {
       const fbError = err.response?.data?.error;
-      const status = err.response?.status;
-      const usage = pickFbUsageHeaders(err.response?.headers || {});
+      const status  = err.response?.status;
+      const usage   = pickFbUsageHeaders(err.response?.headers || {});
       const isRateLimit = fbError?.code === 368;
 
       if (isRateLimit && attempt < maxRetries) {
         const delay = baseDelayMs * Math.pow(2, attempt);
-        console.warn(`[fb] rate limit hit (code 368). retrying in ${Math.round(delay / 1000)}s (attempt ${attempt + 1}/${maxRetries})`);
-        if (Object.keys(usage).length) {
-          console.warn("[fb] rate-limit headers:", usage);
-        }
+        console.warn(`[fb] rate limit — retrying in ${Math.round(delay / 1000)}s`);
         await new Promise(r => setTimeout(r, delay));
         continue;
       }
 
       if (fbError) {
-        console.error(`[fb] ❌ Facebook API error: (${fbError.code}) ${fbError.message}`);
-        if (status) console.error(`[fb] HTTP ${status} at ${endpoint}`);
-        if (Object.keys(usage).length) {
-          console.error("[fb] rate-limit headers:", usage);
-        }
-        // Token expired — common issue
+        console.error(`[fb] ❌ FB API error: (${fbError.code}) ${fbError.message}`);
         if (fbError.code === 190) {
-          console.error("[fb] 🔑 Access token expired! Refresh FB_PAGE_ACCESS_TOKEN in Render env vars.");
+          console.error("[fb] 🔑 Token expired! Refresh FB_PAGE_ACCESS_TOKEN in Render.");
         }
       } else {
         console.error("[fb] ❌ Post failed:", err.message);
-        if (status) console.error(`[fb] HTTP ${status} at ${endpoint}`);
-        if (Object.keys(usage).length) {
-          console.error("[fb] rate-limit headers:", usage);
-        }
       }
+      if (Object.keys(usage).length) console.error("[fb] usage headers:", usage);
 
       if (options.returnUsage) {
         return {
@@ -288,9 +275,7 @@ async function _postToFacebookDirect(message, options = {}) {
   return options.returnUsage ? { postId: null, usage: {} } : null;
 }
 
-// ─── Public postToFacebook — goes through the rate-limit queue ────────────
-// Auto-posts se aaye calls yahan queue mein jaate hain.
-// Test-post route direct call karta hai — woh queue bypass karta hai (intentional).
+// ─── Public postToFacebook — goes through rate-limit queue ────────────────
 async function postToFacebook(message, options = {}) {
   return enqueuePost(message, options);
 }
@@ -299,10 +284,15 @@ async function postToFacebook(message, options = {}) {
 async function publishSignal(signal, options = {}) {
   if (!FB_ENABLED) return;
 
-  // Only publish HIGH confidence signals (85+) to avoid spamming the page
+  // FB_AUTO_POST=true hona chahiye Render env mein — yahi main gate hai
+  if (process.env.FB_AUTO_POST !== "true") {
+    console.log("[fb] Auto-post disabled (FB_AUTO_POST != true) — skipping signal");
+    return;
+  }
+
   const minConfidence = Number(process.env.FB_MIN_CONFIDENCE || 85);
   if (Number(signal.confidence) < minConfidence) {
-    console.log(`[fb] Skipping signal (confidence ${signal.confidence} < ${minConfidence})`);
+    console.log(`[fb] Skipping signal — confidence ${signal.confidence} < ${minConfidence}`);
     return;
   }
 
@@ -310,15 +300,16 @@ async function publishSignal(signal, options = {}) {
   return postToFacebook(message, options);
 }
 
-// ─── Publish signal result (when TP hit or SL hit) ────────────────────────
+// ─── Publish signal result (TP hit / SL hit) ──────────────────────────────
 async function publishSignalResult(signal) {
   if (!FB_ENABLED) return;
+  if (process.env.FB_AUTO_POST !== "true") return;
   if (!["TP1_HIT","TP2_HIT","TP3_HIT","SL_HIT"].includes(signal.result)) return;
 
   const isWin   = signal.result !== "SL_HIT";
-  const symbol  = cleanSymbol(signal);   // FIX: was signal.coin?.replace("USDT","") — broke for stocks
+  const symbol  = cleanSymbol(signal);
   const tpLevel = signal.result.replace("_HIT", "");
-  const isStock = isStockSignal(signal); // FIX: was hardcoded per function, now shared helper
+  const isStock = isStockSignal(signal);
 
   function fmt(n) {
     const v = Number(n);
@@ -328,15 +319,12 @@ async function publishSignalResult(signal) {
     return v.toFixed(6);
   }
 
-  // FIX: result post also correctly shows stock vs crypto label and hashtags
   const hashTags = isStock
     ? `#FTAS #TradingSignals #StockMarket #NSE #${symbol}`
     : `#FTAS #TradingSignals #Crypto #${symbol}`;
 
   const lines = [
-    isWin
-      ? `🏆 TRADE RESULT: ${tpLevel} HIT! ✅`
-      : `📊 TRADE CLOSED: Stop Loss Hit`,
+    isWin ? `🏆 TRADE RESULT: ${tpLevel} HIT! ✅` : `📊 TRADE CLOSED: Stop Loss Hit`,
     ``,
     `${isStock ? "🇮🇳 Indian Stock" : "💹 Crypto"} | ${symbol} | ${signal.side}`,
     `Entry: ${fmt(signal.entry)} → Close: ${fmt(signal.closePrice)}`,
@@ -371,6 +359,12 @@ async function testConnection() {
   }
 }
 
-// ─── postToFacebook exported for test-post route ───────────────────────────
-// postToFacebookDirect — test route ke liye, queue bypass karta hai
-module.exports = { publishSignal, publishSignalResult, postToFacebook, postToFacebookDirect: _postToFacebookDirect, testConnection, FB_ENABLED };
+// postToFacebookDirect — test route ke liye (queue bypass, instant response)
+module.exports = {
+  publishSignal,
+  publishSignalResult,
+  postToFacebook,
+  postToFacebookDirect: _postToFacebookDirect,
+  testConnection,
+  FB_ENABLED,
+};
