@@ -42,12 +42,20 @@ function resolveEffectiveSignalPreferences(req, riskMinConfidence = 0) {
   const timeframeValues = Array.isArray(raw.timeframes)
     ? raw.timeframes.map((v) => String(v || "").toLowerCase()).filter(Boolean)
     : [];
+  const blockedTimeframeValues = Array.isArray(raw.blockedTimeframes)
+    ? raw.blockedTimeframes.map((v) => String(v || "").toLowerCase()).filter(Boolean)
+    : [];
+  const excludedCoinValues = Array.isArray(raw.excludedCoins)
+    ? raw.excludedCoins.map((v) => String(v || "").toUpperCase()).filter(Boolean)
+    : [];
 
   return {
     minConfidence,
     onlyStrong: Boolean(raw.onlyStrong),
     sides: [...new Set(sideValues.length ? sideValues : ["LONG", "SHORT"])],
     timeframes: [...new Set(timeframeValues)],
+    blockedTimeframes: [...new Set(blockedTimeframeValues)],
+    excludedCoins: [...new Set(excludedCoinValues)],
   };
 }
 
@@ -59,6 +67,8 @@ function buildSignalPreferenceCacheKey(preference, signalPref, userId = "anon") 
     signalPref.onlyStrong ? "strong" : "all",
     signalPref.sides.join(","),
     signalPref.timeframes.join(","),
+    signalPref.blockedTimeframes.join(","),
+    signalPref.excludedCoins.join(","),
   ].join(":");
 }
 
@@ -71,6 +81,10 @@ function matchesSignalPreference(signal, signalPref) {
 
   const timeframe = String(signal?.timeframe || "").toLowerCase();
   if (signalPref.timeframes.length && !signalPref.timeframes.includes(timeframe)) return false;
+  if (signalPref.blockedTimeframes.length && signalPref.blockedTimeframes.includes(timeframe)) return false;
+
+  const coin = String(signal?.coin || "").toUpperCase();
+  if (signalPref.excludedCoins.length && signalPref.excludedCoins.includes(coin)) return false;
 
   if (signalPref.onlyStrong) {
     const strongByLabel = String(signal?.strength || "").toUpperCase() === "STRONG";

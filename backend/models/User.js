@@ -30,6 +30,8 @@ const DEFAULT_SIGNAL_PREFERENCES = {
   minConfidence: 0,
   sides: ["LONG", "SHORT"],
   timeframes: [],
+  blockedTimeframes: [],
+  excludedCoins: [],
   onlyStrong: false,
 };
 
@@ -68,11 +70,23 @@ function normalizeSignalPreferences(value = {}) {
     : [];
   const timeframes = [...new Set(timeframeValues)];
 
+  const blockedTimeframeValues = Array.isArray(value?.blockedTimeframes)
+    ? value.blockedTimeframes.map((v) => String(v || "").toLowerCase()).filter(Boolean)
+    : [];
+  const blockedTimeframes = [...new Set(blockedTimeframeValues)];
+
+  const excludedCoinValues = Array.isArray(value?.excludedCoins)
+    ? value.excludedCoins.map((v) => String(v || "").toUpperCase()).filter(Boolean)
+    : [];
+  const excludedCoins = [...new Set(excludedCoinValues)];
+
   return {
     minConfidence,
     onlyStrong,
     sides: sides.length ? sides : [...DEFAULT_SIGNAL_PREFERENCES.sides],
     timeframes,
+    blockedTimeframes,
+    excludedCoins,
   };
 }
 
