@@ -1,5 +1,8 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
+const rateLimit = require("express-rate-limit");
+const { ipKeyGenerator } = require("express-rate-limit");
 const { invalidateUserCache, requireAdmin, requireAuth, signToken } = require("../middleware/auth");
 const {
   SUBSCRIPTION_STATUS,
@@ -11,8 +14,61 @@ const {
   sanitizeUser,
 } = require("../models/User");
 const { mutateCollection, readCollection, writeCollection } = require("../storage/fileStore");
+const { sendResetCodeEmail } = require("../services/emailService");
 
 const router = express.Router();
+
+const RESET_CODE_TTL_MINUTES = Math.max(5, Number(process.env.RESET_CODE_TTL_MINUTES || 15));
+const MAX_RESET_VERIFY_ATTEMPTS = Math.max(3, Number(process.env.RESET_MAX_ATTEMPTS || 6));
+
+function parseBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+const exposeResetCode = parseBoolean(
+  process.env.EXPOSE_RESET_CODE,
+  String(process.env.NODE_ENV || "").toLowerCase() !== "production"
+);
+
+function getResetHelpMessage() {
+  return "If this email exists, a reset code has been generated.";
+}
+
+function generateResetCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function hashResetCode(email, code) {
+  const secret = process.env.JWT_SECRET || "ftas-reset-secret";
+  return crypto
+    .createHash("sha256")
+    .update(`${normalizeEmail(email)}:${String(code)}:${secret}`)
+    .digest("hex");
+}
+
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { message: "Too many reset attempts. Please wait and try again." },
+  keyGenerator: (req) => {
+    const emailKey = normalizeEmail(req.body?.email || "");
+    return emailKey || ipKeyGenerator(req);
+  },
+});
+
+const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 12,
+  message: { message: "Too many reset attempts. Please wait and try again." },
+  keyGenerator: (req) => {
+    const emailKey = normalizeEmail(req.body?.email || "");
+    return emailKey || ipKeyGenerator(req);
+  },
+});
 
 router.post("/register", async (req, res) => {
   try {
@@ -97,6 +153,165 @@ router.post("/login", async (req, res) => {
       token,
       user: sanitizeUser(user),
     });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
+  try {
+    const normalizedEmail = normalizeEmail(req.body?.email);
+    if (!normalizedEmail) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const resetCode = generateResetCode();
+    const resetCodeHash = hashResetCode(normalizedEmail, resetCode);
+    const now = Date.now();
+    const expiresAt = new Date(now + RESET_CODE_TTL_MINUTES * 60 * 1000).toISOString();
+
+    const result = await mutateCollection("users", (records) => {
+      let matchedUser = null;
+      const nextRecords = records.map((user) => {
+        if (user.email !== normalizedEmail || user.isActive === false) return user;
+        matchedUser = user;
+        return {
+          ...user,
+          passwordReset: {
+            codeHash: resetCodeHash,
+            expiresAt,
+            requestedAt: new Date(now).toISOString(),
+            attempts: 0,
+          },
+          updatedAt: new Date().toISOString(),
+        };
+      });
+
+      return {
+        records: nextRecords,
+        value: matchedUser ? { matched: true, resetCode } : { matched: false },
+      };
+    });
+
+    const payload = {
+      message: getResetHelpMessage(),
+      expiresInMinutes: RESET_CODE_TTL_MINUTES,
+    };
+
+    if (result?.matched) {
+      const emailResult = await sendResetCodeEmail({
+        toEmail: normalizedEmail,
+        code: result.resetCode,
+        expiresInMinutes: RESET_CODE_TTL_MINUTES,
+      });
+
+      if (!emailResult.sent && !emailResult.skipped) {
+        console.warn("[auth/forgot-password] resend send failed:", emailResult.reason);
+      }
+    }
+
+    if (exposeResetCode && result?.matched) {
+      payload.resetCode = result.resetCode;
+    }
+
+    return res.json(payload);
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.post("/reset-password", resetPasswordLimiter, async (req, res) => {
+  try {
+    const normalizedEmail = normalizeEmail(req.body?.email);
+    const resetCode = String(req.body?.code || "").trim();
+    const newPassword = String(req.body?.newPassword || "");
+
+    if (!normalizedEmail || !resetCode) {
+      return res.status(400).json({ message: "Email and reset code are required" });
+    }
+
+    if (!/^\d{6}$/.test(resetCode)) {
+      return res.status(400).json({ message: "Reset code must be 6 digits" });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: "New password must be at least 6 characters" });
+    }
+
+    const submittedHash = hashResetCode(normalizedEmail, resetCode);
+
+    const result = await mutateCollection("users", async (records) => {
+      let status = "NOT_FOUND";
+      let updatedUser = null;
+
+      const nextRecords = records.map((user) => {
+        if (user.email !== normalizedEmail || user.isActive === false) return user;
+
+        const reset = user.passwordReset || null;
+        if (!reset?.codeHash || !reset?.expiresAt) {
+          status = "MISSING_RESET";
+          return user;
+        }
+
+        if (Date.now() > new Date(reset.expiresAt).getTime()) {
+          status = "EXPIRED";
+          return {
+            ...user,
+            passwordReset: null,
+            updatedAt: new Date().toISOString(),
+          };
+        }
+
+        const attempts = Number(reset.attempts || 0);
+        if (attempts >= MAX_RESET_VERIFY_ATTEMPTS) {
+          status = "LOCKED";
+          return {
+            ...user,
+            passwordReset: null,
+            updatedAt: new Date().toISOString(),
+          };
+        }
+
+        if (reset.codeHash !== submittedHash) {
+          status = "INVALID_CODE";
+          return {
+            ...user,
+            passwordReset: {
+              ...reset,
+              attempts: attempts + 1,
+            },
+            updatedAt: new Date().toISOString(),
+          };
+        }
+
+        status = "OK";
+        updatedUser = {
+          ...user,
+          passwordReset: null,
+          updatedAt: new Date().toISOString(),
+        };
+
+        return updatedUser;
+      });
+
+      if (status === "OK") {
+        updatedUser.passwordHash = await bcrypt.hash(newPassword, 10);
+        return { records: nextRecords, value: { status, user: updatedUser } };
+      }
+
+      return { records: nextRecords, value: { status } };
+    });
+
+    if (!result || result.status !== "OK") {
+      const status = result?.status;
+      if (["NOT_FOUND", "MISSING_RESET", "EXPIRED", "LOCKED", "INVALID_CODE"].includes(status)) {
+        return res.status(400).json({ message: "Invalid or expired reset request" });
+      }
+      return res.status(400).json({ message: "Reset failed" });
+    }
+
+    invalidateUserCache(result.user.id);
+    return res.json({ message: "Password reset successful. Please login with your new password." });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }

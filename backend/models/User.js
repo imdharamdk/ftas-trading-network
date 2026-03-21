@@ -123,7 +123,7 @@ function sanitizeUser(user) {
     return null;
   }
 
-  const { passwordHash: _passwordHash, ...safeUser } = user;
+  const { passwordHash: _passwordHash, passwordReset: _passwordReset, ...safeUser } = user;
   return {
     ...safeUser,
     hasSignalAccess: hasSignalAccess(safeUser),

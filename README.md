@@ -75,6 +75,12 @@ Important backend vars:
 - `ALPHA_VANTAGE_API_KEY=replace_with_free_news_key`
 - `NEWS_CACHE_MS=900000`
 - `FRONTEND_URL=http://localhost:5173,http://127.0.0.1:5173`
+- `RESEND_API_KEY=your_resend_api_key`
+- `RESEND_FROM_EMAIL=FTAS <onboarding@resend.dev>`
+- `RESEND_TIMEOUT_MS=10000`
+- `RESET_CODE_TTL_MINUTES=15`
+- `RESET_MAX_ATTEMPTS=6`
+- `EXPOSE_RESET_CODE=true` (dev only; set `false` in production)
 - `SMART_API_KEY=from_Angel_One_portal`
 - `SMART_API_CLIENT_CODE=your_angel_broking_id`
 - `SMART_API_PASSWORD=angel_portal_password`
