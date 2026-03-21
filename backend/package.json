@@ -7,7 +7,8 @@
     "dev": "node --watch server.js",
     "start": "node server.js",
     "scan:once": "node scripts/scanOnce.js",
-    "bootstrap:admin": "node scripts/bootstrapAdmin.js"
+    "bootstrap:admin": "node scripts/bootstrapAdmin.js",
+    "maintenance:run": "node scripts/runMaintenance.js"
   },
   "dependencies": {
     "axios": "^1.8.4",
