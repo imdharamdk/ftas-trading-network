@@ -20,6 +20,10 @@ const SCAN_TIMEFRAMES            = ["1m","5m","15m","30m","1h"];
 const DEFAULT_TRADE_TIMEFRAMES   = ["1m","5m","15m","30m"];
 const DEFAULT_MAX_COINS_PER_SCAN = 60;
 const MAX_COINS_PER_SCAN_CAP     = 120;
+const DEFAULT_COIN_SCAN_CONCURRENCY = 4;
+const MAX_COIN_SCAN_CONCURRENCY_CAP = 8;
+const DEFAULT_TIMEFRAME_FETCH_CONCURRENCY = 2;
+const MAX_TIMEFRAME_FETCH_CONCURRENCY_CAP = 3;
 
 const MIN_SCAN_QUOTE_VOLUME_USDT  = 5_000_000;
 const MIN_SCAN_TRADE_COUNT_24H    = 10_000;
@@ -112,6 +116,65 @@ function roundPrice(v) {
 }
 function clamp(v, mn, mx) { return Math.min(Math.max(v, mn), mx); }
 function toNumber(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function winRateFromTally(tally = {}) {
+  const wins = Number(tally.wins || 0);
+  const losses = Number(tally.losses || 0);
+  const total = wins + losses;
+  if (!total) return null;
+  return (wins / total) * 100;
+}
+function updateTally(map, key, isWin) {
+  if (!key) return;
+  if (!map[key]) map[key] = buildTally();
+  map[key][isWin ? "wins" : "losses"] += 1;
+}
+async function mapWithConcurrency(items, limit, worker) {
+  const src = Array.isArray(items) ? items : [];
+  if (!src.length) return [];
+  const max = clamp(Number(limit || 1), 1, src.length);
+  const results = new Array(src.length);
+  let cursor = 0;
+  async function runSlot() {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= src.length) return;
+      try {
+        results[index] = await worker(src[index], index);
+      } catch (error) {
+        results[index] = { error, index };
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: max }, () => runSlot()));
+  return results;
+}
+function getCoinScanConcurrency() {
+  return clamp(
+    Number(process.env.CRYPTO_SCAN_CONCURRENCY || DEFAULT_COIN_SCAN_CONCURRENCY),
+    1,
+    MAX_COIN_SCAN_CONCURRENCY_CAP
+  );
+}
+function getTimeframeFetchConcurrency() {
+  return clamp(
+    Number(process.env.CRYPTO_TIMEFRAME_CONCURRENCY || DEFAULT_TIMEFRAME_FETCH_CONCURRENCY),
+    1,
+    MAX_TIMEFRAME_FETCH_CONCURRENCY_CAP
+  );
+}
+function buildSignalKey(signal = {}) {
+  return `${String(signal.coin || "").toUpperCase()}|${String(signal.side || "").toUpperCase()}|${String(signal.timeframe || "")}`;
+}
+async function getActiveSignalKeySet() {
+  const signals = await readCollection(SIGNAL_COLLECTION);
+  return new Set(
+    signals
+      .filter((s) => s.status === SIGNAL_STATUS.ACTIVE)
+      .map((s) => buildSignalKey(s))
+  );
+}
 function formatCompact(v) {
   const n = toNumber(v); if (!n) return "0";
   if (n >= 1_000_000_000) return `${(n/1e9).toFixed(1)}B`;
@@ -177,6 +240,57 @@ function getTradeTimeframes() {
   const r = String(process.env.CRYPTO_TRADE_TIMEFRAMES || process.env.TRADE_TIMEFRAMES || "")
     .split(",").map(s => s.trim()).filter(Boolean);
   return r.length ? r : DEFAULT_TRADE_TIMEFRAMES;
+}
+
+function getAdaptiveQualityConfig(performanceSnapshot, { coin, side, timeframe }) {
+  const config = {
+    scoreBoost: 0,
+    publishFloorBoost: 0,
+    minConfirmationsBoost: 0,
+    blockCoin: false,
+    reasons: [],
+  };
+  if (!performanceSnapshot) return config;
+
+  const overall = performanceSnapshot.overall || buildTally();
+  const overallTotal = Number(overall.wins || 0) + Number(overall.losses || 0);
+  const overallWinRate = winRateFromTally(overall);
+  if (overallTotal >= 25 && overallWinRate !== null && overallWinRate < 52) {
+    config.scoreBoost += 2;
+    config.publishFloorBoost += 2;
+    config.reasons.push("overall_winrate_guard");
+  }
+
+  const sideTfKey = `${side}:${timeframe}`;
+  const sideTfStats = performanceSnapshot.bySideTimeframe?.[sideTfKey];
+  const sideTfTotal = Number(sideTfStats?.wins || 0) + Number(sideTfStats?.losses || 0);
+  const sideTfWinRate = winRateFromTally(sideTfStats);
+  if (sideTfTotal >= 8 && sideTfWinRate !== null && sideTfWinRate < 45) {
+    config.scoreBoost += 5;
+    config.publishFloorBoost += 4;
+    config.minConfirmationsBoost += 1;
+    config.reasons.push(`weak_${sideTfKey.toLowerCase()}`);
+  } else if (sideTfTotal >= 8 && sideTfWinRate !== null && sideTfWinRate < 55) {
+    config.scoreBoost += 2;
+    config.publishFloorBoost += 2;
+    config.reasons.push(`soft_${sideTfKey.toLowerCase()}`);
+  }
+
+  const coinStats = performanceSnapshot.byCoin?.[coin];
+  const coinTotal = Number(coinStats?.wins || 0) + Number(coinStats?.losses || 0);
+  const coinLossRate = coinTotal ? (Number(coinStats?.losses || 0) / coinTotal) * 100 : null;
+  if (coinTotal >= 6 && coinLossRate !== null && coinLossRate >= 70) {
+    config.blockCoin = true;
+    config.reasons.push("coin_loss_rate_guard");
+  }
+
+  const recentLossStreak = Number(performanceSnapshot.recentSlStreakByCoin?.[coin] || 0);
+  if (recentLossStreak >= 3) {
+    config.blockCoin = true;
+    config.reasons.push("coin_recent_sl_streak");
+  }
+
+  return config;
 }
 
 // ─── GATE 1: HTF Bias ─────────────────────────────────────────────────────────
@@ -541,9 +655,12 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const confidence    = side === "LONG" ? bullScore : bearScore;
   const confirmations = side === "LONG" ? bullConf  : bearConf;
 
-  const minScore         = tfRule.minScore         || 62;
-  const minConfirmations = tfRule.minConfirmations || 5;
-  const publishFloor     = tfRule.publishFloor     || DEFAULT_PUBLISH_FLOOR;
+  const adaptiveQuality  = getAdaptiveQualityConfig(performanceSnapshot, { coin, side, timeframe });
+  if (adaptiveQuality.blockCoin) return null;
+
+  const minScore         = (tfRule.minScore         || 62) + adaptiveQuality.scoreBoost;
+  const minConfirmations = (tfRule.minConfirmations || 5)  + adaptiveQuality.minConfirmationsBoost;
+  const publishFloor     = (tfRule.publishFloor     || DEFAULT_PUBLISH_FLOOR) + adaptiveQuality.publishFloorBoost;
 
   if (confidence < minScore)                   return null;
   if (confirmations.length < minConfirmations) return null;
@@ -595,7 +712,13 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
       marketQuoteVolume: roundPrice(activeMarket.quoteVolume),
       marketTradeCount: roundPrice(activeMarket.tradeCount),
       marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
-      modelVersion: "v16_working",
+      modelVersion: "v19_crypto_adaptive_parallel",
+      qualityGuard: {
+        scoreBoost: adaptiveQuality.scoreBoost,
+        publishFloorBoost: adaptiveQuality.publishFloorBoost,
+        minConfirmationsBoost: adaptiveQuality.minConfirmationsBoost,
+        reasons: adaptiveQuality.reasons,
+      },
       smc: {
         choch:     { bull: false, bear: false, level: smcCHoCH.level },
         idm:       { bull: idmBull,   bear: idmBear,   sweepLevel: smcIDM.sweepLevel, rejectionStrength: smcIDM.rejectionStrength },
@@ -627,18 +750,25 @@ async function fetchCryptoCandles(symbol, tf) {
 // ─── Coin Scan ────────────────────────────────────────────────────────────────
 async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = null) {
   const analyses = {};
-  for (const tf of SCAN_TIMEFRAMES) {
+  const timeframeConcurrency = getTimeframeFetchConcurrency();
+
+  await mapWithConcurrency(SCAN_TIMEFRAMES, timeframeConcurrency, async (tf) => {
     const candles = await fetchCryptoCandles(coin, tf);
     if (candles.length >= 20) analyses[tf] = analyzeCandles(candles);
-    await new Promise(r => setTimeout(r, 40)); // light throttle for API stability
-  }
+    await sleep(20);
+    return true;
+  });
+
   const htf = { daily: analyses["1h"] || null, twelveH: null, fourH: null, oneH: analyses["1h"] || null };
   const tradeTimeframes = getTradeTimeframes();
-  const candidates = tradeTimeframes.map(tf => {
-    if (!analyses[tf]) return null;
-    const bias = getHigherTimeframeBias(analyses, tf);
-    return buildCandidate(coin, tf, analyses[tf], bias, htf, marketActivity, performanceSnapshot);
-  }).filter(Boolean);
+  const candidates = tradeTimeframes
+    .map((tf) => {
+      if (!analyses[tf]) return null;
+      const bias = getHigherTimeframeBias(analyses, tf);
+      return buildCandidate(coin, tf, analyses[tf], bias, htf, marketActivity, performanceSnapshot);
+    })
+    .filter(Boolean);
+
   if (!candidates.length) return null;
   return candidates.sort((a, b) => b.confidence - a.confidence)[0];
 }
@@ -689,23 +819,77 @@ async function evaluateActiveSignals() {
 }
 
 async function getPerformanceSnapshot() {
+  const fallback = {
+    overall: buildTally(),
+    LONG: buildTally(),
+    SHORT: buildTally(),
+    "5m": buildTally(),
+    "1m": buildTally(),
+    byCoin: {},
+    bySideTimeframe: {},
+    recentSlStreakByCoin: {},
+    sampleSize: 0,
+  };
+
   try {
     const signals = await readCollection(SIGNAL_COLLECTION);
-    const stats   = { overall: buildTally(), LONG: buildTally(), SHORT: buildTally(), "5m": buildTally(), "1m": buildTally() };
+    const stats = {
+      ...fallback,
+      byCoin: {},
+      bySideTimeframe: {},
+      recentSlStreakByCoin: {},
+    };
+
+    const resolved = [];
     for (const sig of signals) {
-      const isWin  = WIN_RESULTS.has(sig.result);
+      const isWin = WIN_RESULTS.has(sig.result);
       const isLoss = LOSS_RESULTS.has(sig.result);
       if (!isWin && !isLoss) continue;
+      resolved.push(sig);
+
       const key = isWin ? "wins" : "losses";
       stats.overall[key] += 1;
-      if (stats[sig.side])      stats[sig.side][key] += 1;
+      if (stats[sig.side]) stats[sig.side][key] += 1;
       if (!stats[sig.timeframe]) stats[sig.timeframe] = buildTally();
       stats[sig.timeframe][key] += 1;
+
+      updateTally(stats.bySideTimeframe, `${sig.side}:${sig.timeframe}`, isWin);
     }
+
+    const recentResolved = [...resolved]
+      .sort((a, b) => {
+        const aTs = new Date(a.closedAt || a.updatedAt || a.createdAt || 0).getTime();
+        const bTs = new Date(b.closedAt || b.updatedAt || b.createdAt || 0).getTime();
+        return bTs - aTs;
+      })
+      .slice(0, 140);
+
+    const byCoinSeries = {};
+    for (const sig of recentResolved) {
+      const coin = String(sig.coin || "").toUpperCase();
+      if (!coin) continue;
+      const isWin = WIN_RESULTS.has(sig.result);
+      updateTally(stats.byCoin, coin, isWin);
+      if (!byCoinSeries[coin]) byCoinSeries[coin] = [];
+      byCoinSeries[coin].push(sig.result);
+    }
+
+    for (const [coin, series] of Object.entries(byCoinSeries)) {
+      let streak = 0;
+      for (const result of series) {
+        if (LOSS_RESULTS.has(result)) {
+          streak += 1;
+          continue;
+        }
+        break;
+      }
+      stats.recentSlStreakByCoin[coin] = streak;
+    }
+
     stats.sampleSize = stats.overall.wins + stats.overall.losses;
     return stats;
   } catch {
-    return { overall: buildTally(), LONG: buildTally(), SHORT: buildTally(), "5m": buildTally(), "1m": buildTally(), sampleSize: 0 };
+    return fallback;
   }
 }
 
@@ -718,10 +902,6 @@ async function persistSignal(signal) {
   try { push()?.broadcastSignalPush(signal);     } catch {}
   try { tg()?.autoSendSignal(signal);            } catch {}
   return result;
-}
-async function signalExists(candidate) {
-  const signals = await readCollection(SIGNAL_COLLECTION);
-  return signals.some(s => s.status === SIGNAL_STATUS.ACTIVE && s.coin === candidate.coin && s.side === candidate.side && s.timeframe === candidate.timeframe);
 }
 async function createManualSignal(payload, actor) {
   const confidence = Number(payload.confidence || 75);
@@ -742,34 +922,62 @@ async function createManualSignal(payload, actor) {
 async function scanNow({ source = "ENGINE" } = {}) {
   if (engineState.isScanning) return { skipped: true, message: "Scan already in progress" };
   engineState.isScanning = true;
-  const generatedSignals = [], errors = [];
+
+  const generatedSignals = [];
+  const errors = [];
+
   try {
-    const closedSignals       = await evaluateActiveSignals();
+    const closedSignals = await evaluateActiveSignals();
     const performanceSnapshot = await getPerformanceSnapshot();
-    const scanUniverse        = await getScanUniverse();
-    const coins               = scanUniverse.slice(0, getMaxCoinsPerScan());
-    for (const market of coins) {
-      // Skip admin-paused coins
+    const scanUniverse = await getScanUniverse();
+    const coins = scanUniverse.slice(0, getMaxCoinsPerScan());
+    const scanConcurrency = getCoinScanConcurrency();
+    const activeSignalKeys = await getActiveSignalKeySet();
+
+    const scanResults = await mapWithConcurrency(coins, scanConcurrency, async (market) => {
       if (engineState.pausedCoins[market.symbol]) {
-        errors.push({ coin: market.symbol, message: "Paused by admin — skipped in scan" });
+        return { coin: market.symbol, skipped: true, message: "Paused by admin — skipped in scan" };
+      }
+      const candidate = await analyzeCoin(market.symbol, market, performanceSnapshot);
+      return { coin: market.symbol, candidate };
+    });
+
+    for (const result of scanResults) {
+      if (!result) continue;
+      if (result?.error) {
+        errors.push({ coin: coins[result.index]?.symbol || "UNKNOWN", message: result.error.message || "Scan failed" });
         continue;
       }
+      if (result.skipped) {
+        errors.push({ coin: result.coin, message: result.message });
+        continue;
+      }
+      if (!result.candidate) continue;
+
       try {
-        const candidate = await analyzeCoin(market.symbol, market, performanceSnapshot);
-        if (!candidate) continue;
-        candidate.source    = source;
+        const candidate = result.candidate;
+        candidate.source = source;
         candidate.updatedAt = new Date().toISOString();
-        if (await signalExists(candidate)) continue;
+
+        const key = buildSignalKey(candidate);
+        if (activeSignalKeys.has(key)) continue;
+
         generatedSignals.push(await persistSignal(candidate));
-      } catch (e) { errors.push({ coin: market.symbol, message: e.message }); }
-      await new Promise(r => setTimeout(r, 80));
+        activeSignalKeys.add(key);
+      } catch (e) {
+        errors.push({ coin: result.coin, message: e.message });
+      }
     }
+
     engineState.lastGenerated = generatedSignals.length;
-    engineState.lastScanAt    = new Date().toISOString();
-    engineState.lastError     = errors.length ? `${errors.length} coin scans failed` : null;
-    engineState.scanCount    += 1;
+    engineState.lastScanAt = new Date().toISOString();
+    engineState.lastError = errors.length ? `${errors.length} coin scans failed` : null;
+    engineState.scanCount += 1;
+
     return { closedSignals, errors, generatedSignals, scanCount: engineState.scanCount };
-  } finally { engineState.isScanning = false; }
+  } finally {
+    engineState.isScanning = false;
+  }
 }
 
 function getStatus() {
