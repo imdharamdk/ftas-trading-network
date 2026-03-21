@@ -3,6 +3,39 @@ import { Link, useNavigate } from "react-router-dom";
 import { useSession } from "../context/useSession";
 import { apiFetch } from "../lib/api";
 
+const RESEND_COOLDOWN_SECONDS = 60;
+
+function mapForgotError(errorMessage, step) {
+  const raw = String(errorMessage || "").trim();
+  const normalized = raw.toLowerCase();
+
+  if (!raw) {
+    return step === "request" ? "Unable to send reset code" : "Unable to reset password";
+  }
+
+  if (normalized.includes("email is required")) {
+    return "Please enter your email first.";
+  }
+
+  if (normalized.includes("too many reset attempts") || normalized.includes("too many auth attempts")) {
+    return "Too many attempts. Please wait a minute and try again.";
+  }
+
+  if (normalized.includes("reset code must be 6 digits")) {
+    return "Reset code must be exactly 6 digits.";
+  }
+
+  if (normalized.includes("new password must be at least 6 characters")) {
+    return "New password must be at least 6 characters long.";
+  }
+
+  if (normalized.includes("invalid or expired reset request")) {
+    return "Reset code invalid or expired. Please request a new code.";
+  }
+
+  return raw;
+}
+
 export default function Login() {
   const navigate = useNavigate();
   const { login } = useSession();
@@ -21,6 +54,7 @@ export default function Login() {
   const [forgotBusy, setForgotBusy] = useState(false);
   const [forgotError, setForgotError] = useState("");
   const [forgotMessage, setForgotMessage] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0);
 
   // Pre-warm Render backend as soon as Login page loads — user fills credentials
   // in ~10-20s, by then backend is already warm, no cold start on first real request.
@@ -28,6 +62,18 @@ export default function Login() {
     const API = (import.meta.env?.VITE_API_BASE_URL || "/api").replace(/\/+$/, "");
     fetch(API + "/health", { method: "GET", cache: "no-store" }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) {
+      return undefined;
+    }
+
+    const timer = setInterval(() => {
+      setResendCooldown((current) => (current > 0 ? current - 1 : 0));
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [resendCooldown]);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -58,11 +104,12 @@ export default function Login() {
       });
 
       setForgotStep("reset");
+      setResendCooldown(RESEND_COOLDOWN_SECONDS);
       setForgotMessage(payload?.resetCode
         ? `Reset code: ${payload.resetCode} (dev mode)`
-        : "Reset code sent to your email. Please check inbox/spam.");
+        : "If your account exists, reset code has been sent. Check inbox/spam.");
     } catch (requestError) {
-      setForgotError(requestError.message || "Unable to send reset code");
+      setForgotError(mapForgotError(requestError.message, "request"));
     } finally {
       setForgotBusy(false);
     }
@@ -89,8 +136,9 @@ export default function Login() {
       setForgotPassword("");
       setShowForgot(false);
       setForgotStep("request");
+      setResendCooldown(0);
     } catch (resetError) {
-      setForgotError(resetError.message || "Unable to reset password");
+      setForgotError(mapForgotError(resetError.message, "reset"));
     } finally {
       setForgotBusy(false);
     }
@@ -212,13 +260,24 @@ export default function Login() {
                 {forgotError ? <div className="form-error">{forgotError}</div> : null}
                 {forgotMessage ? <div className="banner" style={{ marginTop: 0 }}>{forgotMessage}</div> : null}
 
-                <button className="button button-primary" disabled={forgotBusy} type="submit">
-                  {forgotBusy ? "Please wait..." : forgotStep === "request" ? "Send Reset Code" : "Reset Password"}
+                <button
+                  className="button button-primary"
+                  disabled={forgotBusy || (forgotStep === "request" && resendCooldown > 0)}
+                  type="submit"
+                >
+                  {forgotBusy
+                    ? "Please wait..."
+                    : forgotStep === "request"
+                      ? resendCooldown > 0
+                        ? `Resend in ${resendCooldown}s`
+                        : "Send Reset Code"
+                      : "Reset Password"}
                 </button>
 
                 {forgotStep === "reset" && (
                   <button
                     className="button button-ghost"
+                    disabled={forgotBusy || resendCooldown > 0}
                     onClick={() => {
                       setForgotStep("request");
                       setForgotCode("");
@@ -228,7 +287,7 @@ export default function Login() {
                     }}
                     type="button"
                   >
-                    Request New Code
+                    {resendCooldown > 0 ? `Request New Code (${resendCooldown}s)` : "Request New Code"}
                   </button>
                 )}
               </form>
