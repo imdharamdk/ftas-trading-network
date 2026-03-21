@@ -2,6 +2,7 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const rateLimit = require("express-rate-limit");
+const { authenticator } = require("otplib");
 const { ipKeyGenerator } = require("express-rate-limit");
 const { invalidateUserCache, requireAdmin, requireAuth, signToken } = require("../middleware/auth");
 const {
@@ -42,6 +43,10 @@ function getResetHelpMessage() {
 
 function generateResetCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function getTwoFactorIssuer() {
+  return String(process.env.TOTP_ISSUER || "FTAS Trading Network").trim();
 }
 
 function hashResetCode(email, code) {
@@ -158,7 +163,7 @@ router.post("/register", async (req, res) => {
 
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body || {};
+    const { email, password, otp } = req.body || {};
     const normalizedEmail = normalizeEmail(email);
     const users = await readCollection("users");
     const user = users.find((item) => item.email === normalizedEmail);
@@ -186,6 +191,34 @@ router.post("/login", async (req, res) => {
         reason: "invalid_password",
       });
       return res.status(401).json({ message: "Invalid email or password" });
+    }
+
+    if (user?.twoFactor?.enabled) {
+      const submittedOtp = String(otp || "").trim();
+      if (!submittedOtp) {
+        await logAuthSecurityEvent(req, {
+          type: "LOGIN_2FA",
+          userId: user.id,
+          level: "WARN",
+          email: normalizedEmail,
+          status: "DENY",
+          reason: "otp_required",
+        });
+        return res.status(401).json({ message: "OTP required", code: "OTP_REQUIRED" });
+      }
+
+      const isOtpValid = authenticator.check(submittedOtp, user.twoFactor.secret || "");
+      if (!isOtpValid) {
+        await logAuthSecurityEvent(req, {
+          type: "LOGIN_2FA",
+          userId: user.id,
+          level: "WARN",
+          email: normalizedEmail,
+          status: "DENY",
+          reason: "otp_invalid",
+        });
+        return res.status(401).json({ message: "Invalid OTP", code: "OTP_INVALID" });
+      }
     }
 
     await logAuthSecurityEvent(req, {
@@ -404,6 +437,168 @@ router.post("/reset-password", resetPasswordLimiter, async (req, res) => {
 
     invalidateUserCache(result.user.id);
     return res.json({ message: "Password reset successful. Please login with your new password." });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.post("/2fa/setup", requireAuth, async (req, res) => {
+  try {
+    const issuer = getTwoFactorIssuer();
+    const email = req.rawUser?.email || req.user?.email || "user@example.com";
+    const secret = authenticator.generateSecret();
+    const otpauthUrl = authenticator.keyuri(email, issuer, secret);
+
+    const updated = await mutateCollection("users", (records) => {
+      let nextUser = null;
+      const nextRecords = records.map((user) => {
+        if (user.id !== req.userId) return user;
+        nextUser = {
+          ...user,
+          twoFactor: {
+            ...(user.twoFactor || {}),
+            enabled: Boolean(user.twoFactor?.enabled),
+            secret: user.twoFactor?.secret || null,
+            pendingSecret: secret,
+            updatedAt: new Date().toISOString(),
+          },
+          updatedAt: new Date().toISOString(),
+        };
+        return nextUser;
+      });
+      return { records: nextRecords, value: nextUser };
+    });
+
+    if (!updated) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    invalidateUserCache(req.userId);
+    return res.json({
+      message: "2FA setup secret generated. Verify OTP to enable.",
+      secret,
+      otpauthUrl,
+      alreadyEnabled: Boolean(updated.twoFactor?.enabled),
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.post("/2fa/enable", requireAuth, async (req, res) => {
+  try {
+    const submittedOtp = String(req.body?.otp || "").trim();
+    if (!submittedOtp) {
+      return res.status(400).json({ message: "OTP is required" });
+    }
+
+    const users = await readCollection("users");
+    const user = users.find((item) => item.id === req.userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const pendingSecret = user?.twoFactor?.pendingSecret || user?.twoFactor?.secret || null;
+    if (!pendingSecret) {
+      return res.status(400).json({ message: "Run setup first to generate 2FA secret" });
+    }
+
+    if (!authenticator.check(submittedOtp, pendingSecret)) {
+      return res.status(400).json({ message: "Invalid OTP" });
+    }
+
+    const updated = await mutateCollection("users", (records) => {
+      let nextUser = null;
+      const nextRecords = records.map((item) => {
+        if (item.id !== req.userId) return item;
+        nextUser = {
+          ...item,
+          twoFactor: {
+            enabled: true,
+            secret: pendingSecret,
+            pendingSecret: null,
+            enabledAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          updatedAt: new Date().toISOString(),
+        };
+        return nextUser;
+      });
+      return { records: nextRecords, value: nextUser };
+    });
+
+    if (!updated) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    await logAuthSecurityEvent(req, {
+      type: "2FA_ENABLE",
+      userId: req.userId,
+      email: updated.email,
+      status: "OK",
+    });
+
+    invalidateUserCache(req.userId);
+    return res.json({ message: "2FA enabled", user: sanitizeUser(updated) });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.post("/2fa/disable", requireAuth, async (req, res) => {
+  try {
+    const submittedOtp = String(req.body?.otp || "").trim();
+    if (!submittedOtp) {
+      return res.status(400).json({ message: "OTP is required" });
+    }
+
+    const users = await readCollection("users");
+    const user = users.find((item) => item.id === req.userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (!user?.twoFactor?.enabled || !user?.twoFactor?.secret) {
+      return res.status(400).json({ message: "2FA is not enabled" });
+    }
+
+    if (!authenticator.check(submittedOtp, user.twoFactor.secret)) {
+      return res.status(400).json({ message: "Invalid OTP" });
+    }
+
+    const updated = await mutateCollection("users", (records) => {
+      let nextUser = null;
+      const nextRecords = records.map((item) => {
+        if (item.id !== req.userId) return item;
+        nextUser = {
+          ...item,
+          twoFactor: {
+            enabled: false,
+            secret: null,
+            pendingSecret: null,
+            enabledAt: null,
+            updatedAt: new Date().toISOString(),
+          },
+          updatedAt: new Date().toISOString(),
+        };
+        return nextUser;
+      });
+      return { records: nextRecords, value: nextUser };
+    });
+
+    if (!updated) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    await logAuthSecurityEvent(req, {
+      type: "2FA_DISABLE",
+      userId: req.userId,
+      email: updated.email,
+      status: "OK",
+    });
+
+    invalidateUserCache(req.userId);
+    return res.json({ message: "2FA disabled", user: sanitizeUser(updated) });
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }

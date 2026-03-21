@@ -63,7 +63,9 @@ export async function apiFetch(path, options = {}) {
     }
 
     if (!response.ok) {
-      throw new Error(payload.message || "Request failed");
+      const err = new Error(payload.message || "Request failed");
+      if (payload.code) err.code = payload.code;
+      throw err;
     }
 
     return payload;

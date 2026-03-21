@@ -43,9 +43,11 @@ export default function Login() {
   const [form, setForm] = useState({
     email: "",
     password: "",
+    otp: "",
   });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [otpRequired, setOtpRequired] = useState(false);
 
   const [showForgot, setShowForgot] = useState(false);
   const [forgotStep, setForgotStep] = useState("request");
@@ -85,9 +87,18 @@ export default function Login() {
 
     try {
       await login(form);
+      setOtpRequired(false);
       navigate("/dashboard");
     } catch (submissionError) {
-      setError(submissionError.message);
+      if (submissionError?.code === "OTP_REQUIRED" || String(submissionError?.message || "").toLowerCase().includes("otp required")) {
+        setOtpRequired(true);
+        setError("2FA enabled hai. Authenticator app ka 6-digit OTP enter karo.");
+      } else if (submissionError?.code === "OTP_INVALID" || String(submissionError?.message || "").toLowerCase().includes("invalid otp")) {
+        setOtpRequired(true);
+        setError("Invalid OTP. Please try again.");
+      } else {
+        setError(submissionError.message);
+      }
     } finally {
       setBusy(false);
     }
@@ -199,6 +210,19 @@ export default function Login() {
               />
             </label>
 
+            {otpRequired && (
+              <label>
+                <span>Authenticator OTP</span>
+                <input
+                  inputMode="numeric"
+                  maxLength={6}
+                  onChange={(event) => setForm((current) => ({ ...current, otp: event.target.value.replace(/[^0-9]/g, "").slice(0, 6) }))}
+                  placeholder="6-digit OTP"
+                  value={form.otp}
+                />
+              </label>
+            )}
+
             {error ? <div className="form-error">{error}</div> : null}
 
             <button className="button button-primary" disabled={busy} type="submit">
@@ -213,6 +237,8 @@ export default function Login() {
               setForgotError("");
               setForgotMessage("");
               setForgotStep("request");
+              setOtpRequired(false);
+              setForm((current) => ({ ...current, otp: "" }));
             }}
             style={{ marginTop: "10px", width: "100%" }}
             type="button"

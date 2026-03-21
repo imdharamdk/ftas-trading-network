@@ -44,6 +44,16 @@ function normalizeRiskPreference(value) {
   return RISK_PREFERENCES.BALANCED;
 }
 
+function normalizeTwoFactor(value = {}) {
+  return {
+    enabled: Boolean(value?.enabled),
+    secret: value?.secret ? String(value.secret) : null,
+    pendingSecret: value?.pendingSecret ? String(value.pendingSecret) : null,
+    enabledAt: value?.enabledAt || null,
+    updatedAt: value?.updatedAt || null,
+  };
+}
+
 function normalizeSignalPreferences(value = {}) {
   const minConfidence = Math.min(100, Math.max(0, Number(value?.minConfidence || 0)));
   const onlyStrong = Boolean(value?.onlyStrong);
@@ -123,6 +133,7 @@ function createUser({
   riskPreference = RISK_PREFERENCES.BALANCED,
   role = USER_ROLES.USER,
   signalPreferences = DEFAULT_SIGNAL_PREFERENCES,
+  twoFactor = {},
   subscriptionEndsAt = addDaysToIso(FREE_TRIAL_DAYS),
   subscriptionStatus = SUBSCRIPTION_STATUS.ACTIVE,
   termsAcceptedAt = null,
@@ -139,6 +150,7 @@ function createUser({
     plan,
     riskPreference: normalizeRiskPreference(riskPreference),
     signalPreferences: normalizeSignalPreferences(signalPreferences),
+    twoFactor: normalizeTwoFactor(twoFactor),
     isActive,
     subscriptionStatus,
     subscriptionEndsAt,
@@ -154,10 +166,11 @@ function sanitizeUser(user) {
     return null;
   }
 
-  const { passwordHash: _passwordHash, passwordReset: _passwordReset, ...safeUser } = user;
+  const { passwordHash: _passwordHash, passwordReset: _passwordReset, twoFactor: _twoFactor, ...safeUser } = user;
   return {
     ...safeUser,
     hasSignalAccess: hasSignalAccess(safeUser),
+    twoFactorEnabled: Boolean(user?.twoFactor?.enabled),
     subscriptionStatus: resolveSubscriptionStatus(safeUser),
   };
 }
@@ -175,6 +188,7 @@ module.exports = {
   normalizeEmail,
   normalizeRiskPreference,
   normalizeSignalPreferences,
+  normalizeTwoFactor,
   resolveSubscriptionStatus,
   sanitizeUser,
 };
