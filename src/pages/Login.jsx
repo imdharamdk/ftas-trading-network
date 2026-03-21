@@ -91,6 +91,8 @@ export default function Login() {
               No account yet? <Link to="/signup">Create one</Link>
             </span>
             <Link to="/news">View market news</Link>
+            <Link to="/terms">Terms</Link>
+            <Link to="/privacy">Privacy</Link>
           </div>
         </div>
       </div>

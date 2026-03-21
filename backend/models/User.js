@@ -95,6 +95,8 @@ function createUser({
   role = USER_ROLES.USER,
   subscriptionEndsAt = addDaysToIso(FREE_TRIAL_DAYS),
   subscriptionStatus = SUBSCRIPTION_STATUS.ACTIVE,
+  termsAcceptedAt = null,
+  privacyAcceptedAt = null,
 }) {
   const now = new Date().toISOString();
 
@@ -109,6 +111,8 @@ function createUser({
     isActive,
     subscriptionStatus,
     subscriptionEndsAt,
+    termsAcceptedAt,
+    privacyAcceptedAt,
     createdAt: now,
     updatedAt: now,
   };

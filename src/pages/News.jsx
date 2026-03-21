@@ -170,6 +170,8 @@ export default function News() {
         <nav className="public-links">
           <Link to="/">Login</Link>
           <Link to="/signup">Signup</Link>
+          <Link to="/terms">Terms</Link>
+          <Link to="/privacy">Privacy</Link>
         </nav>
       </header>
       {filters}

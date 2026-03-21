@@ -10,16 +10,25 @@ export default function Signup() {
     email: "",
     password: "",
   });
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (!acceptedTerms) {
+      setError("Please accept the Terms of Service and Privacy Policy to continue.");
+      return;
+    }
     setBusy(true);
     setError("");
 
     try {
-      await register(form);
+      await register({
+        ...form,
+        termsAccepted: acceptedTerms,
+        privacyAccepted: acceptedTerms,
+      });
       navigate("/dashboard");
     } catch (submissionError) {
       setError(submissionError.message);
@@ -67,6 +76,17 @@ export default function Signup() {
               />
             </label>
 
+            <label className="auth-checkbox">
+              <input
+                checked={acceptedTerms}
+                onChange={(event) => setAcceptedTerms(event.target.checked)}
+                type="checkbox"
+              />
+              <span>
+                I agree to the <Link to="/terms">Terms of Service</Link> and <Link to="/privacy">Privacy Policy</Link>.
+              </span>
+            </label>
+
             {error ? <div className="form-error">{error}</div> : null}
 
             <button className="button button-primary" disabled={busy} type="submit">
@@ -78,6 +98,8 @@ export default function Signup() {
             <span>
               Already registered? <Link to="/">Login</Link>
             </span>
+            <Link to="/terms">Terms</Link>
+            <Link to="/privacy">Privacy</Link>
           </div>
         </div>
 

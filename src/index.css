@@ -163,6 +163,17 @@ h1, h2, h3 { letter-spacing: -0.03em; line-height: 1.2; }
 /* ─── 5. FORMS ──────────────────────────────────────────────────────────────── */
 .auth-form, .form-grid { display: grid; gap: var(--s4); }
 .auth-form { margin-top: var(--s5); }
+
+.auth-checkbox {
+  align-items: flex-start;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 18px 1fr;
+}
+
+.auth-checkbox input { margin-top: 3px; }
+.auth-checkbox span { color: var(--c-muted); font-size: 0.8rem; line-height: 1.4; }
+.auth-checkbox a { color: var(--c-sky); font-weight: 700; }
 .form-grid { grid-template-columns: 1fr; }
 .form-span-2 { grid-column: span 1; }
 .form-grid button { justify-self: start; }
@@ -208,6 +219,17 @@ h1, h2, h3 { letter-spacing: -0.03em; line-height: 1.2; }
 /* ─── 7. LINKS ──────────────────────────────────────────────────────────────── */
 .auth-links { color: var(--c-muted); display: flex; flex-wrap: wrap; font-size: 0.84rem; gap: 10px 14px; margin-top: var(--s5); }
 .auth-links a, .news-card a, .public-links a { color: var(--c-sky); font-weight: 700; }
+
+.legal-links {
+  color: var(--c-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.72rem;
+  gap: 8px 12px;
+  margin-top: var(--s3);
+}
+
+.legal-links a { color: var(--c-sky); font-weight: 700; }
 
 
 /* ─── 8. BUTTONS ────────────────────────────────────────────────────────────── */
@@ -831,6 +853,33 @@ h1, h2, h3 { letter-spacing: -0.03em; line-height: 1.2; }
 .public-page   { display: grid; gap: var(--s4); min-height: 100vh; padding: var(--s4); }
 .public-header { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: var(--r-lg); display: flex; flex-direction: column; gap: var(--s3); padding: var(--s4); }
 .public-links  { display: flex; flex-wrap: wrap; gap: var(--s4); }
+
+.legal-card {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: var(--r-lg);
+  display: grid;
+  gap: var(--s4);
+  padding: var(--s5);
+}
+
+.legal-meta { display: flex; flex-wrap: wrap; gap: var(--s3); }
+
+.legal-section { display: grid; gap: var(--s2); }
+
+.legal-section p,
+.legal-section li {
+  color: var(--c-muted);
+  font-size: 0.86rem;
+  line-height: 1.6;
+}
+
+.legal-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+}
 
 
 /* ─── 32. COIN AUTOCOMPLETE ─────────────────────────────────────────────────── */

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import { useSession } from "../context/useSession";
 import ChatBox from "./ChatBox";
 
@@ -123,6 +123,10 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
           <button className="button button-ghost" onClick={logout} style={{ width: "100%" }} type="button">
             Logout
           </button>
+          <div className="legal-links">
+            <Link to="/terms">Terms</Link>
+            <Link to="/privacy">Privacy</Link>
+          </div>
         </div>
       </aside>
 

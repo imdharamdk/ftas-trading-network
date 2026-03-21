@@ -5,6 +5,8 @@ import { useSession } from "./context/useSession";
 import { lazy, Suspense } from "react";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
+import Terms from "./pages/Terms";
+import Privacy from "./pages/Privacy";
 
 // Lazy load heavy pages — browser downloads them only when first visited
 const Dashboard    = lazy(() => import("./pages/Dashboard"));
@@ -72,6 +74,8 @@ export default function App() {
             }
             path="/signup"
           />
+          <Route element={<Terms />} path="/terms" />
+          <Route element={<Privacy />} path="/privacy" />
           <Route
             element={
               <SessionGate>

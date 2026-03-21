@@ -16,11 +16,15 @@ const router = express.Router();
 
 router.post("/register", async (req, res) => {
   try {
-    const { adminSetupKey, email, name, password } = req.body || {};
+    const { adminSetupKey, email, name, password, privacyAccepted, termsAccepted } = req.body || {};
     const normalizedEmail = normalizeEmail(email);
 
     if (!normalizedEmail || !password || password.length < 6) {
       return res.status(400).json({ message: "Valid email and 6+ char password required" });
+    }
+
+    if (termsAccepted !== true || privacyAccepted !== true) {
+      return res.status(400).json({ message: "Please accept the Terms of Service and Privacy Policy" });
     }
 
     const result = await mutateCollection("users", async (records) => {
@@ -38,6 +42,7 @@ router.post("/register", async (req, res) => {
           : USER_ROLES.USER;
 
       const passwordHash = await bcrypt.hash(password, 10);
+      const acceptedAt = new Date().toISOString();
       const user = createUser({
         email: normalizedEmail,
         name,
@@ -46,6 +51,8 @@ router.post("/register", async (req, res) => {
         role,
         subscriptionEndsAt: role === USER_ROLES.ADMIN ? null : undefined,
         subscriptionStatus: SUBSCRIPTION_STATUS.ACTIVE,
+        termsAcceptedAt: acceptedAt,
+        privacyAcceptedAt: acceptedAt,
       });
 
       return {
