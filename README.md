@@ -75,6 +75,7 @@ Important backend vars:
 - `ALPHA_VANTAGE_API_KEY=replace_with_free_news_key`
 - `NEWS_CACHE_MS=900000`
 - `FRONTEND_URL=http://localhost:5173,http://127.0.0.1:5173`
+- `TRUST_PROXY_HOPS=1` (Render/NGINX proxy support for accurate rate limiting)
 - `RESEND_API_KEY=your_resend_api_key` (Replace `re_xxxxxxxxx` with your real key)
 - `RESEND_FROM_EMAIL=FTAS <onboarding@resend.dev>`
 - `RESEND_TIMEOUT_MS=10000`

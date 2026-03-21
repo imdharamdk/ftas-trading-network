@@ -148,6 +148,9 @@ async function maybeBootstrapAdmin() {
 function createApp() {
   const app = express();
 
+  // Render/NGINX proxy support so rate-limit reads real client IP from X-Forwarded-For
+  app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS || 1));
+
   // ── Security ────────────────────────────────────────────────────────────────
   app.disable("x-powered-by");
   app.use(helmet({
