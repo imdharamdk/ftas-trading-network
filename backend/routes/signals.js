@@ -33,6 +33,54 @@ function resolveRiskPreference(req) {
   return { preference: pref, minConfidence };
 }
 
+function resolveEffectiveSignalPreferences(req, riskMinConfidence = 0) {
+  const raw = req.rawUser?.signalPreferences || req.user?.signalPreferences || {};
+  const minConfidence = Math.max(0, Math.min(100, Math.max(riskMinConfidence, Number(raw.minConfidence || 0))));
+  const sideValues = Array.isArray(raw.sides)
+    ? raw.sides.map((v) => String(v || "").toUpperCase()).filter((v) => v === "LONG" || v === "SHORT")
+    : ["LONG", "SHORT"];
+  const timeframeValues = Array.isArray(raw.timeframes)
+    ? raw.timeframes.map((v) => String(v || "").toLowerCase()).filter(Boolean)
+    : [];
+
+  return {
+    minConfidence,
+    onlyStrong: Boolean(raw.onlyStrong),
+    sides: [...new Set(sideValues.length ? sideValues : ["LONG", "SHORT"])],
+    timeframes: [...new Set(timeframeValues)],
+  };
+}
+
+function buildSignalPreferenceCacheKey(preference, signalPref, userId = "anon") {
+  return [
+    userId,
+    preference,
+    signalPref.minConfidence,
+    signalPref.onlyStrong ? "strong" : "all",
+    signalPref.sides.join(","),
+    signalPref.timeframes.join(","),
+  ].join(":");
+}
+
+function matchesSignalPreference(signal, signalPref) {
+  const confidence = Number(signal?.confidence || 0);
+  if (confidence < signalPref.minConfidence) return false;
+
+  const side = String(signal?.side || "").toUpperCase();
+  if (signalPref.sides.length && !signalPref.sides.includes(side)) return false;
+
+  const timeframe = String(signal?.timeframe || "").toLowerCase();
+  if (signalPref.timeframes.length && !signalPref.timeframes.includes(timeframe)) return false;
+
+  if (signalPref.onlyStrong) {
+    const strongByLabel = String(signal?.strength || "").toUpperCase() === "STRONG";
+    const strongByConfidence = confidence >= 90;
+    if (!strongByLabel && !strongByConfidence) return false;
+  }
+
+  return true;
+}
+
 // ─── /api/config — expose shared constants to frontend ───────────────────────
 // Frontend reads this at startup so SIGNAL_EXPIRY_MS stays in sync with backend
 router.get("/config", (_req, res) => {
@@ -451,8 +499,10 @@ function toLiteSignal(signal) {
 
 router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
   const { preference, minConfidence } = resolveRiskPreference(req);
+  const signalPref = resolveEffectiveSignalPreferences(req, minConfidence);
+  const prefKey = buildSignalPreferenceCacheKey(preference, signalPref, req.userId);
   const fields = String(req.query.fields || "full").toLowerCase();
-  const cacheKey = "signals:active:" + (req.query.coin || "all") + ":" + (req.query.limit || 50) + ":" + preference + ":" + fields;
+  const cacheKey = "signals:active:" + (req.query.coin || "all") + ":" + (req.query.limit || 50) + ":" + prefKey + ":" + fields;
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
 
@@ -465,7 +515,7 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
     (signal) =>
       signal.status === SIGNAL_STATUS.ACTIVE &&
       (!coin || signal.coin === coin) &&
-      Number(signal.confidence || 0) >= minConfidence,
+      matchesSignalPreference(signal, signalPref),
     limit
   );
 
@@ -477,8 +527,10 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
 
 router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   const { preference, minConfidence } = resolveRiskPreference(req);
+  const signalPref = resolveEffectiveSignalPreferences(req, minConfidence);
+  const prefKey = buildSignalPreferenceCacheKey(preference, signalPref, req.userId);
   const fields = String(req.query.fields || "full").toLowerCase();
-  const cacheKey = "signals:history:" + (req.query.coin || "all") + ":" + (req.query.limit || "all") + ":" + preference + ":" + fields;
+  const cacheKey = "signals:history:" + (req.query.coin || "all") + ":" + (req.query.limit || "all") + ":" + prefKey + ":" + fields;
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
 
@@ -490,7 +542,7 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
     signal.status === SIGNAL_STATUS.CLOSED &&
     signal.result !== "EXPIRED" &&
     (!coin || signal.coin === coin) &&
-    Number(signal.confidence || 0) >= minConfidence;
+    matchesSignalPreference(signal, signalPref);
   const signals = limit ? takeLatest(rawSignals, predicate, limit) : rawSignals.filter(predicate);
   const payloadSignals = fields === "lite" ? signals.map(toLiteSignal) : signals;
 
@@ -501,7 +553,9 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
 
 router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
   const { preference, minConfidence } = resolveRiskPreference(req);
-  const cacheKey = "signals:expired:" + (req.query.coin || "all") + ":" + (req.query.limit || "all") + ":" + preference;
+  const signalPref = resolveEffectiveSignalPreferences(req, minConfidence);
+  const prefKey = buildSignalPreferenceCacheKey(preference, signalPref, req.userId);
+  const cacheKey = "signals:expired:" + (req.query.coin || "all") + ":" + (req.query.limit || "all") + ":" + prefKey;
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
 
@@ -513,7 +567,7 @@ router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
   const predicate = (signal) =>
     signal.result === "EXPIRED" &&
     (!coin || signal.coin === coin) &&
-    Number(signal.confidence || 0) >= minConfidence;
+    matchesSignalPreference(signal, signalPref);
   const signals = limit ? takeLatest(rawSignals, predicate, limit) : rawSignals.filter(predicate);
 
   const result = { signals };
@@ -523,46 +577,52 @@ router.get("/expired", requireAuth, requireSignalAccess, async (req, res) => {
 
 router.get("/stats/overview", requireAuth, async (req, res) => {
   const { preference, minConfidence } = resolveRiskPreference(req);
-  const cached = cache.get("signals:overview:" + preference);
+  const signalPref = resolveEffectiveSignalPreferences(req, minConfidence);
+  const prefKey = buildSignalPreferenceCacheKey(preference, signalPref, req.userId);
+  const cached = cache.get("signals:overview:" + prefKey);
   if (cached) return res.json(cached);
 
   // PERF FIX: Don't read archive here — Crypto/Stocks page don't need it for overview cards.
   // Analytics page reads archive separately. archiveSize=0 is fine for the stat cards.
   // Also removed duplicate expireStaleActives call — active endpoint handles it.
   const signals = await readCollection("signals");
-  const filtered = signals.filter((s) => Number(s.confidence || 0) >= minConfidence);
+  const filtered = signals.filter((signal) => matchesSignalPreference(signal, signalPref));
   const result = { stats: { ...buildOverview(filtered), archiveSize: 0 } };
-  cache.set("signals:overview:" + preference, result, 60); // 60s TTL
+  cache.set("signals:overview:" + prefKey, result, 60); // 60s TTL
   return res.json(result);
 });
 
 router.get("/stats/analytics", requireAuth, async (req, res) => {
   const { preference, minConfidence } = resolveRiskPreference(req);
-  const cached = cache.get("signals:analytics:" + preference);
+  const signalPref = resolveEffectiveSignalPreferences(req, minConfidence);
+  const prefKey = buildSignalPreferenceCacheKey(preference, signalPref, req.userId);
+  const cached = cache.get("signals:analytics:" + prefKey);
   if (cached) return res.json(cached);
 
   const signals = await readCollection("signals");
   const archive = await readCollection("signalsArchive");
-  const combined = [...signals, ...archive].filter((s) => Number(s.confidence || 0) >= minConfidence);
+  const combined = [...signals, ...archive].filter((signal) => matchesSignalPreference(signal, signalPref));
   const result = {
     analytics: buildAnalytics(combined),
   };
-  cache.set("signals:analytics:" + preference, result, 60);
+  cache.set("signals:analytics:" + prefKey, result, 60);
   return res.json(result);
 });
 
 router.get("/stats/performance", requireAuth, async (req, res) => {
   const { preference, minConfidence } = resolveRiskPreference(req);
-  const cached = cache.get("signals:performance:" + preference);
+  const signalPref = resolveEffectiveSignalPreferences(req, minConfidence);
+  const prefKey = buildSignalPreferenceCacheKey(preference, signalPref, req.userId);
+  const cached = cache.get("signals:performance:" + prefKey);
   if (cached) return res.json(cached);
 
   const signals = await readCollection("signals");
   const archive = await readCollection("signalsArchive");
-  const combined = [...signals, ...archive].filter((s) => Number(s.confidence || 0) >= minConfidence);
+  const combined = [...signals, ...archive].filter((signal) => matchesSignalPreference(signal, signalPref));
   const result = {
     performance: buildPerformance(combined),
   };
-  cache.set("signals:performance:" + preference, result, 60);
+  cache.set("signals:performance:" + prefKey, result, 60);
   return res.json(result);
 });
 
@@ -570,6 +630,44 @@ router.get("/engine/status", requireAuth, (req, res) => {
   return res.json({
     engine: getStatus(),
   });
+});
+
+router.get("/missed", requireAuth, requireSignalAccess, async (req, res) => {
+  try {
+    const sinceRaw = String(req.query?.since || "").trim();
+    const sinceDate = new Date(sinceRaw);
+    if (!sinceRaw || Number.isNaN(sinceDate.getTime())) {
+      return res.status(400).json({ message: "Valid ?since=ISO timestamp is required" });
+    }
+
+    const { minConfidence } = resolveRiskPreference(req);
+    const signalPref = resolveEffectiveSignalPreferences(req, minConfidence);
+    const scope = String(req.query?.scope || "all").toLowerCase();
+    const limit = Math.min(500, Math.max(1, Number(req.query?.limit || 100)));
+
+    const signals = await readCollection("signals");
+    const filtered = [];
+    for (const signal of signals) {
+      const createdAt = new Date(signal.createdAt || 0).getTime();
+      if (!createdAt || createdAt <= sinceDate.getTime()) continue;
+      if (!matchesSignalPreference(signal, signalPref)) continue;
+      if (scope === "active" && signal.status !== SIGNAL_STATUS.ACTIVE) continue;
+      if (scope === "closed" && signal.status !== SIGNAL_STATUS.CLOSED) continue;
+      filtered.push(signal);
+      if (filtered.length >= limit) break;
+    }
+
+    const fields = String(req.query.fields || "lite").toLowerCase();
+    const payloadSignals = fields === "full" ? filtered : filtered.map(toLiteSignal);
+
+    return res.json({
+      since: sinceDate.toISOString(),
+      count: payloadSignals.length,
+      signals: payloadSignals,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
 });
 
 router.get("/live-prices", requireAuth, requireSignalAccess, async (req, res) => {

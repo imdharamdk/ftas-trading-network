@@ -26,6 +26,13 @@ const SUBSCRIPTION_STATUS = {
 
 const FREE_TRIAL_DAYS = 7;
 
+const DEFAULT_SIGNAL_PREFERENCES = {
+  minConfidence: 0,
+  sides: ["LONG", "SHORT"],
+  timeframes: [],
+  onlyStrong: false,
+};
+
 function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
 }
@@ -35,6 +42,28 @@ function normalizeRiskPreference(value) {
   if (pref === RISK_PREFERENCES.AGGRESSIVE) return RISK_PREFERENCES.AGGRESSIVE;
   if (pref === RISK_PREFERENCES.CONSERVATIVE) return RISK_PREFERENCES.CONSERVATIVE;
   return RISK_PREFERENCES.BALANCED;
+}
+
+function normalizeSignalPreferences(value = {}) {
+  const minConfidence = Math.min(100, Math.max(0, Number(value?.minConfidence || 0)));
+  const onlyStrong = Boolean(value?.onlyStrong);
+
+  const sideValues = Array.isArray(value?.sides)
+    ? value.sides.map((v) => String(v || "").toUpperCase()).filter((v) => v === "LONG" || v === "SHORT")
+    : DEFAULT_SIGNAL_PREFERENCES.sides;
+  const sides = [...new Set(sideValues)];
+
+  const timeframeValues = Array.isArray(value?.timeframes)
+    ? value.timeframes.map((v) => String(v || "").toLowerCase()).filter(Boolean)
+    : [];
+  const timeframes = [...new Set(timeframeValues)];
+
+  return {
+    minConfidence,
+    onlyStrong,
+    sides: sides.length ? sides : [...DEFAULT_SIGNAL_PREFERENCES.sides],
+    timeframes,
+  };
 }
 
 function addDaysToIso(days, baseDate = new Date()) {
@@ -93,6 +122,7 @@ function createUser({
   plan = USER_PLANS.FREE_TRIAL,
   riskPreference = RISK_PREFERENCES.BALANCED,
   role = USER_ROLES.USER,
+  signalPreferences = DEFAULT_SIGNAL_PREFERENCES,
   subscriptionEndsAt = addDaysToIso(FREE_TRIAL_DAYS),
   subscriptionStatus = SUBSCRIPTION_STATUS.ACTIVE,
   termsAcceptedAt = null,
@@ -108,6 +138,7 @@ function createUser({
     role,
     plan,
     riskPreference: normalizeRiskPreference(riskPreference),
+    signalPreferences: normalizeSignalPreferences(signalPreferences),
     isActive,
     subscriptionStatus,
     subscriptionEndsAt,
@@ -132,6 +163,7 @@ function sanitizeUser(user) {
 }
 
 module.exports = {
+  DEFAULT_SIGNAL_PREFERENCES,
   FREE_TRIAL_DAYS,
   SUBSCRIPTION_STATUS,
   USER_ROLES,
@@ -142,6 +174,7 @@ module.exports = {
   hasSignalAccess,
   normalizeEmail,
   normalizeRiskPreference,
+  normalizeSignalPreferences,
   resolveSubscriptionStatus,
   sanitizeUser,
 };

@@ -11,6 +11,7 @@ const {
   createUser,
   normalizeEmail,
   normalizeRiskPreference,
+  normalizeSignalPreferences,
   sanitizeUser,
 } = require("../models/User");
 const { mutateCollection, readCollection, writeCollection } = require("../storage/fileStore");
@@ -73,8 +74,17 @@ const resetPasswordLimiter = rateLimit({
 
 router.post("/register", async (req, res) => {
   try {
-    const { adminSetupKey, email, name, password, privacyAccepted, termsAccepted } = req.body || {};
+    const { adminSetupKey, email, firstName, lastName, name, password, privacyAccepted, termsAccepted } = req.body || {};
     const normalizedEmail = normalizeEmail(email);
+    const normalizedFirstName = String(firstName || "").trim();
+    const normalizedLastName = String(lastName || "").trim();
+    const fullName = (normalizedFirstName && normalizedLastName)
+      ? `${normalizedFirstName} ${normalizedLastName}`
+      : String(name || "").trim();
+
+    if (!normalizedFirstName || !normalizedLastName) {
+      return res.status(400).json({ message: "First name and last name are required" });
+    }
 
     if (!normalizedEmail || !password || password.length < 6) {
       return res.status(400).json({ message: "Valid email and 6+ char password required" });
@@ -102,7 +112,7 @@ router.post("/register", async (req, res) => {
       const acceptedAt = new Date().toISOString();
       const user = createUser({
         email: normalizedEmail,
-        name,
+        name: fullName,
         passwordHash,
         plan: role === USER_ROLES.ADMIN ? USER_PLANS.PREMIUM : USER_PLANS.FREE_TRIAL,
         role,
@@ -131,6 +141,7 @@ router.post("/register", async (req, res) => {
 
     await logAuthSecurityEvent(req, {
       type: "REGISTER",
+      userId: result.user.id,
       email: normalizedEmail,
       status: "OK",
     });
@@ -168,6 +179,7 @@ router.post("/login", async (req, res) => {
     if (!isMatch) {
       await logAuthSecurityEvent(req, {
         type: "LOGIN",
+        userId: user.id,
         level: "WARN",
         email: normalizedEmail,
         status: "DENY",
@@ -178,6 +190,7 @@ router.post("/login", async (req, res) => {
 
     await logAuthSecurityEvent(req, {
       type: "LOGIN",
+      userId: user.id,
       email: normalizedEmail,
       status: "OK",
     });
@@ -223,7 +236,7 @@ router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
 
       return {
         records: nextRecords,
-        value: matchedUser ? { matched: true, resetCode } : { matched: false },
+        value: matchedUser ? { matched: true, matchedUserId: matchedUser.id, resetCode } : { matched: false },
       };
     });
 
@@ -235,6 +248,7 @@ router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
     if (result?.matched) {
       await logAuthSecurityEvent(req, {
         type: "FORGOT_PASSWORD",
+        userId: result.matchedUserId,
         email: normalizedEmail,
         status: "MATCHED",
       });
@@ -249,6 +263,7 @@ router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
         console.warn("[auth/forgot-password] resend send skipped/failed:", emailResult.reason);
         await logAuthSecurityEvent(req, {
           type: "FORGOT_PASSWORD_EMAIL",
+          userId: result.matchedUserId,
           level: "WARN",
           email: normalizedEmail,
           status: "FAILED",
@@ -259,6 +274,7 @@ router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
       if (emailResult.sent) {
         await logAuthSecurityEvent(req, {
           type: "FORGOT_PASSWORD_EMAIL",
+          userId: result.matchedUserId,
           email: normalizedEmail,
           status: "SENT",
         });
@@ -381,6 +397,7 @@ router.post("/reset-password", resetPasswordLimiter, async (req, res) => {
 
     await logAuthSecurityEvent(req, {
       type: "RESET_PASSWORD",
+      userId: result.user.id,
       email: normalizedEmail,
       status: "OK",
     });
@@ -396,6 +413,46 @@ router.get("/me", requireAuth, async (req, res) => {
   return res.json({
     user: req.user,
   });
+});
+
+router.get("/me/activity", requireAuth, async (req, res) => {
+  try {
+    const events = await listAuthSecurityEvents({
+      limit: req.query?.limit || 50,
+      userId: req.userId,
+    });
+    return res.json({ events });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.patch("/me/preferences", requireAuth, async (req, res) => {
+  try {
+    const nextPreferences = normalizeSignalPreferences(req.body || {});
+    const updated = await mutateCollection("users", (records) => {
+      let updatedUser = null;
+      const nextRecords = records.map((user) => {
+        if (user.id !== req.userId) return user;
+        updatedUser = {
+          ...user,
+          signalPreferences: nextPreferences,
+          updatedAt: new Date().toISOString(),
+        };
+        return updatedUser;
+      });
+      return { records: nextRecords, value: updatedUser };
+    });
+
+    if (!updated) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    invalidateUserCache(req.userId);
+    return res.json({ user: sanitizeUser(updated) });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
 });
 
 // Update self preferences (admin-only risk profile)
@@ -434,7 +491,7 @@ router.get("/users", requireAuth, requireAdmin, async (req, res) => {
 
 router.get("/security-events", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const events = await listAuthSecurityEvents(req.query?.limit || 100);
+    const events = await listAuthSecurityEvents({ limit: req.query?.limit || 100 });
     return res.json({ events });
   } catch (error) {
     return res.status(500).json({ message: error.message });

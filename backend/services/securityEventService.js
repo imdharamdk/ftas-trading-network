@@ -18,6 +18,7 @@ async function logAuthSecurityEvent(req, event) {
   const now = new Date().toISOString();
   const record = {
     id: createId("ase"),
+    userId: event?.userId ? String(event.userId) : req?.userId || null,
     type: String(event?.type || "AUTH_EVENT"),
     level: String(event?.level || "INFO"),
     email: scrubEmail(event?.email),
@@ -37,10 +38,16 @@ async function logAuthSecurityEvent(req, event) {
   return record;
 }
 
-async function listAuthSecurityEvents(limit = 100) {
-  const safeLimit = Math.min(500, Math.max(1, Number(limit || 100)));
+async function listAuthSecurityEvents(options = {}) {
+  const safeLimit = Math.min(500, Math.max(1, Number(options?.limit || 100)));
   const records = await readCollection("authSecurityEvents");
-  return (Array.isArray(records) ? records : []).slice(0, safeLimit);
+  const source = Array.isArray(records) ? records : [];
+
+  if (options?.userId) {
+    return source.filter((event) => event.userId === options.userId).slice(0, safeLimit);
+  }
+
+  return source.slice(0, safeLimit);
 }
 
 module.exports = {

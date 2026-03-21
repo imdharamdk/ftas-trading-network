@@ -172,7 +172,14 @@ Backend API: `http://localhost:5000`
 ## Security Monitoring
 
 - Admin endpoint: `GET /api/auth/security-events?limit=100`
+- User endpoint: `GET /api/auth/me/activity?limit=50`
 - Captures: login failures, register conflicts, forgot-password email delivery failures, password reset failures
+
+## Personalization
+
+- Update user signal preferences: `PATCH /api/auth/me/preferences`
+- Payload keys: `minConfidence`, `sides` (`LONG`/`SHORT`), `timeframes`, `onlyStrong`
+- Missed signals recovery: `GET /api/signals/missed?since=<ISO_DATE>&scope=all&limit=100`
 
 ## Useful Scripts
 

@@ -7,7 +7,8 @@ export default function Signup() {
   const navigate = useNavigate();
   const { register } = useSession();
   const [form, setForm] = useState({
-    name: "",
+    firstName: "",
+    lastName: "",
     email: "",
     password: "",
   });
@@ -19,16 +20,27 @@ export default function Signup() {
 
   async function handleSubmit(event) {
     event.preventDefault();
+
+    if (!form.firstName.trim() || !form.lastName.trim()) {
+      setError("First name and last name are required.");
+      return;
+    }
+
     if (!acceptedTerms) {
       setError("Please accept the Terms of Service and Privacy Policy to continue.");
       return;
     }
+
     setBusy(true);
     setError("");
 
     try {
       await register({
-        ...form,
+        firstName: form.firstName.trim(),
+        lastName: form.lastName.trim(),
+        name: `${form.firstName.trim()} ${form.lastName.trim()}`,
+        email: form.email,
+        password: form.password,
         termsAccepted: acceptedTerms,
         privacyAccepted: acceptedTerms,
       });
@@ -50,12 +62,22 @@ export default function Signup() {
 
           <form className="auth-form" onSubmit={handleSubmit}>
             <label>
-              <span>Name</span>
+              <span>First Name</span>
               <input
-                onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                onChange={(event) => setForm((current) => ({ ...current, firstName: event.target.value }))}
                 placeholder="Dharmender"
                 type="text"
-                value={form.name}
+                value={form.firstName}
+              />
+            </label>
+
+            <label>
+              <span>Last Name</span>
+              <input
+                onChange={(event) => setForm((current) => ({ ...current, lastName: event.target.value }))}
+                placeholder="Kumar"
+                type="text"
+                value={form.lastName}
               />
             </label>
 
