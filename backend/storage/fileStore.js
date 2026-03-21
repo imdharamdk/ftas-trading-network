@@ -19,6 +19,7 @@ const COLLECTION_FILES = {
   communityPosts:     "community-posts.json",
   communityComments:  "community-comments.json",
   appSettings:        "app-settings.json",
+  authSecurityEvents: "auth-security-events.json",
 };
 const LEGACY_COLLECTION_FILES = {
   users: ["user.json"],

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useSession } from "../context/useSession";
 import { apiFetch } from "../lib/api";
+import { evaluatePasswordStrength } from "../lib/passwordStrength";
 
 const RESEND_COOLDOWN_SECONDS = 60;
 
@@ -55,6 +56,8 @@ export default function Login() {
   const [forgotError, setForgotError] = useState("");
   const [forgotMessage, setForgotMessage] = useState("");
   const [resendCooldown, setResendCooldown] = useState(0);
+
+  const resetStrength = evaluatePasswordStrength(forgotPassword);
 
   // Pre-warm Render backend as soon as Login page loads — user fills credentials
   // in ~10-20s, by then backend is already warm, no cold start on first real request.
@@ -254,6 +257,18 @@ export default function Login() {
                         value={forgotPassword}
                       />
                     </label>
+
+                    {!!forgotPassword && (
+                      <div style={{ marginTop: "-4px", marginBottom: "8px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", marginBottom: "6px" }}>
+                          <span>Password Strength</span>
+                          <span style={{ color: resetStrength.color, fontWeight: 700 }}>{resetStrength.label}</span>
+                        </div>
+                        <div style={{ height: "6px", borderRadius: "999px", background: "rgba(255,255,255,0.12)", overflow: "hidden" }}>
+                          <div style={{ width: `${resetStrength.percent}%`, height: "100%", background: resetStrength.color, transition: "width 180ms ease" }} />
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
 

@@ -82,6 +82,8 @@ Important backend vars:
 - `RESET_CODE_TTL_MINUTES=15`
 - `RESET_MAX_ATTEMPTS=6`
 - `EXPOSE_RESET_CODE=true` (dev only; set `false` in production)
+- `APP_PUBLIC_URL=https://ftas-trading-network.vercel.app`
+- `AUTH_SECURITY_EVENTS_LIMIT=2000`
 - `SMART_API_KEY=from_Angel_One_portal`
 - `SMART_API_CLIENT_CODE=your_angel_broking_id`
 - `SMART_API_PASSWORD=angel_portal_password`
@@ -166,6 +168,11 @@ Backend API: `http://localhost:5000`
 - The included `render.yaml` omits the Render `plan` field so an existing service can keep its current tier instead of being forced to a new one on sync.
 - If you do not want live Alpha Vantage news yet, set `NEWS_PROVIDER=FALLBACK` and the API will return built-in FTAS fallback articles with HTTP `200`.
 - If you are using Vercel + Render, set Vercel `VITE_API_BASE_URL` to your Render API URL and set Render `FRONTEND_URL` to your Vercel domain.
+
+## Security Monitoring
+
+- Admin endpoint: `GET /api/auth/security-events?limit=100`
+- Captures: login failures, register conflicts, forgot-password email delivery failures, password reset failures
 
 ## Useful Scripts
 

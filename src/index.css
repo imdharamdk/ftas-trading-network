@@ -1212,3 +1212,27 @@ h1, h2, h3 { letter-spacing: -0.03em; line-height: 1.2; }
 @media (min-width: 1024px) {
   :root { --bottom-nav-h: 0px; }
 }
+
+/* Auth mobile safeguards for forgot-password flow */
+@media (max-width: 479px) {
+  .auth-form .button {
+    width: 100%;
+    white-space: normal;
+    padding: 8px 14px;
+    line-height: 1.25;
+  }
+
+  .auth-panel {
+    padding: var(--s4);
+  }
+
+  .auth-links {
+    gap: 8px 10px;
+  }
+}
+
+@media (max-width: 360px) {
+  .hero-metrics {
+    grid-template-columns: 1fr;
+  }
+}

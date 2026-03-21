@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useSession } from "../context/useSession";
+import { evaluatePasswordStrength } from "../lib/passwordStrength";
 
 export default function Signup() {
   const navigate = useNavigate();
@@ -13,6 +14,8 @@ export default function Signup() {
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const strength = evaluatePasswordStrength(form.password);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -75,6 +78,21 @@ export default function Signup() {
                 value={form.password}
               />
             </label>
+
+            {!!form.password && (
+              <div style={{ marginTop: "-4px", marginBottom: "8px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", marginBottom: "6px" }}>
+                  <span>Password Strength</span>
+                  <span style={{ color: strength.color, fontWeight: 700 }}>{strength.label}</span>
+                </div>
+                <div style={{ height: "6px", borderRadius: "999px", background: "rgba(255,255,255,0.12)", overflow: "hidden" }}>
+                  <div style={{ width: `${strength.percent}%`, height: "100%", background: strength.color, transition: "width 180ms ease" }} />
+                </div>
+                <div style={{ marginTop: "6px", fontSize: "0.75rem", color: "rgba(255,255,255,0.72)" }}>
+                  Use 8+ chars with upper, lower, number, and symbol.
+                </div>
+              </div>
+            )}
 
             <label className="auth-checkbox">
               <input

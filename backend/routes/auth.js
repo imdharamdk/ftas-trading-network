@@ -15,6 +15,7 @@ const {
 } = require("../models/User");
 const { mutateCollection, readCollection, writeCollection } = require("../storage/fileStore");
 const { sendResetCodeEmail } = require("../services/emailService");
+const { listAuthSecurityEvents, logAuthSecurityEvent } = require("../services/securityEventService");
 
 const router = express.Router();
 
@@ -118,8 +119,21 @@ router.post("/register", async (req, res) => {
     });
 
     if (result.error) {
+      await logAuthSecurityEvent(req, {
+        type: "REGISTER",
+        level: "WARN",
+        email: normalizedEmail,
+        status: "DENY",
+        reason: result.error,
+      });
       return res.status(409).json({ message: result.error });
     }
+
+    await logAuthSecurityEvent(req, {
+      type: "REGISTER",
+      email: normalizedEmail,
+      status: "OK",
+    });
 
     const token = signToken(result.user);
     return res.status(201).json({
@@ -139,14 +153,34 @@ router.post("/login", async (req, res) => {
     const user = users.find((item) => item.email === normalizedEmail);
 
     if (!user || !user.isActive) {
+      await logAuthSecurityEvent(req, {
+        type: "LOGIN",
+        level: "WARN",
+        email: normalizedEmail,
+        status: "DENY",
+        reason: "invalid_account",
+      });
       return res.status(401).json({ message: "Invalid email or password" });
     }
 
     const isMatch = await bcrypt.compare(password || "", user.passwordHash || "");
 
     if (!isMatch) {
+      await logAuthSecurityEvent(req, {
+        type: "LOGIN",
+        level: "WARN",
+        email: normalizedEmail,
+        status: "DENY",
+        reason: "invalid_password",
+      });
       return res.status(401).json({ message: "Invalid email or password" });
     }
+
+    await logAuthSecurityEvent(req, {
+      type: "LOGIN",
+      email: normalizedEmail,
+      status: "OK",
+    });
 
     const token = signToken(user);
     return res.json({
@@ -199,6 +233,12 @@ router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
     };
 
     if (result?.matched) {
+      await logAuthSecurityEvent(req, {
+        type: "FORGOT_PASSWORD",
+        email: normalizedEmail,
+        status: "MATCHED",
+      });
+
       const emailResult = await sendResetCodeEmail({
         toEmail: normalizedEmail,
         code: result.resetCode,
@@ -207,7 +247,29 @@ router.post("/forgot-password", forgotPasswordLimiter, async (req, res) => {
 
       if (!emailResult.sent) {
         console.warn("[auth/forgot-password] resend send skipped/failed:", emailResult.reason);
+        await logAuthSecurityEvent(req, {
+          type: "FORGOT_PASSWORD_EMAIL",
+          level: "WARN",
+          email: normalizedEmail,
+          status: "FAILED",
+          reason: emailResult.reason,
+        });
       }
+
+      if (emailResult.sent) {
+        await logAuthSecurityEvent(req, {
+          type: "FORGOT_PASSWORD_EMAIL",
+          email: normalizedEmail,
+          status: "SENT",
+        });
+      }
+    } else {
+      await logAuthSecurityEvent(req, {
+        type: "FORGOT_PASSWORD",
+        level: "WARN",
+        email: normalizedEmail,
+        status: "NOT_FOUND",
+      });
     }
 
     if (exposeResetCode && result?.matched) {
@@ -304,11 +366,24 @@ router.post("/reset-password", resetPasswordLimiter, async (req, res) => {
 
     if (!result || result.status !== "OK") {
       const status = result?.status;
+      await logAuthSecurityEvent(req, {
+        type: "RESET_PASSWORD",
+        level: "WARN",
+        email: normalizedEmail,
+        status: status || "FAILED",
+        reason: "invalid_or_expired",
+      });
       if (["NOT_FOUND", "MISSING_RESET", "EXPIRED", "LOCKED", "INVALID_CODE"].includes(status)) {
         return res.status(400).json({ message: "Invalid or expired reset request" });
       }
       return res.status(400).json({ message: "Reset failed" });
     }
+
+    await logAuthSecurityEvent(req, {
+      type: "RESET_PASSWORD",
+      email: normalizedEmail,
+      status: "OK",
+    });
 
     invalidateUserCache(result.user.id);
     return res.json({ message: "Password reset successful. Please login with your new password." });
@@ -355,6 +430,15 @@ router.get("/users", requireAuth, requireAdmin, async (req, res) => {
   return res.json({
     users: users.map(sanitizeUser),
   });
+});
+
+router.get("/security-events", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const events = await listAuthSecurityEvents(req.query?.limit || 100);
+    return res.json({ events });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
 });
 
 router.patch("/users/:id", requireAuth, requireAdmin, async (req, res) => {
