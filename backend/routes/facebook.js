@@ -25,6 +25,22 @@ const router      = express.Router();
 const FB_GRAPH    = "https://graph.facebook.com/v19.0";
 const publisher   = require("../services/facebookPublisher");
 
+function pickFbUsageHeaders(headers) {
+  if (!headers) return {};
+  const out = {};
+  const keys = [
+    "x-app-usage",
+    "x-page-usage",
+    "x-business-use-case-usage",
+    "x-ad-account-usage",
+    "x-fb-trace-id",
+  ];
+  for (const k of keys) {
+    if (headers[k]) out[k] = headers[k];
+  }
+  return out;
+}
+
 // ─── GET status ───────────────────────────────────────────────────────────────
 router.get("/status", requireAuth, requireAdmin, async (_req, res) => {
   const result = await publisher.testConnection();
@@ -79,9 +95,17 @@ router.post("/test", requireAuth, requireAdmin, async (_req, res) => {
       { message: testMsg, access_token: FB_ACCESS_TOKEN },
       { timeout: 10_000 }
     );
+    const usage = pickFbUsageHeaders(response.headers || {});
+    if (Object.keys(usage).length) {
+      console.log("[fb] rate-limit headers:", usage);
+    }
     return res.json({ success: true, postId: response.data?.id });
   } catch (err) {
     const fbErr = err.response?.data?.error;
+    const usage = pickFbUsageHeaders(err.response?.headers || {});
+    if (Object.keys(usage).length) {
+      console.error("[fb] rate-limit headers:", usage);
+    }
     return res.status(502).json({
       message: fbErr ? `Facebook API: ${fbErr.message}` : err.message,
       code: fbErr?.code,
@@ -108,8 +132,17 @@ router.post("/post-signal", requireAuth, requireAdmin, async (req, res) => {
 
     const results = [];
     for (const signal of signals) {
-      const postId = await publisher.publishSignal(signal);
-      results.push({ id: signal.id, postId, coin: signal.coin });
+      const result = await publisher.publishSignal(signal, { returnUsage: true });
+      const postId = result && typeof result === "object" && "postId" in result
+        ? result.postId
+        : result;
+      if (result?.usage && Object.keys(result.usage).length) {
+        console.log("[fb] post-signal rate-limit headers:", result.usage);
+      }
+      if (result?.error) {
+        console.error("[fb] post-signal error:", result.error);
+      }
+      results.push({ id: signal.id, postId, coin: signal.coin, error: result?.error || null });
       await new Promise(r => setTimeout(r, 1000)); // rate limit
     }
     return res.json({ success: true, posted: results.length, results });

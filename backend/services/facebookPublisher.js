@@ -30,6 +30,22 @@ if (!FB_ENABLED) {
   console.log("[fb] Facebook publishing disabled — set FB_PAGE_ID and FB_PAGE_ACCESS_TOKEN env vars to enable.");
 }
 
+function pickFbUsageHeaders(headers) {
+  if (!headers) return {};
+  const out = {};
+  const keys = [
+    "x-app-usage",
+    "x-page-usage",
+    "x-business-use-case-usage",
+    "x-ad-account-usage",
+    "x-fb-trace-id",
+  ];
+  for (const k of keys) {
+    if (headers[k]) out[k] = headers[k];
+  }
+  return out;
+}
+
 // ─── Stock vs Crypto Detection ─────────────────────────────────────────────
 // FIX: Make detection resilient when source is missing or older data is mixed.
 const CRYPTO_QUOTE_SUFFIXES = ["USDT", "BUSD", "USDC", "USDP", "FDUSD", "TUSD", "DAI"];
@@ -137,39 +153,87 @@ function formatSignalPost(signal) {
 }
 
 // ─── Post to Facebook Page ─────────────────────────────────────────────────
-async function postToFacebook(message) {
+async function postToFacebook(message, options = {}) {
   if (!FB_ENABLED) return null;
 
-  try {
-    const response = await axios.post(
-      `${FB_GRAPH_URL}/${FB_PAGE_ID}/feed`,
-      {
-        message,
-        access_token: FB_ACCESS_TOKEN,
-      },
-      { timeout: 10_000 }
-    );
+  const endpoint = `${FB_GRAPH_URL}/${FB_PAGE_ID}/feed`;
+  const pageTail = FB_PAGE_ID ? `...${FB_PAGE_ID.slice(-4)}` : "unknown";
+  const startedAt = new Date().toISOString();
+  console.log(`[fb] → POST /feed page=${pageTail} at ${startedAt}`);
 
-    const postId = response.data?.id;
-    console.log(`[fb] ✅ Posted to Facebook: ${postId}`);
-    return postId;
-  } catch (err) {
-    const fbError = err.response?.data?.error;
-    if (fbError) {
-      console.error(`[fb] ❌ Facebook API error: (${fbError.code}) ${fbError.message}`);
-      // Token expired — common issue
-      if (fbError.code === 190) {
-        console.error("[fb] 🔑 Access token expired! Refresh FB_PAGE_ACCESS_TOKEN in Render env vars.");
+  const maxRetries = Number(process.env.FB_RETRY_MAX || 3);
+  const baseDelayMs = Number(process.env.FB_RETRY_BASE_MS || 5000);
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await axios.post(
+        endpoint,
+        {
+          message,
+          access_token: FB_ACCESS_TOKEN,
+        },
+        { timeout: 10_000 }
+      );
+
+      const postId = response.data?.id;
+      console.log(`[fb] ✅ Posted to Facebook: ${postId}`);
+      const usage = pickFbUsageHeaders(response.headers || {});
+      if (Object.keys(usage).length) {
+        console.log("[fb] rate-limit headers:", usage);
       }
-    } else {
-      console.error("[fb] ❌ Post failed:", err.message);
+      return options.returnUsage ? { postId, usage } : postId;
+    } catch (err) {
+      const fbError = err.response?.data?.error;
+      const status = err.response?.status;
+      const usage = pickFbUsageHeaders(err.response?.headers || {});
+      const isRateLimit = fbError?.code === 368;
+
+      if (isRateLimit && attempt < maxRetries) {
+        const delay = baseDelayMs * Math.pow(2, attempt);
+        console.warn(`[fb] rate limit hit (code 368). retrying in ${Math.round(delay / 1000)}s (attempt ${attempt + 1}/${maxRetries})`);
+        if (Object.keys(usage).length) {
+          console.warn("[fb] rate-limit headers:", usage);
+        }
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+
+      if (fbError) {
+        console.error(`[fb] ❌ Facebook API error: (${fbError.code}) ${fbError.message}`);
+        if (status) console.error(`[fb] HTTP ${status} at ${endpoint}`);
+        if (Object.keys(usage).length) {
+          console.error("[fb] rate-limit headers:", usage);
+        }
+        // Token expired — common issue
+        if (fbError.code === 190) {
+          console.error("[fb] 🔑 Access token expired! Refresh FB_PAGE_ACCESS_TOKEN in Render env vars.");
+        }
+      } else {
+        console.error("[fb] ❌ Post failed:", err.message);
+        if (status) console.error(`[fb] HTTP ${status} at ${endpoint}`);
+        if (Object.keys(usage).length) {
+          console.error("[fb] rate-limit headers:", usage);
+        }
+      }
+
+      if (options.returnUsage) {
+        return {
+          postId: null,
+          usage,
+          error: fbError
+            ? { code: fbError.code, message: fbError.message, status }
+            : { message: err.message, status },
+        };
+      }
+      return null;
     }
-    return null;
   }
+
+  return options.returnUsage ? { postId: null, usage: {} } : null;
 }
 
 // ─── Publish a new signal ──────────────────────────────────────────────────
-async function publishSignal(signal) {
+async function publishSignal(signal, options = {}) {
   if (!FB_ENABLED) return;
 
   // Only publish HIGH confidence signals (85+) to avoid spamming the page
@@ -180,7 +244,7 @@ async function publishSignal(signal) {
   }
 
   const message = formatSignalPost(signal);
-  return postToFacebook(message);
+  return postToFacebook(message, options);
 }
 
 // ─── Publish signal result (when TP hit or SL hit) ────────────────────────
