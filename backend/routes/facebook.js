@@ -87,25 +87,19 @@ router.post("/test", requireAuth, requireAdmin, async (_req, res) => {
       "#FTAS #TradingSignals",
     ].join("\n");
 
-    // Access postToFacebook via the internal method
-    const FB_PAGE_ID      = process.env.FB_PAGE_ID;
-    const FB_ACCESS_TOKEN = process.env.FB_PAGE_ACCESS_TOKEN;
-    const response = await axios.post(
-      `${FB_GRAPH}/${FB_PAGE_ID}/feed`,
-      { message: testMsg, access_token: FB_ACCESS_TOKEN },
-      { timeout: 10_000 }
-    );
-    const usage = pickFbUsageHeaders(response.headers || {});
-    if (Object.keys(usage).length) {
-      console.log("[fb] rate-limit headers:", usage);
+    // Test post — queue bypass karta hai taaki instant response mile
+    const result = await publisher.postToFacebookDirect(testMsg, { returnUsage: true });
+    const usage = result?.usage || {};
+    if (Object.keys(usage).length) console.log("[fb] rate-limit headers:", usage);
+    if (result?.error) {
+      return res.status(502).json({
+        message: `Facebook API: ${result.error.message}`,
+        code: result.error.code,
+      });
     }
-    return res.json({ success: true, postId: response.data?.id });
+    return res.json({ success: true, postId: result?.postId || result });
   } catch (err) {
     const fbErr = err.response?.data?.error;
-    const usage = pickFbUsageHeaders(err.response?.headers || {});
-    if (Object.keys(usage).length) {
-      console.error("[fb] rate-limit headers:", usage);
-    }
     return res.status(502).json({
       message: fbErr ? `Facebook API: ${fbErr.message}` : err.message,
       code: fbErr?.code,
