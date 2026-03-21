@@ -33,6 +33,10 @@ const SIGNAL_MODEL_VERSION = process.env.CRYPTO_SIGNAL_MODEL_VERSION || "v19_cry
 const DEFAULT_PUBLISH_FLOOR = 72;
 const QUALITY_MODE = String(process.env.CRYPTO_QUALITY_MODE || "BALANCED").toUpperCase();
 const ULTRA_MIN_CONFIDENCE = Math.max(80, Number(process.env.CRYPTO_MIN_CONFIDENCE || 90));
+const SELF_LEARNING_ENABLED = String(process.env.CRYPTO_SELF_LEARNING_ENABLED || "true").toLowerCase() !== "false";
+const SELF_LEARNING_REFRESH_MS = Math.max(60_000, Number(process.env.CRYPTO_SELF_LEARNING_REFRESH_MS || 10 * 60 * 1000));
+const SELF_LEARNING_LOOKBACK = Math.max(120, Number(process.env.CRYPTO_SELF_LEARNING_LOOKBACK || 600));
+const SELF_LEARNING_MIN_SAMPLE = Math.max(40, Number(process.env.CRYPTO_SELF_LEARNING_MIN_SAMPLE || 80));
 
 // ── Per-Timeframe Rules ────────────────────────────────────────────────────────
 const TIMEFRAME_RULES = {
@@ -107,6 +111,20 @@ const engineState = {
   timer: null, expiryTimer: null,
   // Admin-controlled coin pause list: { [SYMBOL]: { pausedAt, reason, pausedBy } }
   pausedCoins: {},
+  selfLearning: {
+    enabled: SELF_LEARNING_ENABLED,
+    trainedAt: null,
+    lastRefreshedAt: 0,
+    sampleSize: 0,
+    overallWinRate: null,
+    globalPublishFloorBoost: 0,
+    confidenceScoreDelta: 0,
+    byCoin: {},
+    bySide: {},
+    byTimeframe: {},
+    blockedCoins: {},
+    version: "slm_v1",
+  },
 };
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
@@ -244,6 +262,140 @@ function getTradeTimeframes() {
   const base = r.length ? r : DEFAULT_TRADE_TIMEFRAMES;
   if (QUALITY_MODE === "ULTRA") return base.filter(tf => tf !== "1m" && tf !== "5m");
   return base;
+}
+
+function toTallyDelta(tally, { weakAt = 42, strongAt = 60, minTotal = 8, maxDelta = 7 } = {}) {
+  const wins = Number(tally?.wins || 0);
+  const losses = Number(tally?.losses || 0);
+  const total = wins + losses;
+  if (total < minTotal) return 0;
+  const winRate = (wins / total) * 100;
+  if (winRate <= weakAt) return -Math.min(maxDelta, Math.max(1, Math.round((weakAt - winRate) / 4)));
+  if (winRate >= strongAt) return Math.min(maxDelta - 2, Math.max(1, Math.round((winRate - strongAt) / 6)));
+  return 0;
+}
+
+async function refreshSelfLearningModel({ force = false } = {}) {
+  if (!engineState.selfLearning.enabled) return engineState.selfLearning;
+
+  const now = Date.now();
+  if (!force && now - Number(engineState.selfLearning.lastRefreshedAt || 0) < SELF_LEARNING_REFRESH_MS) return engineState.selfLearning;
+
+  try {
+    const signals = await readCollection(SIGNAL_COLLECTION);
+    const resolved = signals
+      .filter((sig) => WIN_RESULTS.has(sig.result) || LOSS_RESULTS.has(sig.result))
+      .sort((a, b) => new Date(b.closedAt || b.updatedAt || b.createdAt || 0).getTime() - new Date(a.closedAt || a.updatedAt || a.createdAt || 0).getTime())
+      .slice(0, SELF_LEARNING_LOOKBACK);
+
+    const next = {
+      enabled: true,
+      trainedAt: new Date().toISOString(),
+      lastRefreshedAt: now,
+      sampleSize: resolved.length,
+      overallWinRate: null,
+      globalPublishFloorBoost: 0,
+      confidenceScoreDelta: 0,
+      byCoin: {},
+      bySide: {},
+      byTimeframe: {},
+      blockedCoins: {},
+      version: "slm_v1",
+    };
+
+    if (resolved.length < SELF_LEARNING_MIN_SAMPLE) {
+      engineState.selfLearning = next;
+      return next;
+    }
+
+    const overall = buildTally();
+    const byCoinTally = {};
+    const bySideTally = {};
+    const byTimeframeTally = {};
+
+    resolved.forEach((sig) => {
+      const isWin = WIN_RESULTS.has(sig.result);
+      const key = isWin ? "wins" : "losses";
+      overall[key] += 1;
+      updateTally(byCoinTally, String(sig.coin || "").toUpperCase(), isWin);
+      updateTally(bySideTally, String(sig.side || "").toUpperCase(), isWin);
+      updateTally(byTimeframeTally, String(sig.timeframe || "").toLowerCase(), isWin);
+    });
+
+    const overallWinRate = winRateFromTally(overall);
+    next.overallWinRate = overallWinRate;
+
+    if (overallWinRate !== null) {
+      if (overallWinRate < 46) next.globalPublishFloorBoost = 4;
+      else if (overallWinRate < 52) next.globalPublishFloorBoost = 2;
+      else if (overallWinRate > 62) next.globalPublishFloorBoost = -1;
+
+      if (overallWinRate < 44) next.confidenceScoreDelta = -2;
+      else if (overallWinRate > 63) next.confidenceScoreDelta = 1;
+    }
+
+    Object.entries(bySideTally).forEach(([key, tally]) => {
+      const delta = toTallyDelta(tally, { minTotal: 12, maxDelta: 5 });
+      if (delta !== 0) next.bySide[key] = delta;
+    });
+
+    Object.entries(byTimeframeTally).forEach(([key, tally]) => {
+      const delta = toTallyDelta(tally, { minTotal: 10, maxDelta: 6 });
+      if (delta !== 0) next.byTimeframe[key] = delta;
+    });
+
+    Object.entries(byCoinTally).forEach(([coin, tally]) => {
+      const wins = Number(tally.wins || 0);
+      const losses = Number(tally.losses || 0);
+      const total = wins + losses;
+      if (total < 8) return;
+      const wr = total ? (wins / total) * 100 : 0;
+      const lossRate = total ? (losses / total) * 100 : 0;
+      const delta = toTallyDelta(tally, { minTotal: 8, maxDelta: 8, weakAt: 40, strongAt: 63 });
+      if (delta !== 0) next.byCoin[coin] = delta;
+      if (total >= 12 && losses >= 8 && lossRate >= 75 && wr <= 25) next.blockedCoins[coin] = true;
+    });
+
+    engineState.selfLearning = next;
+    return next;
+  } catch {
+    engineState.selfLearning.lastRefreshedAt = now;
+    return engineState.selfLearning;
+  }
+}
+
+function getSelfLearningAdjustment(model, { coin, side, timeframe }) {
+  const adjustment = { scoreDelta: 0, publishFloorBoost: 0, blockCoin: false, reasons: [] };
+  if (!model?.enabled || Number(model.sampleSize || 0) < SELF_LEARNING_MIN_SAMPLE) return adjustment;
+
+  const coinKey = String(coin || "").toUpperCase();
+  const sideKey = String(side || "").toUpperCase();
+  const tfKey = String(timeframe || "").toLowerCase();
+
+  adjustment.scoreDelta += Number(model.confidenceScoreDelta || 0);
+  adjustment.publishFloorBoost += Number(model.globalPublishFloorBoost || 0);
+
+  if (model.byCoin?.[coinKey]) {
+    adjustment.scoreDelta += Number(model.byCoin[coinKey]);
+    adjustment.reasons.push("coin_" + coinKey);
+  }
+  if (model.bySide?.[sideKey]) {
+    adjustment.scoreDelta += Number(model.bySide[sideKey]);
+    adjustment.reasons.push("side_" + sideKey.toLowerCase());
+  }
+  if (model.byTimeframe?.[tfKey]) {
+    adjustment.scoreDelta += Number(model.byTimeframe[tfKey]);
+    adjustment.reasons.push("tf_" + tfKey);
+  }
+
+  if (model.blockedCoins?.[coinKey]) {
+    adjustment.blockCoin = true;
+    adjustment.reasons.push("blocked_coin");
+  }
+
+  adjustment.scoreDelta = clamp(adjustment.scoreDelta, -12, 8);
+  adjustment.publishFloorBoost = clamp(adjustment.publishFloorBoost, -2, 6);
+  return adjustment;
 }
 
 function getAdaptiveQualityConfig(performanceSnapshot, { coin, side, timeframe }) {
@@ -437,7 +589,7 @@ function hasManipulationCandle(side, analysis) {
 }
 
 // ─── Main Signal Builder ──────────────────────────────────────────────────────
-function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketActivity = null, performanceSnapshot = null) {
+function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketActivity = null, performanceSnapshot = null, selfLearningModel = null) {
   const bullConf = [], bearConf = [];
   let bullScore = 0, bearScore = 0;
 
@@ -669,15 +821,17 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   if ((roc5||0) < 0 && side === "SHORT") bearScore += 2;
 
   // ── Final publish check ───────────────────────────────────────────────────
-  const confidence    = side === "LONG" ? bullScore : bearScore;
+  const baseConfidence = side === "LONG" ? bullScore : bearScore;
   const confirmations = side === "LONG" ? bullConf  : bearConf;
 
   const adaptiveQuality  = getAdaptiveQualityConfig(performanceSnapshot, { coin, side, timeframe });
-  if (adaptiveQuality.blockCoin) return null;
+  const learningAdjustment = getSelfLearningAdjustment(selfLearningModel, { coin, side, timeframe });
+  if (adaptiveQuality.blockCoin || learningAdjustment.blockCoin) return null;
 
+  const confidence = clamp(baseConfidence + learningAdjustment.scoreDelta, 0, 100);
   const minScore         = (tfRule.minScore         || 62) + adaptiveQuality.scoreBoost;
   const minConfirmations = (tfRule.minConfirmations || 5)  + adaptiveQuality.minConfirmationsBoost;
-  const publishFloor     = (tfRule.publishFloor     || DEFAULT_PUBLISH_FLOOR) + adaptiveQuality.publishFloorBoost;
+  const publishFloor     = (tfRule.publishFloor     || DEFAULT_PUBLISH_FLOOR) + adaptiveQuality.publishFloorBoost + learningAdjustment.publishFloorBoost;
 
   if (confidence < minScore)                   return null;
   if (confirmations.length < minConfirmations) return null;
@@ -737,12 +891,19 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
       marketQuoteVolume: roundPrice(activeMarket.quoteVolume),
       marketTradeCount: roundPrice(activeMarket.tradeCount),
       marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
-      modelVersion: SIGNAL_MODEL_VERSION,
+      modelVersion: SIGNAL_MODEL_VERSION + "+" + engineState.selfLearning.version,
       qualityGuard: {
         scoreBoost: adaptiveQuality.scoreBoost,
         publishFloorBoost: adaptiveQuality.publishFloorBoost,
         minConfirmationsBoost: adaptiveQuality.minConfirmationsBoost,
         reasons: adaptiveQuality.reasons,
+      },
+      selfLearning: {
+        sampleSize: Number(selfLearningModel?.sampleSize || 0),
+        overallWinRate: selfLearningModel?.overallWinRate ?? null,
+        confidenceDelta: learningAdjustment.scoreDelta,
+        publishFloorBoost: learningAdjustment.publishFloorBoost,
+        reasons: learningAdjustment.reasons,
       },
       smc: {
         choch:     { bull: false, bear: false, level: smcCHoCH.level },
@@ -773,7 +934,7 @@ async function fetchCryptoCandles(symbol, tf) {
 }
 
 // ─── Coin Scan ────────────────────────────────────────────────────────────────
-async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = null) {
+async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = null, selfLearningModel = null) {
   const analyses = {};
   const timeframeConcurrency = getTimeframeFetchConcurrency();
 
@@ -790,7 +951,7 @@ async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = nu
     .map((tf) => {
       if (!analyses[tf]) return null;
       const bias = getHigherTimeframeBias(analyses, tf);
-      return buildCandidate(coin, tf, analyses[tf], bias, htf, marketActivity, performanceSnapshot);
+      return buildCandidate(coin, tf, analyses[tf], bias, htf, marketActivity, performanceSnapshot, selfLearningModel);
     })
     .filter(Boolean);
 
@@ -954,6 +1115,7 @@ async function scanNow({ source = "ENGINE" } = {}) {
   try {
     const closedSignals = await evaluateActiveSignals();
     const performanceSnapshot = await getPerformanceSnapshot();
+    const selfLearningModel = await refreshSelfLearningModel({ force: closedSignals.length > 0 });
     const scanUniverse = await getScanUniverse();
     const coins = scanUniverse.slice(0, getMaxCoinsPerScan());
     const scanConcurrency = getCoinScanConcurrency();
@@ -963,7 +1125,7 @@ async function scanNow({ source = "ENGINE" } = {}) {
       if (engineState.pausedCoins[market.symbol]) {
         return { coin: market.symbol, skipped: true, message: "Paused by admin — skipped in scan" };
       }
-      const candidate = await analyzeCoin(market.symbol, market, performanceSnapshot);
+      const candidate = await analyzeCoin(market.symbol, market, performanceSnapshot, selfLearningModel);
       return { coin: market.symbol, candidate };
     });
 
@@ -1091,8 +1253,9 @@ async function generateForCoin(symbol, actor) {
     }
   } catch {}
   const performanceSnapshot = await getPerformanceSnapshot();
+  const selfLearningModel = await refreshSelfLearningModel({ force: false });
 
-  const candidate = await analyzeCoin(coin, marketActivity, performanceSnapshot);
+  const candidate = await analyzeCoin(coin, marketActivity, performanceSnapshot, selfLearningModel);
   if (!candidate) {
     return { generated: false, message: `No qualifying signal found for ${coin} — indicators may not be aligned.` };
   }
