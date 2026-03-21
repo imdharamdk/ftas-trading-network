@@ -494,12 +494,13 @@ router.get("/stats/overview", requireAuth, async (req, res) => {
   const cached = cache.get("signals:overview:" + preference);
   if (cached) return res.json(cached);
 
-  await expireStaleActives("signals");
+  // PERF FIX: Don't read archive here — Crypto/Stocks page don't need it for overview cards.
+  // Analytics page reads archive separately. archiveSize=0 is fine for the stat cards.
+  // Also removed duplicate expireStaleActives call — active endpoint handles it.
   const signals = await readCollection("signals");
-  const archive = await readCollection("signalsArchive");
-  const combined = [...signals, ...archive].filter((s) => Number(s.confidence || 0) >= minConfidence);
-  const result = { stats: { ...buildOverview(combined), archiveSize: archive.length } };
-  cache.set("signals:overview:" + preference, result, 30); // 30s TTL
+  const filtered = signals.filter((s) => Number(s.confidence || 0) >= minConfidence);
+  const result = { stats: { ...buildOverview(filtered), archiveSize: 0 } };
+  cache.set("signals:overview:" + preference, result, 60); // 60s TTL
   return res.json(result);
 });
 
