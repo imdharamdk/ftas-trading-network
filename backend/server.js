@@ -8,6 +8,7 @@ const path       = require("path");
 const helmet     = require("helmet");
 const rateLimit  = require("express-rate-limit");
 const morgan     = require("morgan");
+const compression = require("compression");
 
 const chatRoutes        = require("./routes/chat");
 const authRoutes        = require("./routes/auth");
@@ -154,6 +155,14 @@ function createApp() {
   }));
   app.use(cors(createCorsOptions()));
   app.use(express.json({ limit: "1mb" }));
+
+  // ── Compression ─────────────────────────────────────────────────────────────
+  app.use(compression({
+    filter: (req, res) => {
+      if (req.path === "/api/signals/stream") return false;
+      return compression.filter(req, res);
+    },
+  }));
 
   // ── Logging ─────────────────────────────────────────────────────────────────
   // Compact format: METHOD /path STATUS ms
