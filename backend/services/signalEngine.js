@@ -6,7 +6,6 @@ const { getExpiryMs, WIN_RESULTS, LOSS_RESULTS, STRENGTH_THRESHOLDS } = require(
 
 function ws()   { try { return require("./wsServer");              } catch { return null; } }
 function sse()  { try { return require("./sseManager");            } catch { return null; } }
-function fb()   { try { return require("./facebookPublisher");     } catch { return null; } }
 function push() { try { return require("../routes/notifications"); } catch { return null; } }
 function tg()   { try { return require("../routes/telegram");      } catch { return null; } }
 
@@ -839,7 +838,7 @@ async function evaluateActiveSignals() {
   closed.forEach(s => {
     try { ws()?.broadcastStockSignalClosed(s);   } catch {}
     try { sse()?.broadcastSignalClosed(s, true); } catch {}
-    try { fb()?.publishSignalResult(s);          } catch {}  // post result to Facebook
+    // Facebook auto-post removed
   });
   return closed;
 }
@@ -924,7 +923,7 @@ async function persistSignal(signal) {
   const result = await mutateCollection(SIGNAL_COLLECTION, records => ({ records: [signal, ...records], value: signal }));
   try { ws()?.broadcastNewSignal(signal);   } catch {}
   try { sse()?.broadcastNewSignal(signal, false); } catch {}
-  try { fb()?.publishSignal(signal);             } catch {}
+  // Facebook auto-post removed
   try { push()?.broadcastSignalPush(signal);     } catch {}
   try { tg()?.autoSendSignal(signal);            } catch {}
   return result;
