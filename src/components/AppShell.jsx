@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link, NavLink, useLocation } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useSession } from "../context/useSession";
 import ChatBox from "./ChatBox";
 
@@ -14,61 +14,148 @@ function fmtExpiry(value) {
   return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", timeZone: "Asia/Kolkata" }).format(d);
 }
 
-// Bottom nav — 5 items for regular users
 const NAV_ITEMS = [
   { to: "/dashboard", icon: "📊", label: "Dashboard" },
-  { to: "/market",    icon: "🔍", label: "Scanner"   },
-  { to: "/crypto",    icon: "💹", label: "Crypto"    },
-  { to: "/stocks",    icon: "🇮🇳", label: "Stocks"    },
-  { to: "/news",      icon: "📰", label: "News"      },
+  { to: "/market", icon: "🔍", label: "Scanner" },
+  { to: "/crypto", icon: "💹", label: "Crypto" },
+  { to: "/stocks", icon: "🇮🇳", label: "Stocks" },
+  { to: "/news", icon: "📰", label: "News" },
   { to: "/community", icon: "👥", label: "Community" },
 ];
 
-// Sidebar only (all users)
-const SIDEBAR_EXTRA = [
-  { to: "/settings", icon: "⚙️", label: "Settings" },
-];
+const SIDEBAR_EXTRA = [{ to: "/settings", icon: "⚙️", label: "Settings" }];
 
-// Admin-only tools
 const ADMIN_NAV_ITEMS = [
-  { to: "/analytics",      icon: "📈", label: "Analytics" },
-  { to: "/post-generator", icon: "✍️", label: "Post Gen"  },
+  { to: "/analytics", icon: "📈", label: "Analytics" },
+  { to: "/post-generator", icon: "✍️", label: "Post Gen" },
 ];
 
 export default function AppShell({ actions = null, children, subtitle, title }) {
   const { logout, user } = useSession();
   const location = useLocation();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [isOnline, setIsOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
+  const [lastSyncAt, setLastSyncAt] = useState(Date.now());
+  const [toasts, setToasts] = useState([]);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState("");
 
-  // FIX: Keep Render backend alive — ping every 4 min to prevent 30-50s cold start
-  // Render free tier spins down after 15 min of inactivity. 4 min gap = safe buffer.
-  // Also ping on tab focus so returning users don't hit a cold backend.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const [, _keepAlive] = useState(() => {
-    const API = (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL || "/api").replace(/\/+$/, "");
-    const ping = () => fetch(API + "/health", { method: "GET", cache: "no-store" }).catch(() => {});
-    ping(); // immediate ping on mount
-    const id = setInterval(ping, 4 * 60 * 1000); // every 4 min
-    // Also wake backend when user returns to tab
-    const onFocus = () => ping();
-    window.addEventListener("focus", onFocus);
-    return () => { clearInterval(id); window.removeEventListener("focus", onFocus); };
-  });
-  const isAdmin  = user?.role === "ADMIN";
-  const planEnd  = fmtExpiry(user?.subscriptionEndsAt);
+  const isAdmin = user?.role === "ADMIN";
+  const planEnd = fmtExpiry(user?.subscriptionEndsAt);
   const showPlanEnd = !isAdmin && planEnd;
 
-  const close  = () => setOpen(false);
-  const toggle = () => setOpen(o => !o);
+  const close = () => setOpen(false);
+  const toggle = () => setOpen((o) => !o);
 
-  // Check if current page is an admin page (for bottom nav active state)
-  const isAdminPage = ADMIN_NAV_ITEMS.some(i => location.pathname.startsWith(i.to))
-    || location.pathname.startsWith("/settings");
+  const isAdminPage = ADMIN_NAV_ITEMS.some((i) => location.pathname.startsWith(i.to)) || location.pathname.startsWith("/settings");
+
+  const allCommands = useMemo(() => {
+    const base = [...NAV_ITEMS, ...SIDEBAR_EXTRA];
+    const admin = isAdmin ? ADMIN_NAV_ITEMS : [];
+    return [...base, ...admin].map((item) => ({
+      id: item.to,
+      label: item.label,
+      icon: item.icon,
+      to: item.to,
+    }));
+  }, [isAdmin]);
+
+  const visibleCommands = useMemo(() => {
+    const q = commandQuery.trim().toLowerCase();
+    if (!q) return allCommands;
+    return allCommands.filter((item) => item.label.toLowerCase().includes(q) || item.to.includes(q));
+  }, [allCommands, commandQuery]);
+
+  function pushToast(kind, text) {
+    const id = `toast_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    setToasts((current) => [...current, { id, kind, text }].slice(-4));
+    setTimeout(() => {
+      setToasts((current) => current.filter((t) => t.id !== id));
+    }, 3000);
+  }
+
+  useEffect(() => {
+    const API = (import.meta.env?.VITE_API_BASE_URL || "/api").replace(/\/+$/, "");
+    const ping = () =>
+      fetch(API + "/health", { method: "GET", cache: "no-store" })
+        .then(() => setLastSyncAt(Date.now()))
+        .catch(() => {});
+
+    ping();
+    const id = setInterval(ping, 4 * 60 * 1000);
+    const onFocus = () => ping();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onOnline = () => {
+      setIsOnline(true);
+      pushToast("success", "Back online");
+    };
+    const onOffline = () => {
+      setIsOnline(false);
+      pushToast("danger", "You are offline");
+    };
+
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    function onApiSuccess() {
+      setLastSyncAt(Date.now());
+    }
+
+    function onKeyDown(event) {
+      const targetTag = String(event.target?.tagName || "").toLowerCase();
+      const editable = targetTag === "input" || targetTag === "textarea" || event.target?.isContentEditable;
+      if (event.key === "/" && !editable) {
+        event.preventDefault();
+        setCommandOpen(true);
+      }
+      if (event.key === "k" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        setCommandOpen(true);
+      }
+      if (event.key === "Escape") {
+        setCommandOpen(false);
+      }
+    }
+
+    window.addEventListener("ftas:api-success", onApiSuccess);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("ftas:api-success", onApiSuccess);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
+  function selectCommand(item) {
+    setCommandOpen(false);
+    setCommandQuery("");
+    navigate(item.to);
+  }
+
+  const lastSyncLabel = new Intl.DateTimeFormat("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZone: "Asia/Kolkata",
+  }).format(new Date(lastSyncAt));
 
   return (
     <div className="shell">
+      {!isOnline ? <div className="offline-banner">Offline mode: reconnecting when network is back.</div> : null}
 
-      {/* ── SIDEBAR ── */}
       <aside className={`sidebar${open ? " sidebar-open" : ""}`}>
         <div className="sidebar-top">
           <div className="sidebar-brand-row">
@@ -80,32 +167,31 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
           </div>
 
           <nav aria-label="Main navigation" className="nav-list">
-            {NAV_ITEMS.map(item => (
+            {NAV_ITEMS.map((item) => (
               <NavLink key={item.to} className={navCls} onClick={close} to={item.to}>
                 {item.icon} {item.label}
               </NavLink>
             ))}
-            {SIDEBAR_EXTRA.map(item => (
+            {SIDEBAR_EXTRA.map((item) => (
               <NavLink key={item.to} className={navCls} onClick={close} to={item.to}>
                 {item.icon} {item.label}
               </NavLink>
             ))}
 
-            {/* Admin tools section */}
-            {isAdmin && (
+            {isAdmin ? (
               <>
                 <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", margin: "8px 0 4px", paddingTop: 8 }}>
                   <span style={{ color: "rgba(255,138,61,0.7)", fontSize: "0.65rem", fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase" }}>
                     Admin Tools
                   </span>
                 </div>
-                {ADMIN_NAV_ITEMS.map(item => (
+                {ADMIN_NAV_ITEMS.map((item) => (
                   <NavLink key={item.to} className={navCls} onClick={close} to={item.to}>
                     {item.icon} {item.label}
                   </NavLink>
                 ))}
               </>
-            )}
+            ) : null}
           </nav>
         </div>
 
@@ -113,9 +199,7 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
           <div className="profile-card">
             <div className="profile-row">
               <span className="profile-label">Account</span>
-              <span className={`pill ${isAdmin ? "pill-accent" : "pill-neutral"}`}>
-                {user?.role || "USER"}
-              </span>
+              <span className={`pill ${isAdmin ? "pill-accent" : "pill-neutral"}`}>{user?.role || "USER"}</span>
             </div>
             <strong>{user?.name || "FTAS Member"}</strong>
             <span>{user?.email}</span>
@@ -124,9 +208,7 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
               {showPlanEnd ? ` · valid till ${planEnd}` : ""}
             </span>
           </div>
-          <button className="button button-ghost" onClick={logout} style={{ width: "100%" }} type="button">
-            Logout
-          </button>
+          <button className="button button-ghost" onClick={logout} style={{ width: "100%" }} type="button">Logout</button>
           <div className="legal-links">
             <Link to="/terms">Terms</Link>
             <Link to="/privacy">Privacy</Link>
@@ -134,33 +216,34 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
         </div>
       </aside>
 
-      {open && <div aria-hidden="true" className="sidebar-overlay" onClick={close} />}
+      {open ? <div aria-hidden="true" className="sidebar-overlay" onClick={close} /> : null}
 
-      {/* ── MAIN ── */}
       <main className="main">
         <div className="mobile-topbar">
           <span className="brand-mark" style={{ fontSize: "1.35rem" }}>FTAS</span>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {/* Admin badge */}
-            {isAdmin && (
+            <button className="button button-ghost" onClick={() => setCommandOpen(true)} style={{ minHeight: 32, padding: "0 10px" }} type="button">⌘</button>
+            {isAdmin ? (
               <button
                 onClick={toggle}
                 type="button"
                 style={{
                   background: "rgba(255,138,61,0.15)",
                   border: "1px solid rgba(255,138,61,0.3)",
-                  borderRadius: 8, color: "var(--c-accent)",
-                  cursor: "pointer", fontSize: "0.72rem",
-                  fontWeight: 700, padding: "5px 10px",
+                  borderRadius: 8,
+                  color: "var(--c-accent)",
+                  cursor: "pointer",
+                  fontSize: "0.72rem",
+                  fontWeight: 700,
+                  padding: "5px 10px",
                   letterSpacing: "0.05em",
                 }}
               >
                 ⚡ ADMIN
               </button>
+            ) : (
+              <div className="topbar-live">LIVE</div>
             )}
-            {/* LIVE dot for regular users */}
-            {!isAdmin && <div className="topbar-live">LIVE</div>}
-            {/* Logout button — always visible on mobile topbar */}
             <button
               onClick={logout}
               type="button"
@@ -191,6 +274,7 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
             <span className="eyebrow">Fintech Automated Solutions</span>
             <h1>{title}</h1>
             {subtitle ? <p>{subtitle}</p> : null}
+            <p style={{ fontSize: "0.72rem", opacity: 0.7, marginTop: 4 }}>Last sync: {lastSyncLabel}</p>
           </div>
           {actions ? <div className="page-actions">{actions}</div> : null}
         </header>
@@ -198,39 +282,58 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
         {children}
       </main>
 
-      {/* ── BOTTOM NAV ── */}
-      <nav className="bottom-nav" aria-label="Mobile navigation">
-        {NAV_ITEMS.map(item => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            className={({ isActive }) => `bottom-nav-item${isActive ? " active" : ""}`}
-          >
+      <nav aria-label="Mobile navigation" className="bottom-nav">
+        {NAV_ITEMS.map((item) => (
+          <NavLink key={item.to} to={item.to} className={({ isActive }) => `bottom-nav-item${isActive ? " active" : ""}`}>
             <span className="nav-icon">{item.icon}</span>
             <span>{item.label}</span>
           </NavLink>
         ))}
 
-        {/* Admin: replace last item with "More" that opens sidebar showing admin tools */}
         {isAdmin ? (
-          <button
-            type="button"
-            onClick={toggle}
-            className={`bottom-nav-item${isAdminPage ? " active" : ""}`}
-          >
+          <button type="button" onClick={toggle} className={`bottom-nav-item${isAdminPage ? " active" : ""}`}>
             <span className="nav-icon">🛠️</span>
             <span>Admin</span>
           </button>
         ) : (
-          <NavLink
-            to="/settings"
-            className={({ isActive }) => `bottom-nav-item${isActive ? " active" : ""}`}
-          >
+          <NavLink to="/settings" className={({ isActive }) => `bottom-nav-item${isActive ? " active" : ""}`}>
             <span className="nav-icon">⚙️</span>
             <span>Settings</span>
           </NavLink>
         )}
       </nav>
+
+      {commandOpen ? (
+        <div className="command-overlay" onClick={() => setCommandOpen(false)}>
+          <div className="command-modal" onClick={(event) => event.stopPropagation()}>
+            <input
+              autoFocus
+              className="command-input"
+              onChange={(event) => setCommandQuery(event.target.value)}
+              placeholder="Type page name or path..."
+              value={commandQuery}
+            />
+            <div className="command-list">
+              {visibleCommands.map((item) => (
+                <button key={item.id} className="command-item" onClick={() => selectCommand(item)} type="button">
+                  <span>{item.icon}</span>
+                  <span>{item.label}</span>
+                  <span style={{ marginLeft: "auto", opacity: 0.55 }}>{item.to}</span>
+                </button>
+              ))}
+              {!visibleCommands.length ? <div className="empty-state" style={{ padding: 12 }}>No matches</div> : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="toast-stack">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toast toast-${toast.kind}`}>
+            {toast.text}
+          </div>
+        ))}
+      </div>
 
       <ChatBox />
     </div>

@@ -471,6 +471,37 @@ export default function Dashboard() {
     } catch {}
   }
 
+  function applySignalPreset(preset) {
+    if (preset === "SCALP") {
+      setSignalPrefs((current) => ({
+        ...current,
+        minConfidence: 85,
+        onlyStrong: true,
+        timeframes: ["1m", "5m"],
+      }));
+      return;
+    }
+
+    if (preset === "SWING") {
+      setSignalPrefs((current) => ({
+        ...current,
+        minConfidence: 78,
+        onlyStrong: false,
+        timeframes: ["15m", "30m", "1h"],
+      }));
+      return;
+    }
+
+    if (preset === "RISK_OFF") {
+      setSignalPrefs((current) => ({
+        ...current,
+        minConfidence: 90,
+        onlyStrong: true,
+        sides: ["LONG"],
+      }));
+    }
+  }
+
   async function handleSignalPreferenceSave(event) {
     event.preventDefault();
     setActionBusy("signal-preferences");
@@ -1039,6 +1070,12 @@ export default function Dashboard() {
               />
               <span>Show only strong signals</span>
             </label>
+
+            <div className="button-row">
+              <button className="button button-ghost" onClick={() => applySignalPreset("SCALP")} type="button">Scalp View</button>
+              <button className="button button-ghost" onClick={() => applySignalPreset("SWING")} type="button">Swing View</button>
+              <button className="button button-ghost" onClick={() => applySignalPreset("RISK_OFF")} type="button">Risk-off</button>
+            </div>
 
             <div className="button-row">
               <button className="button button-primary" disabled={actionBusy === "signal-preferences"} type="submit">

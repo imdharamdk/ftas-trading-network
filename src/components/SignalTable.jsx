@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import CandlestickChart from "./CandlestickChart";
 import TradingViewModal from "./TradingViewModal";
 
@@ -6,8 +6,8 @@ function formatPrice(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return "—";
   if (Math.abs(n) >= 10000) return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (Math.abs(n) >= 1000)  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
-  if (Math.abs(n) >= 1)     return n.toFixed(4);
+  if (Math.abs(n) >= 1000) return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  if (Math.abs(n) >= 1) return n.toFixed(4);
   if (Math.abs(n) >= 0.0001) return n.toFixed(6);
   return n.toFixed(8);
 }
@@ -28,9 +28,9 @@ function formatSignedPct(value) {
 
 function sideClass(side) { return side === "LONG" ? "pill-success" : "pill-danger"; }
 function statusClass(status, result) {
-  if (status === "ACTIVE")   return "pill-warning";
-  if (result === "SL_HIT")   return "pill-danger";
-  if (result === "EXPIRED")  return "pill-neutral";
+  if (status === "ACTIVE") return "pill-warning";
+  if (result === "SL_HIT") return "pill-danger";
+  if (result === "EXPIRED") return "pill-neutral";
   return "pill-success";
 }
 
@@ -60,21 +60,17 @@ function ConfBadge({ confidence }) {
   return <span className={`pill ${cls}`}>{confidence}%</span>;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   MOBILE SIGNAL CARD — redesigned for clarity and visual appeal
-══════════════════════════════════════════════════════════════════════════════ */
 function SignalCard({ signal, onChartOpen }) {
-  const move      = Number(signal.signalMovePercent);
-  const hasMove   = Number.isFinite(move);
+  const move = Number(signal.signalMovePercent);
+  const hasMove = Number.isFinite(move);
   const livePrice = signal.livePrice ?? signal.closePrice;
-  const sym       = formatDisplaySymbol(signal);
-  const isStock   = signal.source === "SMART_ENGINE";
-  const isClosed  = signal.status !== "ACTIVE";
-  const result    = signal.result || signal.status;
+  const sym = formatDisplaySymbol(signal);
+  const isStock = signal.source === "SMART_ENGINE";
+  const isClosed = signal.status !== "ACTIVE";
+  const result = signal.result || signal.status;
 
   return (
     <article className="signal-card" data-side={signal.side}>
-      {/* ── Header ── */}
       <div className="signal-card-header">
         <button
           className="signal-card-coin"
@@ -94,7 +90,6 @@ function SignalCard({ signal, onChartOpen }) {
         </div>
       </div>
 
-      {/* ── Price strip: Entry | Live | SL ── */}
       <div className="signal-card-prices">
         <div className="signal-price-cell">
           <span className="signal-price-label">Entry</span>
@@ -105,11 +100,7 @@ function SignalCard({ signal, onChartOpen }) {
           <span className="signal-price-label">{isClosed ? "Close" : "Live"}</span>
           <span className="signal-price-value" style={{ color: hasMove ? (move >= 0 ? "var(--c-green)" : "var(--c-red)") : undefined }}>
             {formatPrice(livePrice)}
-            {hasMove && (
-              <span style={{ fontSize: "0.70em", marginLeft: 4, opacity: 0.8 }}>
-                ({formatSignedPct(move)})
-              </span>
-            )}
+            {hasMove && <span style={{ fontSize: "0.70em", marginLeft: 4, opacity: 0.8 }}>({formatSignedPct(move)})</span>}
           </span>
         </div>
         <div className="signal-price-divider" />
@@ -119,7 +110,6 @@ function SignalCard({ signal, onChartOpen }) {
         </div>
       </div>
 
-      {/* ── TP targets ── */}
       <div className="signal-card-tp-row">
         {[["TP1", signal.tp1], ["TP2", signal.tp2], ["TP3", signal.tp3]].map(([label, val]) => (
           <div key={label} className="signal-tp-cell">
@@ -129,7 +119,6 @@ function SignalCard({ signal, onChartOpen }) {
         ))}
       </div>
 
-      {/* ── Meta: leverage + status + time ── */}
       <div className="signal-card-meta">
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <LeverageBadge leverage={signal.leverage ?? signal.indicatorSnapshot?.leverage} />
@@ -138,22 +127,18 @@ function SignalCard({ signal, onChartOpen }) {
         <span className="signal-card-time">{formatDate(signal.createdAt)}</span>
       </div>
 
-      {/* ── Confirmations (collapsed, subtle) ── */}
-      {Array.isArray(signal.confirmations) && signal.confirmations.length > 0 && (
+      {Array.isArray(signal.confirmations) && signal.confirmations.length > 0 ? (
         <p className="signal-card-confirmations">
           {signal.confirmations.slice(0, 3).join(" · ")}
           {signal.confirmations.length > 3 && ` +${signal.confirmations.length - 3} more`}
         </p>
-      )}
+      ) : null}
     </article>
   );
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   DESKTOP TABLE ROW
-══════════════════════════════════════════════════════════════════════════════ */
 function TableRow({ signal, onChartOpen }) {
-  const sym     = formatDisplaySymbol(signal);
+  const sym = formatDisplaySymbol(signal);
   const isStock = signal.source === "SMART_ENGINE";
   return (
     <tr>
@@ -169,13 +154,13 @@ function TableRow({ signal, onChartOpen }) {
       <td>{formatPrice(signal.entry)}</td>
       <td>
         <strong>{formatPrice(signal.livePrice ?? signal.closePrice)}</strong>
-        {Number.isFinite(Number(signal.signalMovePercent)) && (
+        {Number.isFinite(Number(signal.signalMovePercent)) ? (
           <div>
             <span className={`pill ${Number(signal.signalMovePercent) >= 0 ? "pill-success" : "pill-danger"}`}>
               {formatSignedPct(signal.signalMovePercent)}
             </span>
           </div>
-        )}
+        ) : null}
       </td>
       <td>{formatPrice(signal.stopLoss)}</td>
       <td>{formatPrice(signal.tp1)}</td>
@@ -183,24 +168,21 @@ function TableRow({ signal, onChartOpen }) {
       <td>{formatPrice(signal.tp3)}</td>
       <td><ConfBadge confidence={signal.confidence} /></td>
       <td><LeverageBadge leverage={signal.leverage ?? signal.indicatorSnapshot?.leverage} /></td>
-      <td>
-        <span className={`pill ${statusClass(signal.status, signal.result)}`}>
-          {signal.result || signal.status}
-        </span>
-      </td>
+      <td><span className={`pill ${statusClass(signal.status, signal.result)}`}>{signal.result || signal.status}</span></td>
       <td>{formatDate(signal.createdAt)}</td>
     </tr>
   );
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   MAIN EXPORT
-══════════════════════════════════════════════════════════════════════════════ */
 export default function SignalTable({ compact = false, emptyLabel, signals }) {
-  const [chartCoin, setChartCoin]       = useState(null);
-  const [chartTf, setChartTf]           = useState("15m");
-  const [chartSignal, setChartSignal]   = useState(null);
-  const [tvSignal, setTvSignal]         = useState(null);
+  const [chartCoin, setChartCoin] = useState(null);
+  const [chartTf, setChartTf] = useState("15m");
+  const [chartSignal, setChartSignal] = useState(null);
+  const [tvSignal, setTvSignal] = useState(null);
+  const [visibleCount, setVisibleCount] = useState(compact ? 40 : 60);
+
+  const visibleSignals = useMemo(() => signals.slice(0, visibleCount), [signals, visibleCount]);
+  const hasMore = signals.length > visibleCount;
 
   function openChart(signal) {
     if (signal.source === "SMART_ENGINE" && !signal.scanMeta?.instrument?.token) {
@@ -214,18 +196,25 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
 
   return (
     <>
-      {/* ── MOBILE CARDS ── */}
       <div className="signal-view-mobile">
         {signals.length ? (
-          <div className="signal-cards">
-            {signals.map(s => <SignalCard key={s.id} signal={s} onChartOpen={openChart} />)}
-          </div>
+          <>
+            <div className="signal-cards">
+              {visibleSignals.map((s) => <SignalCard key={s.id} signal={s} onChartOpen={openChart} />)}
+            </div>
+            {hasMore ? (
+              <div style={{ textAlign: "center", marginTop: 12 }}>
+                <button className="button button-ghost" onClick={() => setVisibleCount((c) => c + 40)} type="button">
+                  Load More ({visibleCount}/{signals.length})
+                </button>
+              </div>
+            ) : null}
+          </>
         ) : (
           <div className="empty-state" style={{ padding: "20px 0", textAlign: "center" }}>{emptyLabel}</div>
         )}
       </div>
 
-      {/* ── DESKTOP TABLE ── */}
       <div className="signal-view-desktop">
         <div className="table-card">
           <div className="table-wrap">
@@ -238,27 +227,34 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
                 </tr>
               </thead>
               <tbody>
-                {signals.length ? (
-                  signals.map(s => <TableRow key={s.id} signal={s} onChartOpen={openChart} />)
+                {visibleSignals.length ? (
+                  visibleSignals.map((s) => <TableRow key={s.id} signal={s} onChartOpen={openChart} />)
                 ) : (
                   <tr><td className="empty-row" colSpan={13}>{emptyLabel}</td></tr>
                 )}
               </tbody>
             </table>
           </div>
+          {hasMore ? (
+            <div style={{ textAlign: "center", padding: "10px 0 2px" }}>
+              <button className="button button-ghost" onClick={() => setVisibleCount((c) => c + 60)} type="button">
+                Load More ({visibleCount}/{signals.length})
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
 
-      {chartCoin && (
+      {chartCoin ? (
         <CandlestickChart
           coin={chartCoin}
           timeframe={chartTf}
-          signal={chartSignal || signals.find(s => s.coin === chartCoin && s.timeframe === chartTf) || null}
+          signal={chartSignal || signals.find((s) => s.coin === chartCoin && s.timeframe === chartTf) || null}
           onClose={() => { setChartCoin(null); setChartSignal(null); }}
         />
-      )}
+      ) : null}
 
-      {tvSignal && (
+      {tvSignal ? (
         <TradingViewModal
           coin={tvSignal.coin || tvSignal.scanMeta?.instrument?.tradingSymbol || ""}
           timeframe={tvSignal.timeframe || "15m"}
@@ -266,7 +262,7 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
           exchange={tvSignal.scanMeta?.instrument?.exchange}
           onClose={() => setTvSignal(null)}
         />
-      )}
+      ) : null}
     </>
   );
 }
