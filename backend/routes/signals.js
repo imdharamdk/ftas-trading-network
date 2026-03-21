@@ -421,9 +421,38 @@ async function attachLivePrices(signals) {
   }
 }
 
+
+function toLiteSignal(signal) {
+  return {
+    id: signal.id,
+    coin: signal.coin,
+    side: signal.side,
+    timeframe: signal.timeframe,
+    entry: signal.entry,
+    stopLoss: signal.stopLoss,
+    tp1: signal.tp1,
+    tp2: signal.tp2,
+    tp3: signal.tp3,
+    confidence: signal.confidence,
+    leverage: signal.leverage,
+    status: signal.status,
+    result: signal.result,
+    source: signal.source,
+    createdAt: signal.createdAt,
+    closePrice: signal.closePrice,
+    livePrice: signal.livePrice,
+    liveUpdatedAt: signal.liveUpdatedAt,
+    marketMovePercent: signal.marketMovePercent,
+    signalMovePercent: signal.signalMovePercent,
+    confirmations: Array.isArray(signal.confirmations) ? signal.confirmations.slice(0, 3) : [],
+    scanMeta: signal.scanMeta?.instrument ? { instrument: signal.scanMeta.instrument } : {},
+  };
+}
+
 router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
   const { preference, minConfidence } = resolveRiskPreference(req);
-  const cacheKey = "signals:active:" + (req.query.coin || "all") + ":" + (req.query.limit || 50) + ":" + preference;
+  const fields = String(req.query.fields || "full").toLowerCase();
+  const cacheKey = "signals:active:" + (req.query.coin || "all") + ":" + (req.query.limit || 50) + ":" + preference + ":" + fields;
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
 
@@ -440,14 +469,16 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
     limit
   );
 
-  const result = { signals: filtered };
+  const signals = fields === "lite" ? filtered.map(toLiteSignal) : filtered;
+  const result = { signals };
   cache.set(cacheKey, result, 20); // 20s TTL
   return res.json(result);
 });
 
 router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   const { preference, minConfidence } = resolveRiskPreference(req);
-  const cacheKey = "signals:history:" + (req.query.coin || "all") + ":" + (req.query.limit || "all") + ":" + preference;
+  const fields = String(req.query.fields || "full").toLowerCase();
+  const cacheKey = "signals:history:" + (req.query.coin || "all") + ":" + (req.query.limit || "all") + ":" + preference + ":" + fields;
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
 
@@ -461,8 +492,9 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
     (!coin || signal.coin === coin) &&
     Number(signal.confidence || 0) >= minConfidence;
   const signals = limit ? takeLatest(rawSignals, predicate, limit) : rawSignals.filter(predicate);
+  const payloadSignals = fields === "lite" ? signals.map(toLiteSignal) : signals;
 
-  const result = { signals };
+  const result = { signals: payloadSignals };
   cache.set(cacheKey, result, 30);
   return res.json(result);
 });

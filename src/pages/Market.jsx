@@ -88,7 +88,7 @@ function CryptoTab() {
       try {
         const signalResults = await Promise.allSettled([
           apiFetch("/signals/stats/overview"),
-          apiFetch("/signals/active?limit=80"),
+          apiFetch("/signals/active?limit=80&fields=lite"),
           apiFetch("/signals/engine/status"),
         ]);
         if (!active) return;
@@ -101,7 +101,7 @@ function CryptoTab() {
 
         setTimeout(async () => {
           try {
-            const historyRes = await apiFetch("/signals/history?limit=20");
+            const historyRes = await apiFetch("/signals/history?limit=20&fields=lite");
             if (!active) return;
             setHistorySignals(historyRes?.signals || []);
           } catch {
