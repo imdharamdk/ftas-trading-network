@@ -18,6 +18,17 @@ function normalizeTicker(ticker) {
   };
 }
 
+function toLiteTicker(ticker) {
+  return {
+    symbol: ticker.symbol,
+    price: ticker.price,
+    changePercent: ticker.changePercent,
+    highPrice: ticker.highPrice,
+    lowPrice: ticker.lowPrice,
+    quoteVolume: ticker.quoteVolume,
+  };
+}
+
 // ─── Klines endpoint for frontend chart ───────────────────────────────────────
 router.get("/klines", requireAuth, async (req, res) => {
   try {
@@ -37,6 +48,7 @@ router.get("/tickers", async (req, res) => {
     const limit = Math.min(Math.max(Number(req.query.limit || 20), 5), 500);
     const requestedSort = String(req.query.sort || "quoteVolume");
     const sortBy = SORTABLE_TICKER_FIELDS.has(requestedSort) ? requestedSort : "quoteVolume";
+    const fields = String(req.query.fields || "full").toLowerCase();
 
     // Cache tickers for 30s — Bybit API is slow and called on every Market page load
     const cacheKey = "market:tickers:" + sortBy;
@@ -52,7 +64,11 @@ router.get("/tickers", async (req, res) => {
       .sort((l, r) => Number(r[sortBy] || 0) - Number(l[sortBy] || 0))
       .slice(0, limit);
 
-    return res.json({ source: "BINANCE_FUTURES", tickers: normalized });
+    const tickers = fields === "lite" ? normalized.map(toLiteTicker) : normalized;
+
+    // Allow short-lived browser caching despite global no-store
+    res.set("Cache-Control", "public, max-age=15");
+    return res.json({ source: "BINANCE_FUTURES", tickers });
   } catch (error) {
     return res.status(503).json({ message: error.message, source: "BINANCE_FUTURES", tickers: [] });
   }
@@ -67,6 +83,7 @@ router.get("/coins", async (req, res) => {
       cache.set("market:coins", c, 120); // 2 min — coin list rarely changes
       return c;
     })();
+    res.set("Cache-Control", "public, max-age=120");
     return res.json({
       coins: requestedLimit > 0 ? coins.slice(0, requestedLimit) : coins,
       source: "BINANCE_FUTURES",

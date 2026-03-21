@@ -481,6 +481,7 @@ router.get("/instruments", requireAuth, requireSignalAccess, (req, res) => {
 
     const result = { instruments };
     cache.set(cacheKey, result, query ? 60 : 300);
+    res.set("Cache-Control", query ? "public, max-age=60" : "public, max-age=300");
     return res.json(result);
   } catch (err) {
     return res.status(500).json({ message: err.message });

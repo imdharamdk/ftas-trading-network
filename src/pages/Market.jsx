@@ -77,7 +77,7 @@ function CryptoTab() {
             apiFetch("/signals/history?limit=50"),
             apiFetch("/signals/engine/status"),
           ]),
-          Promise.allSettled([apiFetch(`/market/tickers?limit=500&sort=${sortBy}`, { skipAuth: true })]),
+          Promise.allSettled([apiFetch(`/market/tickers?limit=300&sort=${sortBy}&fields=lite`, { skipAuth: true })]),
           Promise.allSettled([apiFetch("/market/coins", { skipAuth: true })]),
         ]);
         if (!active) return;
