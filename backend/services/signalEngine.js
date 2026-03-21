@@ -1173,6 +1173,26 @@ function getStatus() {
     lastScanAt: engineState.lastScanAt, running: engineState.running, scanCount: engineState.scanCount };
 }
 
+function getSelfLearningStatus() {
+  const model = engineState.selfLearning || {};
+  return {
+    enabled: Boolean(model.enabled),
+    trainedAt: model.trainedAt || null,
+    sampleSize: Number(model.sampleSize || 0),
+    overallWinRate: model.overallWinRate ?? null,
+    globalPublishFloorBoost: Number(model.globalPublishFloorBoost || 0),
+    confidenceScoreDelta: Number(model.confidenceScoreDelta || 0),
+    blockedCoinCount: Object.keys(model.blockedCoins || {}).length,
+    blockedCoins: Object.keys(model.blockedCoins || {}),
+    version: model.version || "slm_v1",
+  };
+}
+
+function setSelfLearningEnabled(enabled) {
+  engineState.selfLearning.enabled = Boolean(enabled);
+  return getSelfLearningStatus();
+}
+
 // ─── Fast Expiry Checker (every 30s) ─────────────────────────────────────────
 async function checkAndExpireSignals() {
   try {
@@ -1267,4 +1287,4 @@ async function generateForCoin(symbol, actor) {
   return { generated: true, signal };
 }
 
-module.exports = { createManualSignal, evaluateActiveSignals, getCoinList, getStatus, scanNow, start, stop, pauseCoin, resumeCoin, getPausedCoins, generateForCoin };
+module.exports = { createManualSignal, evaluateActiveSignals, getCoinList, getStatus, getSelfLearningStatus, setSelfLearningEnabled, scanNow, start, stop, pauseCoin, resumeCoin, getPausedCoins, generateForCoin };

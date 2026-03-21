@@ -15,7 +15,7 @@ const scanLimiter = rateLimit({
 });
 const { getLtp } = require("../services/smartApiService");
 const { getInstrumentUniverse } = require("../services/smartInstrumentService");
-const { createManualSignal, generateForCoin, getPausedCoins, getStatus, pauseCoin, resumeCoin, scanNow, start, stop } = require("../services/signalEngine");
+const { createManualSignal, generateForCoin, getPausedCoins, getSelfLearningStatus, getStatus, pauseCoin, resumeCoin, scanNow, setSelfLearningEnabled, start, stop } = require("../services/signalEngine");
 const cache = require("../services/apiCache");
 
 const router = express.Router();
@@ -643,6 +643,22 @@ router.get("/stats/performance", requireAuth, async (req, res) => {
 router.get("/engine/status", requireAuth, (req, res) => {
   return res.json({
     engine: getStatus(),
+  });
+});
+
+router.get("/engine/self-learning", requireAuth, (_req, res) => {
+  return res.json({
+    selfLearning: getSelfLearningStatus(),
+  });
+});
+
+router.patch("/engine/self-learning", requireAuth, requireAdmin, (req, res) => {
+  const enabled = req.body?.enabled;
+  if (typeof enabled !== "boolean") {
+    return res.status(400).json({ message: "enabled boolean is required" });
+  }
+  return res.json({
+    selfLearning: setSelfLearningEnabled(enabled),
   });
 });
 

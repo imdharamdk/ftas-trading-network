@@ -44,6 +44,7 @@ const EXPIRY_PROMPT_STORAGE_KEY = "ftas_expiry_prompt_dismissed";
 const ANALYTICS_REFRESH_MS = 10 * 60 * 1000;
 const MISSED_SIGNALS_LAST_SEEN_KEY = "ftas_missed_signals_last_seen";
 const AUTO_RECO_APPLY_STORAGE_KEY = "ftas_auto_reco_applied_v1";
+const AUTO_RECO_AUDIT_STORAGE_KEY = "ftas_auto_reco_audit_v1";
 
 function deferTask(fn) {
   if (typeof window !== "undefined" && "requestIdleCallback" in window) {
@@ -78,6 +79,17 @@ function buildPlanUpdate(plan) {
 
 function hasActivePaidPlan(user) {
   return user?.subscriptionStatus === "ACTIVE" && ["PRO", "PREMIUM"].includes(user?.plan);
+}
+
+function getDefaultSignalPrefs() {
+  return {
+    minConfidence: 0,
+    sides: ["LONG", "SHORT"],
+    timeframes: [],
+    blockedTimeframes: [],
+    excludedCoins: [],
+    onlyStrong: false,
+  };
 }
 
 function normalizeDashboardSignalPrefs(value = {}) {
@@ -230,16 +242,20 @@ export default function Dashboard() {
   const [manualForm, setManualForm] = useState(defaultManualForm);
   const analyticsFetchedAtRef = useRef(0);
 
-  const [signalPrefs, setSignalPrefs] = useState({
-    minConfidence: 0,
-    sides: ["LONG", "SHORT"],
-    timeframes: [],
-    blockedTimeframes: [],
-    excludedCoins: [],
-    onlyStrong: false,
-  });
+  const [signalPrefs, setSignalPrefs] = useState(getDefaultSignalPrefs());
   const [missedSignals, setMissedSignals] = useState([]);
   const [activityEvents, setActivityEvents] = useState([]);
+  const [selfLearningStatus, setSelfLearningStatus] = useState(null);
+  const [autoApplyAudit, setAutoApplyAudit] = useState(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem(AUTO_RECO_AUDIT_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
 
   // ── WebSocket — realtime stats ────────────────────────────────────────────
   const onStatsUpdate = useCallback(({ crypto, stocks }) => {
@@ -311,6 +327,20 @@ export default function Dashboard() {
         if (!active) return;
 
         setSignalPrefs(next);
+        const entry = {
+          id: "audit_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
+          createdAt: new Date().toISOString(),
+          type: "AUTO_APPLY",
+          actions,
+          recommendationCount: recommendations.length,
+        };
+        setAutoApplyAudit((current) => {
+          const nextAudit = [entry, ...(Array.isArray(current) ? current : [])].slice(0, 40);
+          if (typeof window !== "undefined") {
+            window.localStorage.setItem(AUTO_RECO_AUDIT_STORAGE_KEY, JSON.stringify(nextAudit));
+          }
+          return nextAudit;
+        });
         setFeedback("AI recommendations auto-applied (" + actions.length + " changes)");
         setTimeout(() => setFeedback(""), 4000);
         await refreshUser();
@@ -342,15 +372,19 @@ export default function Dashboard() {
     if (now - analyticsFetchedAtRef.current > ANALYTICS_REFRESH_MS) {
       analyticsFetchedAtRef.current = now;
       deferTask(async () => {
-        const [analyticsRes, performanceRes] = await Promise.allSettled([
+        const [analyticsRes, performanceRes, selfLearningRes] = await Promise.allSettled([
           apiFetch("/signals/stats/analytics"),
           apiFetch("/signals/stats/performance"),
+          apiFetch("/signals/engine/self-learning"),
         ]);
         if (analyticsRes.status === "fulfilled" && analyticsRes.value?.analytics) {
           setAnalytics(analyticsRes.value.analytics);
         }
         if (performanceRes.status === "fulfilled" && performanceRes.value?.performance) {
           setPerformance(performanceRes.value.performance);
+        }
+        if (selfLearningRes.status === "fulfilled") {
+          setSelfLearningStatus(selfLearningRes.value?.selfLearning || null);
         }
       });
     }
@@ -445,6 +479,57 @@ export default function Dashboard() {
       const payload = buildSignalPreferencePayload(signalPrefs);
       await apiFetch("/auth/me/preferences", { method: "PATCH", body: payload });
       await refreshWithFeedback("Signal preferences updated");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  async function handleResetAiAppliedFilters() {
+    setActionBusy("signal-preferences");
+    setError("");
+    try {
+      const resetPrefs = getDefaultSignalPrefs();
+      await apiFetch("/auth/me/preferences", { method: "PATCH", body: buildSignalPreferencePayload(resetPrefs) });
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(AUTO_RECO_APPLY_STORAGE_KEY);
+      }
+      setSignalPrefs(resetPrefs);
+
+      const entry = {
+        id: "audit_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
+        createdAt: new Date().toISOString(),
+        type: "RESET_FILTERS",
+        actions: ["reset_to_default"],
+        recommendationCount: 0,
+      };
+      setAutoApplyAudit((current) => {
+        const nextAudit = [entry, ...(Array.isArray(current) ? current : [])].slice(0, 40);
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(AUTO_RECO_AUDIT_STORAGE_KEY, JSON.stringify(nextAudit));
+        }
+        return nextAudit;
+      });
+
+      await refreshWithFeedback("AI-applied filters reset");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setActionBusy("");
+    }
+  }
+
+  async function handleToggleSelfLearning(enabled) {
+    setActionBusy("self-learning-toggle");
+    setError("");
+    try {
+      const response = await apiFetch("/signals/engine/self-learning", {
+        method: "PATCH",
+        body: { enabled: Boolean(enabled) },
+      });
+      setSelfLearningStatus(response?.selfLearning || null);
+      await refreshWithFeedback("Self-learning " + (enabled ? "enabled" : "disabled"));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -955,9 +1040,19 @@ export default function Dashboard() {
               <span>Show only strong signals</span>
             </label>
 
-            <button className="button button-primary" disabled={actionBusy === "signal-preferences"} type="submit">
-              {actionBusy === "signal-preferences" ? "Saving..." : "Save preferences"}
-            </button>
+            <div className="button-row">
+              <button className="button button-primary" disabled={actionBusy === "signal-preferences"} type="submit">
+                {actionBusy === "signal-preferences" ? "Saving..." : "Save preferences"}
+              </button>
+              <button className="button button-ghost" disabled={actionBusy === "signal-preferences"} onClick={handleResetAiAppliedFilters} type="button">
+                Reset AI Filters
+              </button>
+            </div>
+
+            <div className="list-stack">
+              <div className="list-card"><strong>Blocked Timeframes</strong><span>{signalPrefs.blockedTimeframes.length ? signalPrefs.blockedTimeframes.join(", ") : "None"}</span></div>
+              <div className="list-card"><strong>Excluded Coins</strong><span>{signalPrefs.excludedCoins.length ? signalPrefs.excludedCoins.join(", ") : "None"}</span></div>
+            </div>
           </form>
         </article>
 
@@ -992,6 +1087,50 @@ export default function Dashboard() {
             {!activityEvents.length ? <div className="empty-state">No recent activity.</div> : null}
           </div>
         </article>
+      </section>
+
+      <section className="section-grid">
+        <article className="panel">
+          <div className="panel-header">
+            <div><span className="eyebrow">AI Insights</span><h2>Auto-Apply Audit</h2></div>
+            <span className="pill pill-neutral">{autoApplyAudit.length} logs</span>
+          </div>
+          <div className="list-stack">
+            {autoApplyAudit.slice(0, 8).map((entry) => (
+              <div className="list-card" key={entry.id}>
+                <div><strong>{entry.type === "RESET_FILTERS" ? "Reset Filters" : "Auto Apply"}</strong><span>{entry.actions?.join(", ") || "-"}</span></div>
+                <span className="pill pill-neutral">{new Date(entry.createdAt).toLocaleDateString("en-IN")}</span>
+              </div>
+            ))}
+            {!autoApplyAudit.length ? <div className="empty-state">No auto-apply audit yet.</div> : null}
+          </div>
+        </article>
+
+        {isAdmin ? (
+          <article className="panel">
+            <div className="panel-header">
+              <div><span className="eyebrow">ML Model</span><h2>Self-Learning Control</h2></div>
+              <span className={`pill ${selfLearningStatus?.enabled ? "pill-success" : "pill-warning"}`}>
+                {selfLearningStatus?.enabled ? "Enabled" : "Disabled"}
+              </span>
+            </div>
+            <div className="detail-grid">
+              <div><span className="detail-label">Version</span><strong>{selfLearningStatus?.version || "slm_v1"}</strong></div>
+              <div><span className="detail-label">Sample Size</span><strong>{selfLearningStatus?.sampleSize ?? 0}</strong></div>
+              <div><span className="detail-label">Win Rate</span><strong>{selfLearningStatus?.overallWinRate ?? 0}%</strong></div>
+              <div><span className="detail-label">Blocked Coins</span><strong>{selfLearningStatus?.blockedCoinCount ?? 0}</strong></div>
+            </div>
+            <div className="button-row">
+              <button className="button button-primary" disabled={actionBusy === "self-learning-toggle" || selfLearningStatus?.enabled} onClick={() => handleToggleSelfLearning(true)} type="button">
+                Enable Model
+              </button>
+              <button className="button button-ghost" disabled={actionBusy === "self-learning-toggle" || !selfLearningStatus?.enabled} onClick={() => handleToggleSelfLearning(false)} type="button">
+                Disable Model
+              </button>
+            </div>
+            <p className="panel-note">Last trained: {selfLearningStatus?.trainedAt ? new Date(selfLearningStatus.trainedAt).toLocaleString("en-IN") : "Not trained yet"}</p>
+          </article>
+        ) : null}
       </section>
 
       {/* ── PLAN / PAYMENT ── */}
