@@ -1,9 +1,12 @@
-const axios = require("axios");
-
-const RESEND_API_BASE = "https://api.resend.com";
+const { Resend } = require("resend");
 
 function hasResendConfig() {
   return Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM_EMAIL);
+}
+
+function buildResendClient() {
+  // Replace `re_xxxxxxxxx` with your real API key in backend/.env as RESEND_API_KEY.
+  return new Resend(process.env.RESEND_API_KEY || "re_xxxxxxxxx");
 }
 
 async function sendResetCodeEmail({ toEmail, code, expiresInMinutes }) {
@@ -30,33 +33,24 @@ async function sendResetCodeEmail({ toEmail, code, expiresInMinutes }) {
   ].join("\n");
 
   try {
-    const response = await axios.post(
-      `${RESEND_API_BASE}/emails`,
-      {
-        from: process.env.RESEND_FROM_EMAIL,
-        to: [toEmail],
-        subject,
-        html,
-        text,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        timeout: Number(process.env.RESEND_TIMEOUT_MS || 10000),
-      }
-    );
+    const resend = buildResendClient();
+    const response = await resend.emails.send({
+      from: process.env.RESEND_FROM_EMAIL,
+      to: [toEmail],
+      subject,
+      html,
+      text,
+    });
 
     return {
       sent: true,
-      id: response?.data?.id || null,
+      id: response?.data?.id || response?.id || null,
     };
   } catch (error) {
     return {
       sent: false,
       skipped: false,
-      reason: error?.response?.data?.message || error.message || "resend_failed",
+      reason: error?.message || "resend_failed",
     };
   }
 }
