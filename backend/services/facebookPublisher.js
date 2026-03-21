@@ -30,6 +30,62 @@ if (!FB_ENABLED) {
   console.log("[fb] Facebook publishing disabled — set FB_PAGE_ID and FB_PAGE_ACCESS_TOKEN env vars to enable.");
 }
 
+// ─── Global Post Queue (Rate Limit Protection) ─────────────────────────────
+// Facebook free pages mein strict rate limit hoti hai — multiple signals ek
+// saath fire karna "spam" detect karwata hai.
+// Solution: ek serial queue + minimum gap between posts.
+//
+// FB_POST_MIN_GAP_MS  — minimum ms between any two posts (default 90s)
+// FB_POST_QUEUE_LIMIT — max pending items in queue before dropping (default 10)
+//
+const FB_POST_MIN_GAP_MS  = Number(process.env.FB_POST_MIN_GAP_MS  || 90_000);   // 90 seconds
+const FB_POST_QUEUE_LIMIT = Number(process.env.FB_POST_QUEUE_LIMIT || 10);
+
+let _lastPostAt   = 0;          // timestamp of last successful/attempted post
+let _postQueue    = [];         // pending { message, options, resolve, reject }
+let _queueRunning = false;
+
+async function _drainQueue() {
+  if (_queueRunning) return;
+  _queueRunning = true;
+
+  while (_postQueue.length > 0) {
+    const now   = Date.now();
+    const wait  = Math.max(0, _lastPostAt + FB_POST_MIN_GAP_MS - now);
+
+    if (wait > 0) {
+      console.log(`[fb] queue: waiting ${Math.round(wait / 1000)}s before next post (rate limit gap)`);
+      await new Promise(r => setTimeout(r, wait));
+    }
+
+    const item = _postQueue.shift();
+    if (!item) break;
+
+    _lastPostAt = Date.now();
+    try {
+      const result = await _postToFacebookDirect(item.message, item.options);
+      item.resolve(result);
+    } catch (err) {
+      item.reject(err);
+    }
+  }
+
+  _queueRunning = false;
+}
+
+// Enqueue a post — returns a Promise that resolves when the post is actually sent.
+function enqueuePost(message, options = {}) {
+  return new Promise((resolve, reject) => {
+    if (_postQueue.length >= FB_POST_QUEUE_LIMIT) {
+      console.warn(`[fb] queue full (${FB_POST_QUEUE_LIMIT} items) — dropping post to avoid backlog`);
+      return resolve(null);
+    }
+    _postQueue.push({ message, options, resolve, reject });
+    console.log(`[fb] queued post — queue size now: ${_postQueue.length}`);
+    _drainQueue().catch(err => console.error("[fb] queue drain error:", err.message));
+  });
+}
+
 function pickFbUsageHeaders(headers) {
   if (!headers) return {};
   const out = {};
@@ -152,8 +208,8 @@ function formatSignalPost(signal) {
   return lines.join("\n");
 }
 
-// ─── Post to Facebook Page ─────────────────────────────────────────────────
-async function postToFacebook(message, options = {}) {
+// ─── Direct Post (internal — called by queue only) ─────────────────────────
+async function _postToFacebookDirect(message, options = {}) {
   if (!FB_ENABLED) return null;
 
   const endpoint = `${FB_GRAPH_URL}/${FB_PAGE_ID}/feed`;
@@ -230,6 +286,13 @@ async function postToFacebook(message, options = {}) {
   }
 
   return options.returnUsage ? { postId: null, usage: {} } : null;
+}
+
+// ─── Public postToFacebook — goes through the rate-limit queue ────────────
+// Auto-posts se aaye calls yahan queue mein jaate hain.
+// Test-post route direct call karta hai — woh queue bypass karta hai (intentional).
+async function postToFacebook(message, options = {}) {
+  return enqueuePost(message, options);
 }
 
 // ─── Publish a new signal ──────────────────────────────────────────────────
@@ -309,4 +372,5 @@ async function testConnection() {
 }
 
 // ─── postToFacebook exported for test-post route ───────────────────────────
-module.exports = { publishSignal, publishSignalResult, postToFacebook, testConnection, FB_ENABLED };
+// postToFacebookDirect — test route ke liye, queue bypass karta hai
+module.exports = { publishSignal, publishSignalResult, postToFacebook, postToFacebookDirect: _postToFacebookDirect, testConnection, FB_ENABLED };
