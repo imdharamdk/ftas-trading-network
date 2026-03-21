@@ -30,6 +30,7 @@ const MIN_SCAN_TRADE_COUNT_24H    = 10_000;
 const MIN_SCAN_OPEN_INTEREST_USDT = 2_000_000;
 
 const RULE_VERSION = "v18_crypto_working";
+const SIGNAL_MODEL_VERSION = process.env.CRYPTO_SIGNAL_MODEL_VERSION || "v19_crypto_adaptive_parallel";
 const DEFAULT_PUBLISH_FLOOR = 72;
 
 // ── Per-Timeframe Rules ────────────────────────────────────────────────────────
@@ -712,7 +713,7 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
       marketQuoteVolume: roundPrice(activeMarket.quoteVolume),
       marketTradeCount: roundPrice(activeMarket.tradeCount),
       marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
-      modelVersion: "v19_crypto_adaptive_parallel",
+      modelVersion: SIGNAL_MODEL_VERSION,
       qualityGuard: {
         scoreBoost: adaptiveQuality.scoreBoost,
         publishFloorBoost: adaptiveQuality.publishFloorBoost,

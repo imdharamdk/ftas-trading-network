@@ -46,6 +46,7 @@ const MIN_SCAN_TRADE_COUNT_24H    = 20_000;        // was 30K
 const MIN_SCAN_OPEN_INTEREST_USDT = 5_000_000;    // was 8M
 
 const RULE_VERSION = "v17_stocks_working";
+const STOCK_SIGNAL_MODEL_VERSION = process.env.STOCK_SIGNAL_MODEL_VERSION || "v16_working";
 const DEFAULT_PUBLISH_FLOOR = 76;
 const STRENGTH_THRESHOLDS   = { STRONG: 88, MEDIUM: 76 };
 
@@ -615,7 +616,7 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
       marketQuoteVolume: roundPrice(activeMarket.quoteVolume),
       marketTradeCount: roundPrice(activeMarket.tradeCount),
       marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
-      modelVersion: "v16_working",
+      modelVersion: STOCK_SIGNAL_MODEL_VERSION,
       smc: {
         choch:     { bull: false, bear: false, level: smcCHoCH.level },
         idm:       { bull: idmBull,   bear: idmBear,   sweepLevel: smcIDM.sweepLevel, rejectionStrength: smcIDM.rejectionStrength },
