@@ -40,15 +40,19 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
   const location = useLocation();
   const [open, setOpen] = useState(false);
 
-  // FIX: Keep Render backend alive — ping every 9 min to prevent 30-50s cold start
-  // Render free tier spins down after 15 min of inactivity
+  // FIX: Keep Render backend alive — ping every 4 min to prevent 30-50s cold start
+  // Render free tier spins down after 15 min of inactivity. 4 min gap = safe buffer.
+  // Also ping on tab focus so returning users don't hit a cold backend.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const [, _keepAlive] = useState(() => {
     const API = (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL || "/api").replace(/\/+$/, "");
     const ping = () => fetch(API + "/health", { method: "GET", cache: "no-store" }).catch(() => {});
-    ping();
-    const id = setInterval(ping, 9 * 60 * 1000);
-    return () => clearInterval(id);
+    ping(); // immediate ping on mount
+    const id = setInterval(ping, 4 * 60 * 1000); // every 4 min
+    // Also wake backend when user returns to tab
+    const onFocus = () => ping();
+    window.addEventListener("focus", onFocus);
+    return () => { clearInterval(id); window.removeEventListener("focus", onFocus); };
   });
   const isAdmin  = user?.role === "ADMIN";
   const planEnd  = fmtExpiry(user?.subscriptionEndsAt);
