@@ -37,6 +37,9 @@ const SELF_LEARNING_ENABLED = String(process.env.CRYPTO_SELF_LEARNING_ENABLED ||
 const SELF_LEARNING_REFRESH_MS = Math.max(60_000, Number(process.env.CRYPTO_SELF_LEARNING_REFRESH_MS || 10 * 60 * 1000));
 const SELF_LEARNING_LOOKBACK = Math.max(120, Number(process.env.CRYPTO_SELF_LEARNING_LOOKBACK || 600));
 const SELF_LEARNING_MIN_SAMPLE = Math.max(40, Number(process.env.CRYPTO_SELF_LEARNING_MIN_SAMPLE || 80));
+const LOCAL_AI_ENABLED = String(process.env.CRYPTO_LOCAL_AI_ENABLED || "true").toLowerCase() !== "false";
+const LOCAL_AI_MIN_SAMPLE = Math.max(40, Number(process.env.CRYPTO_LOCAL_AI_MIN_SAMPLE || 120));
+const LOCAL_AI_BLOCK_THRESHOLD = Math.min(Math.max(Number(process.env.CRYPTO_LOCAL_AI_BLOCK_THRESHOLD || 0.32), 0.15), 0.45);
 
 // ── Per-Timeframe Rules ────────────────────────────────────────────────────────
 const TIMEFRAME_RULES = {
@@ -124,6 +127,20 @@ const engineState = {
     byTimeframe: {},
     blockedCoins: {},
     version: "slm_v1",
+    localModel: {
+      enabled: LOCAL_AI_ENABLED,
+      version: "local_nb_v1",
+      trainedAt: null,
+      sampleSize: 0,
+      baselineWinRate: null,
+      blockedPredictionThreshold: LOCAL_AI_BLOCK_THRESHOLD,
+      featureStats: {
+        bySide: {},
+        byTimeframe: {},
+        byCoin: {},
+        byConfidenceBucket: {},
+      },
+    },
   },
 };
 
@@ -137,6 +154,7 @@ function roundPrice(v) {
 function clamp(v, mn, mx) { return Math.min(Math.max(v, mn), mx); }
 function toNumber(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
 function winRateFromTally(tally = {}) {
   const wins = Number(tally.wins || 0);
   const losses = Number(tally.losses || 0);
@@ -228,6 +246,122 @@ function buildMarketActivitySnapshot(ticker = {}) {
 function getMaxCoinsPerScan() {
   return clamp(Number(process.env.CRYPTO_SCAN_MAX_COINS || DEFAULT_MAX_COINS_PER_SCAN), 10, MAX_COINS_PER_SCAN_CAP);
 }
+function getConfidenceBucket(confidence) {
+  const c = Number(confidence || 0);
+  if (c >= 90) return "90+";
+  if (c >= 85) return "85-89";
+  if (c >= 80) return "80-84";
+  if (c >= 75) return "75-79";
+  if (c >= 70) return "70-74";
+  return "lt70";
+}
+function logitFromProbability(probability) {
+  const p = clamp(Number(probability || 0.5), 0.02, 0.98);
+  return Math.log(p / (1 - p));
+}
+function toSmoothedProbability(tally = {}, alpha = 1) {
+  const wins = Number(tally.wins || 0);
+  const losses = Number(tally.losses || 0);
+  const total = wins + losses;
+  if (!total) return 0.5;
+  return (wins + alpha) / (total + alpha * 2);
+}
+function updateLocalFeatureTally(container, key, isWin) {
+  if (!key) return;
+  if (!container[key]) container[key] = buildTally();
+  container[key][isWin ? "wins" : "losses"] += 1;
+}
+function buildLocalAiModel(resolvedSignals = [], fallbackModel = null) {
+  const model = {
+    enabled: LOCAL_AI_ENABLED,
+    version: "local_nb_v1",
+    trainedAt: new Date().toISOString(),
+    sampleSize: resolvedSignals.length,
+    baselineWinRate: null,
+    blockedPredictionThreshold: LOCAL_AI_BLOCK_THRESHOLD,
+    featureStats: {
+      bySide: {},
+      byTimeframe: {},
+      byCoin: {},
+      byConfidenceBucket: {},
+    },
+  };
+
+  if (!resolvedSignals.length) {
+    if (fallbackModel && typeof fallbackModel === "object") {
+      model.enabled = Boolean(fallbackModel.enabled);
+    }
+    return model;
+  }
+
+  const overall = buildTally();
+  for (const signal of resolvedSignals) {
+    const isWin = WIN_RESULTS.has(signal.result);
+    overall[isWin ? "wins" : "losses"] += 1;
+    updateLocalFeatureTally(model.featureStats.bySide, String(signal.side || "").toUpperCase(), isWin);
+    updateLocalFeatureTally(model.featureStats.byTimeframe, String(signal.timeframe || "").toLowerCase(), isWin);
+    updateLocalFeatureTally(model.featureStats.byCoin, String(signal.coin || "").toUpperCase(), isWin);
+    updateLocalFeatureTally(model.featureStats.byConfidenceBucket, getConfidenceBucket(signal.confidence), isWin);
+  }
+
+  model.baselineWinRate = winRateFromTally(overall);
+  return model;
+}
+function getLocalAiAdjustment(model, { coin, side, timeframe, baseConfidence }) {
+  const adjustment = {
+    enabled: false,
+    modelVersion: model?.version || "local_nb_v1",
+    predictedWinProbability: null,
+    confidenceDelta: 0,
+    publishFloorBoost: 0,
+    blockCoin: false,
+    reasons: [],
+  };
+
+  if (!model?.enabled) return adjustment;
+  const sampleSize = Number(model.sampleSize || 0);
+  if (sampleSize < LOCAL_AI_MIN_SAMPLE) return adjustment;
+
+  const baselineWinRate = Number(model.baselineWinRate || 0);
+  if (!baselineWinRate) return adjustment;
+
+  adjustment.enabled = true;
+  const priorProbability = clamp(baselineWinRate / 100, 0.1, 0.9);
+  let scoreLogit = logitFromProbability(priorProbability);
+
+  const features = [
+    { key: String(side || "").toUpperCase(), map: model.featureStats?.bySide, weight: 0.85, minSample: 10, reason: "side" },
+    { key: String(timeframe || "").toLowerCase(), map: model.featureStats?.byTimeframe, weight: 0.9, minSample: 10, reason: "timeframe" },
+    { key: String(coin || "").toUpperCase(), map: model.featureStats?.byCoin, weight: 0.55, minSample: 8, reason: "coin" },
+    { key: getConfidenceBucket(baseConfidence), map: model.featureStats?.byConfidenceBucket, weight: 0.7, minSample: 8, reason: "confidence_bucket" },
+  ];
+
+  for (const feature of features) {
+    const tally = feature.map?.[feature.key];
+    const total = Number(tally?.wins || 0) + Number(tally?.losses || 0);
+    if (!total || total < feature.minSample) continue;
+    const featureProbability = toSmoothedProbability(tally, 1);
+    const contribution = (logitFromProbability(featureProbability) - logitFromProbability(priorProbability)) * feature.weight;
+    scoreLogit += contribution;
+    adjustment.reasons.push(feature.reason + ":" + feature.key);
+  }
+
+  const predictedWinProbability = sigmoid(scoreLogit);
+  adjustment.predictedWinProbability = Number((predictedWinProbability * 100).toFixed(1));
+
+  const delta = (predictedWinProbability - priorProbability) * 40;
+  adjustment.confidenceDelta = clamp(Math.round(delta), -7, 7);
+  if (predictedWinProbability < 0.43) adjustment.publishFloorBoost = 3;
+  else if (predictedWinProbability < 0.5) adjustment.publishFloorBoost = 1;
+  else if (predictedWinProbability > 0.62) adjustment.publishFloorBoost = -1;
+
+  if (sampleSize >= LOCAL_AI_MIN_SAMPLE * 2 && predictedWinProbability <= Number(model.blockedPredictionThreshold || LOCAL_AI_BLOCK_THRESHOLD)) {
+    adjustment.blockCoin = true;
+    adjustment.reasons.push("predicted_low_probability_block");
+  }
+
+  return adjustment;
+}
 
 // ─── Crypto Scan Universe — Binance/Bybit USDT perpetuals ────────────────────
 async function getScanUniverse() {
@@ -301,9 +435,11 @@ async function refreshSelfLearningModel({ force = false } = {}) {
       byTimeframe: {},
       blockedCoins: {},
       version: "slm_v1",
+      localModel: buildLocalAiModel([], engineState.selfLearning.localModel),
     };
 
     if (resolved.length < SELF_LEARNING_MIN_SAMPLE) {
+      next.localModel = buildLocalAiModel(resolved, engineState.selfLearning.localModel);
       engineState.selfLearning = next;
       return next;
     }
@@ -355,6 +491,7 @@ async function refreshSelfLearningModel({ force = false } = {}) {
       if (delta !== 0) next.byCoin[coin] = delta;
       if (total >= 12 && losses >= 8 && lossRate >= 75 && wr <= 25) next.blockedCoins[coin] = true;
     });
+    next.localModel = buildLocalAiModel(resolved, engineState.selfLearning.localModel);
 
     engineState.selfLearning = next;
     return next;
@@ -826,12 +963,13 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
 
   const adaptiveQuality  = getAdaptiveQualityConfig(performanceSnapshot, { coin, side, timeframe });
   const learningAdjustment = getSelfLearningAdjustment(selfLearningModel, { coin, side, timeframe });
-  if (adaptiveQuality.blockCoin || learningAdjustment.blockCoin) return null;
+  const localAiAdjustment = getLocalAiAdjustment(selfLearningModel?.localModel, { coin, side, timeframe, baseConfidence });
+  if (adaptiveQuality.blockCoin || learningAdjustment.blockCoin || localAiAdjustment.blockCoin) return null;
 
-  const confidence = clamp(baseConfidence + learningAdjustment.scoreDelta, 0, 100);
+  const confidence = clamp(baseConfidence + learningAdjustment.scoreDelta + localAiAdjustment.confidenceDelta, 0, 100);
   const minScore         = (tfRule.minScore         || 62) + adaptiveQuality.scoreBoost;
   const minConfirmations = (tfRule.minConfirmations || 5)  + adaptiveQuality.minConfirmationsBoost;
-  const publishFloor     = (tfRule.publishFloor     || DEFAULT_PUBLISH_FLOOR) + adaptiveQuality.publishFloorBoost + learningAdjustment.publishFloorBoost;
+  const publishFloor     = (tfRule.publishFloor     || DEFAULT_PUBLISH_FLOOR) + adaptiveQuality.publishFloorBoost + learningAdjustment.publishFloorBoost + localAiAdjustment.publishFloorBoost;
 
   if (confidence < minScore)                   return null;
   if (confirmations.length < minConfirmations) return null;
@@ -891,7 +1029,7 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
       marketQuoteVolume: roundPrice(activeMarket.quoteVolume),
       marketTradeCount: roundPrice(activeMarket.tradeCount),
       marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
-      modelVersion: SIGNAL_MODEL_VERSION + "+" + engineState.selfLearning.version,
+      modelVersion: SIGNAL_MODEL_VERSION + "+" + engineState.selfLearning.version + "+" + (selfLearningModel?.localModel?.version || "local_nb_v1"),
       qualityGuard: {
         scoreBoost: adaptiveQuality.scoreBoost,
         publishFloorBoost: adaptiveQuality.publishFloorBoost,
@@ -904,6 +1042,14 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
         confidenceDelta: learningAdjustment.scoreDelta,
         publishFloorBoost: learningAdjustment.publishFloorBoost,
         reasons: learningAdjustment.reasons,
+      },
+      localAI: {
+        enabled: Boolean(localAiAdjustment.enabled),
+        modelVersion: localAiAdjustment.modelVersion,
+        predictedWinProbability: localAiAdjustment.predictedWinProbability,
+        confidenceDelta: localAiAdjustment.confidenceDelta,
+        publishFloorBoost: localAiAdjustment.publishFloorBoost,
+        reasons: localAiAdjustment.reasons,
       },
       smc: {
         choch:     { bull: false, bear: false, level: smcCHoCH.level },
@@ -1175,6 +1321,7 @@ function getStatus() {
 
 function getSelfLearningStatus() {
   const model = engineState.selfLearning || {};
+  const localModel = model.localModel || {};
   return {
     enabled: Boolean(model.enabled),
     trainedAt: model.trainedAt || null,
@@ -1185,6 +1332,14 @@ function getSelfLearningStatus() {
     blockedCoinCount: Object.keys(model.blockedCoins || {}).length,
     blockedCoins: Object.keys(model.blockedCoins || {}),
     version: model.version || "slm_v1",
+    localAI: {
+      enabled: Boolean(localModel.enabled),
+      version: localModel.version || "local_nb_v1",
+      trainedAt: localModel.trainedAt || null,
+      sampleSize: Number(localModel.sampleSize || 0),
+      baselineWinRate: localModel.baselineWinRate ?? null,
+      blockedPredictionThreshold: Number(localModel.blockedPredictionThreshold || LOCAL_AI_BLOCK_THRESHOLD),
+    },
   };
 }
 

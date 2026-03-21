@@ -1156,6 +1156,10 @@ export default function Dashboard() {
               <div><span className="detail-label">Sample Size</span><strong>{selfLearningStatus?.sampleSize ?? 0}</strong></div>
               <div><span className="detail-label">Win Rate</span><strong>{selfLearningStatus?.overallWinRate ?? 0}%</strong></div>
               <div><span className="detail-label">Blocked Coins</span><strong>{selfLearningStatus?.blockedCoinCount ?? 0}</strong></div>
+              <div><span className="detail-label">Local AI</span><strong>{selfLearningStatus?.localAI?.enabled ? "Enabled" : "Disabled"}</strong></div>
+              <div><span className="detail-label">Local Model</span><strong>{selfLearningStatus?.localAI?.version || "local_nb_v1"}</strong></div>
+              <div><span className="detail-label">Local Samples</span><strong>{selfLearningStatus?.localAI?.sampleSize ?? 0}</strong></div>
+              <div><span className="detail-label">Local Base WR</span><strong>{selfLearningStatus?.localAI?.baselineWinRate ?? 0}%</strong></div>
             </div>
             <div className="button-row">
               <button className="button button-primary" disabled={actionBusy === "self-learning-toggle" || selfLearningStatus?.enabled} onClick={() => handleToggleSelfLearning(true)} type="button">
