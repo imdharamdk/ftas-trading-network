@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useSession } from "../context/useSession";
 
@@ -11,6 +11,13 @@ export default function Login() {
   });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // Pre-warm Render backend as soon as Login page loads — user fills credentials
+  // in ~10-20s, by then backend is already warm, no cold start on first real request.
+  useEffect(() => {
+    const API = (import.meta.env?.VITE_API_BASE_URL || "/api").replace(/\/+$/, "");
+    fetch(API + "/health", { method: "GET", cache: "no-store" }).catch(() => {});
+  }, []);
 
   async function handleSubmit(event) {
     event.preventDefault();
