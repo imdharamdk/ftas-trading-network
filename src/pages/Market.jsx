@@ -372,28 +372,40 @@ function StocksTab() {
   const [segmentFilter, setSegmentFilter]   = useState("ALL");
   const [exchangeFilter, setExchangeFilter] = useState("ALL");
   const [loading, setLoading]               = useState(true);
+  const [instrumentsLoading, setInstrumentsLoading] = useState(true);
   const [error, setError]                   = useState("");
   const [tvSignal, setTvSignal]             = useState(null);
 
   useEffect(() => {
     let active = true;
-    async function load() {
+
+    async function loadInstruments() {
       try {
-        const [instrRes, activeRes, historyRes] = await Promise.allSettled([
-          apiFetch("/stocks/instruments"),
+        const res = await apiFetch("/stocks/instruments?limit=1200&fields=lite");
+        if (!active) return;
+        setInstruments(res?.instruments || []);
+      } catch (e) { if (active) setError(e.message || "Failed to load instruments"); }
+      finally     { if (active) setInstrumentsLoading(false); }
+    }
+
+    async function loadSignals() {
+      try {
+        const [activeRes, historyRes] = await Promise.allSettled([
           apiFetch("/stocks/active?limit=100"),
           apiFetch("/stocks/history?limit=50"),
         ]);
         if (!active) return;
-        setInstruments(instrRes.status === "fulfilled" ? instrRes.value.instruments || [] : []);
         setActiveSignals(activeRes.status === "fulfilled" ? activeRes.value.signals || [] : []);
         setHistorySignals(historyRes.status === "fulfilled" ? historyRes.value.signals || [] : []);
-        if (instrRes.status === "rejected") setError(instrRes.reason?.message || "Failed to load instruments");
       } catch (e) { if (active) setError(e.message); }
       finally     { if (active) setLoading(false); }
     }
-    load();
-    const id = window.setInterval(load, 30000);
+
+    // Initial load — instruments + signals in parallel for faster first paint
+    Promise.allSettled([loadInstruments(), loadSignals()]);
+
+    // Refresh only signals; instruments list rarely changes
+    const id = window.setInterval(loadSignals, 60000);
     return () => { active = false; window.clearInterval(id); };
   }, []);
 
@@ -451,7 +463,7 @@ function StocksTab() {
       <section className="panel">
         <div className="panel-header">
           <div><span className="eyebrow">Filters</span><h2>Indian market view</h2></div>
-          <span className="pill pill-neutral">{loading ? "Loading" : `${filteredInstruments.length} instruments`}</span>
+          <span className="pill pill-neutral">{instrumentsLoading ? "Loading" : `${filteredInstruments.length} instruments`}</span>
         </div>
         <div className="filters-row">
           <label>
@@ -504,7 +516,7 @@ function StocksTab() {
               ))}
             </div>
           ) : (
-            <div className="empty-state">{loading ? "Loading instruments..." : "No instruments found."}</div>
+            <div className="empty-state">{instrumentsLoading ? "Loading instruments..." : "No instruments found."}</div>
           )}
         </div>
 
@@ -537,7 +549,7 @@ function StocksTab() {
                     </td>
                   </tr>
                 )) : (
-                  <tr><td className="empty-row" colSpan="7">{loading ? "Loading..." : "No instruments found."}</td></tr>
+                  <tr><td className="empty-row" colSpan="7">{instrumentsLoading ? "Loading..." : "No instruments found."}</td></tr>
                 )}
               </tbody>
             </table>

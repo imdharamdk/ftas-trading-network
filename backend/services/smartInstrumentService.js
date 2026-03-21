@@ -125,6 +125,7 @@ function getInstrumentUniverse(options = {}) {
     .split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
 
   const limit = Number(options.limit || process.env.SMART_MAX_INSTRUMENTS || 80);
+  const query = String(options.query || options.q || "").trim().toUpperCase();
 
   const segmentSet  = new Set(segments);
   const exchangeSet = new Set(exchanges);
@@ -135,6 +136,13 @@ function getInstrumentUniverse(options = {}) {
     if (segmentSet.size  && !segmentSet.has(instrument.segment))   return false;
     if (exchangeSet.size && !exchangeSet.has(instrument.exchange)) return false;
     if (typeSet.size && instrument.instrumentType && !typeSet.has(instrument.instrumentType.toUpperCase())) return false;
+
+    if (query) {
+      const sym = String(instrument.tradingSymbol || instrument.symbol || "").toUpperCase();
+      const ex  = String(instrument.exchange || "").toUpperCase();
+      if (!sym.includes(query) && !ex.includes(query)) return false;
+    }
+
     return true;
   });
 

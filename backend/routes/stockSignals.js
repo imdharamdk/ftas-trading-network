@@ -457,8 +457,31 @@ async function fetchStockLivePrices(coins) {
 // ── All instruments list (for Scanner page) ───────────────────────────────────
 router.get("/instruments", requireAuth, requireSignalAccess, (req, res) => {
   try {
-    const universe = getInstrumentUniverse({ limit: 5000 });
-    return res.json({ instruments: universe });
+    const rawLimit = Number(req.query.limit || 5000);
+    const limit = Math.min(Math.max(rawLimit, 50), 20000);
+    const query = String(req.query.q || "").trim();
+    const fields = String(req.query.fields || "full").toLowerCase();
+
+    const cacheKey = `stocks:instruments:${query || "all"}:${limit}:${fields}`;
+    const cached = cache.get(cacheKey);
+    if (cached) return res.json(cached);
+
+    const universe = getInstrumentUniverse({ limit, query });
+    const instruments = fields === "lite"
+      ? universe.map(i => ({
+          tradingSymbol: i.tradingSymbol,
+          exchange: i.exchange,
+          segment: i.segment,
+          token: i.token,
+          lotSize: i.lotSize,
+          expiry: i.expiry,
+          instrumentType: i.instrumentType,
+        }))
+      : universe;
+
+    const result = { instruments };
+    cache.set(cacheKey, result, query ? 60 : 300);
+    return res.json(result);
   } catch (err) {
     return res.status(500).json({ message: err.message });
   }
