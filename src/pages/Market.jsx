@@ -74,7 +74,7 @@ function CryptoTab() {
           Promise.allSettled([
             apiFetch("/signals/stats/overview"),
             apiFetch("/signals/active?limit=100"),
-            apiFetch("/signals/history?limit=50"),
+            apiFetch("/signals/history?limit=30"),
             apiFetch("/signals/engine/status"),
           ]),
           Promise.allSettled([apiFetch(`/market/tickers?limit=300&sort=${sortBy}&fields=lite`, { skipAuth: true })]),
@@ -392,7 +392,7 @@ function StocksTab() {
       try {
         const [activeRes, historyRes] = await Promise.allSettled([
           apiFetch("/stocks/active?limit=100"),
-          apiFetch("/stocks/history?limit=50"),
+          apiFetch("/stocks/history?limit=30"),
         ]);
         if (!active) return;
         setActiveSignals(activeRes.status === "fulfilled" ? activeRes.value.signals || [] : []);

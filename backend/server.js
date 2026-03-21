@@ -156,6 +156,20 @@ function createApp() {
   app.use(cors(createCorsOptions()));
   app.use(express.json({ limit: "1mb" }));
 
+  // ── Slow request logging ───────────────────────────────────────────────────
+  app.use((req, res, next) => {
+    const started = Date.now();
+    res.on("finish", () => {
+      if (!req.path.startsWith("/api")) return;
+      if (req.path === "/api/health" || req.path === "/api/signals/stream") return;
+      const ms = Date.now() - started;
+      if (ms >= 800) {
+        console.warn(`[slow] ${req.method} ${req.originalUrl} ${res.statusCode} ${ms}ms`);
+      }
+    });
+    next();
+  });
+
   // ── Compression ─────────────────────────────────────────────────────────────
   app.use(compression({
     filter: (req, res) => {

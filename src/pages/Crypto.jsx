@@ -233,7 +233,7 @@ export default function Crypto() {
     if (historyLoaded || historyLoading) return;
     setHistoryLoading(true);
     try {
-      const res = await apiFetch("/signals/history?limit=500");
+      const res = await apiFetch("/signals/history?limit=200");
       const allHistory = res.signals || [];
       const ALL_TF = ["1m","5m","15m","30m","1h"];
       setHistorySignals(allHistory.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe) && passesRisk(s)));
@@ -246,7 +246,7 @@ export default function Crypto() {
     if (expiredLoaded || expiredLoading) return;
     setExpiredLoading(true);
     try {
-      const res = await apiFetch("/signals/expired?limit=500");
+      const res = await apiFetch("/signals/expired?limit=200");
       const allExpired = res.signals || [];
       const ALL_TF = ["1m","5m","15m","30m","1h"];
       setExpiredSignals(allExpired.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe) && passesRisk(s)));

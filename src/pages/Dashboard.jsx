@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AppShell from "../components/AppShell";
 import DistributionList from "../components/DistributionList";
 import { useSession } from "../context/useSession";
@@ -41,6 +41,15 @@ const fallbackPaymentSettings = {
 };
 
 const EXPIRY_PROMPT_STORAGE_KEY = "ftas_expiry_prompt_dismissed";
+const ANALYTICS_REFRESH_MS = 10 * 60 * 1000;
+
+function deferTask(fn) {
+  if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+    window.requestIdleCallback(fn, { timeout: 2500 });
+  } else {
+    setTimeout(fn, 2500);
+  }
+}
 
 function addDaysToIso(days) {
   const date = new Date();
@@ -141,6 +150,7 @@ export default function Dashboard() {
   const [users, setUsers] = useState([]);
   const [paymentForm, setPaymentForm] = useState(defaultPaymentForm);
   const [manualForm, setManualForm] = useState(defaultManualForm);
+  const analyticsFetchedAtRef = useRef(0);
 
   // ── WebSocket — realtime stats ────────────────────────────────────────────
   const onStatsUpdate = useCallback(({ crypto, stocks }) => {
@@ -190,19 +200,23 @@ export default function Dashboard() {
     if (stockOverviewRes?.stats) setStockOverview(stockOverviewRes.stats);
     setLoading(false);
 
-    // Phase 2: heavier analytics/performance in background
-    void (async () => {
-      const [analyticsRes, performanceRes] = await Promise.allSettled([
-        apiFetch("/signals/stats/analytics"),
-        apiFetch("/signals/stats/performance"),
-      ]);
-      if (analyticsRes.status === "fulfilled" && analyticsRes.value?.analytics) {
-        setAnalytics(analyticsRes.value.analytics);
-      }
-      if (performanceRes.status === "fulfilled" && performanceRes.value?.performance) {
-        setPerformance(performanceRes.value.performance);
-      }
-    })();
+    // Phase 2: heavier analytics/performance — defer and throttle
+    const now = Date.now();
+    if (now - analyticsFetchedAtRef.current > ANALYTICS_REFRESH_MS) {
+      analyticsFetchedAtRef.current = now;
+      deferTask(async () => {
+        const [analyticsRes, performanceRes] = await Promise.allSettled([
+          apiFetch("/signals/stats/analytics"),
+          apiFetch("/signals/stats/performance"),
+        ]);
+        if (analyticsRes.status === "fulfilled" && analyticsRes.value?.analytics) {
+          setAnalytics(analyticsRes.value.analytics);
+        }
+        if (performanceRes.status === "fulfilled" && performanceRes.value?.performance) {
+          setPerformance(performanceRes.value.performance);
+        }
+      });
+    }
 
     return null;
   }, []);

@@ -86,7 +86,7 @@ export default function Stocks() {
     if (historyLoaded || historyLoading) return;
     setHistoryLoading(true);
     try {
-      const res = await apiFetch("/stocks/history?limit=500");
+      const res = await apiFetch("/stocks/history?limit=200");
       const rawHistory = res.signals || [];
       setHistorySignals(rawHistory.filter(s => !isCryptoCoin(s.coin) && passesRisk(s)));
       setHistoryLoaded(true);
