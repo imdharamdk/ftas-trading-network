@@ -58,46 +58,90 @@ function CryptoTab() {
   const [timeframeFilter, setTimeframeFilter] = useState("ALL");
   const [sortBy, setSortBy]                 = useState("quoteVolume");
   const [loading, setLoading]               = useState(true);
+  const [tickersLoading, setTickersLoading] = useState(true);
+  const [coinsLoading, setCoinsLoading]     = useState(false);
   const [error, setError]                   = useState("");
   const [chartCoin, setChartCoin]           = useState(null);
   const [tickerPrices, setTickerPrices]     = useState({});
   const searchRef = useRef(null);
+  const coinsLoadedRef = useRef(false);
 
   const signalCoinsKey = getSignalCoins(activeSignals).join(",");
-  const tickerCoinsKey = useMemo(() => tickers.slice(0, 200).map(t => t.symbol).join(","), [tickers]);
+
+  async function ensureCoinsLoaded(force = false) {
+    if (!force && coinsLoadedRef.current) return;
+    setCoinsLoading(true);
+    try {
+      const res = await apiFetch("/market/coins?limit=500", { skipAuth: true });
+      setAllCoins(res?.coins || []);
+      coinsLoadedRef.current = true;
+    } catch {
+      // suggestions are optional
+    } finally {
+      setCoinsLoading(false);
+    }
+  }
 
   useEffect(() => {
     let active = true;
-    async function load() {
+    async function loadSignals() {
       try {
-        const [signalResults, tickerResult, coinsResult] = await Promise.all([
-          Promise.allSettled([
-            apiFetch("/signals/stats/overview"),
-            apiFetch("/signals/active?limit=100"),
-            apiFetch("/signals/history?limit=30"),
-            apiFetch("/signals/engine/status"),
-          ]),
-          Promise.allSettled([apiFetch(`/market/tickers?limit=300&sort=${sortBy}&fields=lite`, { skipAuth: true })]),
-          Promise.allSettled([apiFetch("/market/coins", { skipAuth: true })]),
+        const signalResults = await Promise.allSettled([
+          apiFetch("/signals/stats/overview"),
+          apiFetch("/signals/active?limit=80"),
+          apiFetch("/signals/engine/status"),
         ]);
         if (!active) return;
-        const [overviewRes, activeRes, historyRes, engineRes] = signalResults;
-        const [tickersRes] = tickerResult;
-        const [coinsRes]   = coinsResult;
+        const [overviewRes, activeRes, engineRes] = signalResults;
         setOverview(overviewRes.status === "fulfilled" ? overviewRes.value.stats : null);
         setActiveSignals(activeRes.status === "fulfilled" ? activeRes.value.signals || [] : []);
-        setHistorySignals(historyRes.status === "fulfilled" ? historyRes.value.signals || [] : []);
         setEngine(engineRes.status === "fulfilled" ? engineRes.value.engine : null);
-        setTickers(tickersRes.status === "fulfilled" ? tickersRes.value.tickers || [] : []);
-        setAllCoins(coinsRes.status === "fulfilled" ? coinsRes.value.coins || [] : []);
-        setError(signalResults.find(r => r.status === "rejected")?.reason?.message || "");
-      } catch (e) { if (active) setError(e.message); }
-      finally     { if (active) setLoading(false); }
+        const firstRejected = signalResults.find(r => r.status === "rejected");
+        setError(firstRejected?.reason?.message || "");
+
+        setTimeout(async () => {
+          try {
+            const historyRes = await apiFetch("/signals/history?limit=20");
+            if (!active) return;
+            setHistorySignals(historyRes?.signals || []);
+          } catch {
+            // keep previous history
+          }
+        }, 0);
+      } catch (e) {
+        if (active) setError(e.message);
+      } finally {
+        if (active) setLoading(false);
+      }
     }
-    load();
-    const id = window.setInterval(load, 60000); // was 45s — tickers cached backend-side
+    loadSignals();
+    const id = window.setInterval(loadSignals, 60000);
+    return () => { active = false; window.clearInterval(id); };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    async function loadTickers() {
+      setTickersLoading(true);
+      try {
+        const res = await apiFetch(`/market/tickers?limit=220&sort=${sortBy}&fields=lite`, { skipAuth: true });
+        if (!active) return;
+        setTickers(res?.tickers || []);
+      } catch {
+        if (active) setTickers([]);
+      } finally {
+        if (active) setTickersLoading(false);
+      }
+    }
+    loadTickers();
+    const id = window.setInterval(loadTickers, 90000);
     return () => { active = false; window.clearInterval(id); };
   }, [sortBy]);
+
+  useEffect(() => {
+    if (coinSearch.trim().length < 1) return;
+    ensureCoinsLoaded();
+  }, [coinSearch]);
 
   useEffect(() => {
     let active = true;
@@ -107,15 +151,16 @@ function CryptoTab() {
         const res = await apiFetch(`/signals/live-prices?coins=${signalCoinsKey}`);
         if (!active) return;
         setActiveSignals(cur => mergeSignalLivePrices(cur, res.prices || []));
-      } catch { /* stale */ }
+      } catch {
+        // stale
+      }
     }
     refresh();
-    const id = window.setInterval(refresh, 20000); // was 12s
+    const id = window.setInterval(refresh, 20000);
     return () => { active = false; window.clearInterval(id); };
   }, [signalCoinsKey]);
 
   // FIX: Removed 12s ticker price polling — WS price:update event handles this
-  // tickerPrices now updated via onPriceUpdate WS handler below
 
   useEffect(() => {
     function handle(e) {
@@ -164,7 +209,7 @@ function CryptoTab() {
         </article>
         <article className="metric-card">
           <span className="metric-label">Binance pairs</span>
-          <strong>{allCoins.length}</strong>
+          <strong>{allCoins.length || tickers.length}</strong>
           <span className="metric-meta">USDT perpetual futures</span>
         </article>
         <article className="metric-card">
@@ -177,7 +222,7 @@ function CryptoTab() {
       <section className="panel">
         <div className="panel-header">
           <div><span className="eyebrow">Filters</span><h2>Crypto market view</h2></div>
-          <span className="pill pill-neutral">{loading ? "Loading" : "Live"}</span>
+          <span className="pill pill-neutral">{loading || tickersLoading ? "Loading" : "Live"}</span>
         </div>
         <div className="filters-row">
           <label style={{ position: "relative" }} ref={searchRef}>
@@ -185,7 +230,7 @@ function CryptoTab() {
             <input
               autoComplete="off"
               onChange={e => { setCoinSearch(e.target.value); setShowSuggestions(true); }}
-              onFocus={() => setShowSuggestions(true)}
+              onFocus={() => { setShowSuggestions(true); ensureCoinsLoaded(); }}
               placeholder="BTC, ETH, SOL..."
               value={coinSearch}
             />
@@ -306,7 +351,7 @@ function CryptoTab() {
               })}
             </div>
           ) : (
-            <div className="empty-state">{loading ? "Loading..." : `No coins found${coinSearch ? ` for "${coinSearch}"` : ""}.`}</div>
+            <div className="empty-state">{tickersLoading ? "Loading..." : `No coins found${coinSearch ? ` for "${coinSearch}"` : ""}.`}</div>
           )}
         </div>
         <div className="signal-view-desktop">
@@ -336,7 +381,7 @@ function CryptoTab() {
                     </tr>
                   );
                 }) : (
-                  <tr><td className="empty-row" colSpan="7">{loading ? "Loading..." : "No data."}</td></tr>
+                  <tr><td className="empty-row" colSpan="7">{tickersLoading ? "Loading..." : "No data."}</td></tr>
                 )}
               </tbody>
             </table>

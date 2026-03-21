@@ -32,6 +32,8 @@ const MIN_SCAN_OPEN_INTEREST_USDT = 2_000_000;
 const RULE_VERSION = "v18_crypto_working";
 const SIGNAL_MODEL_VERSION = process.env.CRYPTO_SIGNAL_MODEL_VERSION || "v19_crypto_adaptive_parallel";
 const DEFAULT_PUBLISH_FLOOR = 72;
+const QUALITY_MODE = String(process.env.CRYPTO_QUALITY_MODE || "BALANCED").toUpperCase();
+const ULTRA_MIN_CONFIDENCE = Math.max(80, Number(process.env.CRYPTO_MIN_CONFIDENCE || 90));
 
 // ── Per-Timeframe Rules ────────────────────────────────────────────────────────
 const TIMEFRAME_RULES = {
@@ -240,7 +242,9 @@ async function getCoinList() {
 function getTradeTimeframes() {
   const r = String(process.env.CRYPTO_TRADE_TIMEFRAMES || process.env.TRADE_TIMEFRAMES || "")
     .split(",").map(s => s.trim()).filter(Boolean);
-  return r.length ? r : DEFAULT_TRADE_TIMEFRAMES;
+  const base = r.length ? r : DEFAULT_TRADE_TIMEFRAMES;
+  if (QUALITY_MODE === "ULTRA") return base.filter(tf => tf !== "1m" && tf !== "5m");
+  return base;
 }
 
 function getAdaptiveQualityConfig(performanceSnapshot, { coin, side, timeframe }) {
@@ -251,6 +255,19 @@ function getAdaptiveQualityConfig(performanceSnapshot, { coin, side, timeframe }
     blockCoin: false,
     reasons: [],
   };
+
+  if (QUALITY_MODE === "ULTRA") {
+    if (timeframe === "1m" || timeframe === "5m") {
+      config.blockCoin = true;
+      config.reasons.push("ultra_mode_low_tf_block");
+      return config;
+    }
+    config.scoreBoost += 8;
+    config.publishFloorBoost += 8;
+    config.minConfirmationsBoost += 2;
+    config.reasons.push("ultra_mode_strict_thresholds");
+  }
+
   if (!performanceSnapshot) return config;
 
   const overall = performanceSnapshot.overall || buildTally();
@@ -666,6 +683,14 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   if (confidence < minScore)                   return null;
   if (confirmations.length < minConfirmations) return null;
   if (confidence < publishFloor)               return null;
+  if (QUALITY_MODE === "ULTRA") {
+    if (confidence < ULTRA_MIN_CONFIDENCE) return null;
+    if (!activeMarket.isLiquid) return null;
+    if ((adx || 0) < ((tfRule.minAdx || 12) + 3)) return null;
+    if (!volumeStrong) return null;
+    if (side === "LONG" && !(haStrongBull || ichimoku?.bullish)) return null;
+    if (side === "SHORT" && !(haStrongBear || ichimoku?.bearish)) return null;
+  }
 
   // Entry drift check — slightly more lenient
   // IDM entry refinement: tighten SL anchor to sweep level
