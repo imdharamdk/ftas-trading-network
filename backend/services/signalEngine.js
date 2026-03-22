@@ -49,6 +49,9 @@ const TF_THROTTLE_MIN_SAMPLE = Math.max(10, Number(process.env.CRYPTO_TF_THROTTL
 const TF_THROTTLE_WEAK_WINRATE = Math.min(55, Math.max(25, Number(process.env.CRYPTO_TF_THROTTLE_WEAK_WINRATE || 40)));
 const TF_THROTTLE_BLOCK_WINRATE = Math.min(TF_THROTTLE_WEAK_WINRATE - 1, Math.max(15, Number(process.env.CRYPTO_TF_THROTTLE_BLOCK_WINRATE || 30)));
 const TF_THROTTLE_BLOCK_MIN_SAMPLE = Math.max(TF_THROTTLE_MIN_SAMPLE, Number(process.env.CRYPTO_TF_THROTTLE_BLOCK_MIN_SAMPLE || 25));
+const VOL_GUARD_ENABLED = String(process.env.CRYPTO_VOL_GUARD_ENABLED || "true").toLowerCase() !== "false";
+const VOL_GUARD_LOW_PCT = Math.max(0.02, Number(process.env.CRYPTO_VOL_GUARD_LOW_PCT || 0.08));
+const VOL_GUARD_HIGH_PCT = Math.max(VOL_GUARD_LOW_PCT + 0.2, Number(process.env.CRYPTO_VOL_GUARD_HIGH_PCT || 3.2));
 
 // ── Per-Timeframe Rules ────────────────────────────────────────────────────────
 const TIMEFRAME_RULES = {
@@ -722,6 +725,20 @@ function calculateLeverage(analysis, confidence, timeframe) {
   const cap    = Number.isFinite(tfRule.maxLeverage) ? tfRule.maxLeverage : 20;
   return Math.round(clamp(base + bonus, 10, cap));
 }
+function getVolatilityBand(timeframe = "5m") {
+  const tfBands = {
+    "1m":  { min: 0.06, max: 1.4 },
+    "5m":  { min: 0.08, max: 1.9 },
+    "15m": { min: 0.10, max: 2.4 },
+    "30m": { min: 0.12, max: 2.9 },
+    "1h":  { min: 0.14, max: 3.4 },
+  };
+  const base = tfBands[timeframe] || tfBands["5m"];
+  return {
+    min: Math.max(base.min, VOL_GUARD_LOW_PCT),
+    max: Math.min(base.max, VOL_GUARD_HIGH_PCT),
+  };
+}
 
 // ─── GATE 4 helper: Momentum Check ───────────────────────────────────────────
 // RSI + MACD must agree; StochRSI is bonus (not hard gate)
@@ -1058,6 +1075,11 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const targets         = calculateTargets(side, analysis, timeframe);
   const leverage        = calculateLeverage(analysis, confidence, timeframe);
   if (!Number.isFinite(targets.riskPerUnit) || targets.riskPerUnit <= 0) return null;
+  const atrPercent = price > 0 ? (atr / price) * 100 : 0;
+  if (VOL_GUARD_ENABLED) {
+    const volBand = getVolatilityBand(timeframe);
+    if (!Number.isFinite(atrPercent) || atrPercent < volBand.min || atrPercent > volBand.max) return null;
+  }
   const driftMultiplier = tfRule.entryDriftMultiplier ?? 0.5;
   const entryDriftLimit = Math.max(atr * driftMultiplier, atr * 0.2);
   if (Math.abs(price - targets.entry) > entryDriftLimit) return null;
@@ -1088,6 +1110,7 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
       marketQuoteVolume: roundPrice(activeMarket.quoteVolume),
       marketTradeCount: roundPrice(activeMarket.tradeCount),
       marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
+      atrPercent: roundPrice(atrPercent),
       modelVersion: SIGNAL_MODEL_VERSION + "+" + engineState.selfLearning.version + "+" + (selfLearningModel?.localModel?.version || "local_nb_v1"),
       qualityGuard: {
         scoreBoost: adaptiveQuality.scoreBoost,
