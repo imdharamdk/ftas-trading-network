@@ -10,6 +10,9 @@ import { useWebSocket } from "../lib/useWebSocket";
 function isCryptoCoin(coin) {
   return String(coin || "").toUpperCase().endsWith("USDT");
 }
+function isWinningResult(result) {
+  return ["TP1_HIT", "TP2_HIT", "TP3_HIT"].includes(String(result || "").toUpperCase());
+}
 
 export default function Stocks() {
   const { user } = useSession();
@@ -27,6 +30,13 @@ export default function Stocks() {
   const [historyLimit, setHistoryLimit]     = useState(50);
   const [historyLoaded, setHistoryLoaded]   = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [closedFilter, setClosedFilter] = useState("all");
+
+  const dashboardFocus = (() => {
+    if (typeof window === "undefined") return "";
+    const params = new URLSearchParams(window.location.search || "");
+    return String(params.get("focus") || "").toLowerCase();
+  })();
 
   // ── Data loader ────────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
@@ -47,6 +57,23 @@ export default function Stocks() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    if (dashboardFocus === "active") {
+      setTab("active");
+      setClosedFilter("all");
+      return;
+    }
+    if (dashboardFocus === "wins") {
+      setTab("closed");
+      setClosedFilter("wins");
+      return;
+    }
+    if (dashboardFocus === "losses") {
+      setTab("closed");
+      setClosedFilter("losses");
+    }
+  }, [dashboardFocus]);
 
   // ── WebSocket handlers — real-time stock signal push ──────────────────────
   // FIX: Previously stocks page had NO WebSocket — it polled every 30 seconds.
@@ -120,10 +147,15 @@ export default function Stocks() {
   // ── Derived stats ──────────────────────────────────────────────────────────
   const closedSignals  = historySignals; // TP/SL hits only from backend
   const closedCount    = closedSignals.length;
-  const winCount       = closedSignals.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result)).length;
+  const winCount       = closedSignals.filter(s => isWinningResult(s.result)).length;
   const resolvedCount  = closedCount;
   const winRate        = resolvedCount > 0 ? ((winCount / resolvedCount) * 100).toFixed(1) : "—";
-  const visibleClosed  = closedSignals.slice(0, historyLimit);
+  const outcomeFilteredClosed = closedSignals.filter((signal) => {
+    if (closedFilter === "wins") return isWinningResult(signal.result);
+    if (closedFilter === "losses") return String(signal?.result || "").toUpperCase() === "SL_HIT";
+    return true;
+  });
+  const visibleClosed  = outcomeFilteredClosed.slice(0, historyLimit);
 
   return (
     <AppShell
@@ -224,6 +256,17 @@ export default function Stocks() {
               <p style={{ fontSize: 12, color: "#64748b", margin: "4px 0 0" }}>
                 TP1 / TP2 / TP3 hits &amp; Stop Loss hits only
               </p>
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                <button type="button" className={`tab-btn${closedFilter === "all" ? " active" : ""}`} onClick={() => { setClosedFilter("all"); setHistoryLimit(50); }}>
+                  All {closedSignals.length}
+                </button>
+                <button type="button" className={`tab-btn${closedFilter === "wins" ? " active" : ""}`} onClick={() => { setClosedFilter("wins"); setHistoryLimit(50); }}>
+                  Wins {closedSignals.filter((signal) => isWinningResult(signal.result)).length}
+                </button>
+                <button type="button" className={`tab-btn${closedFilter === "losses" ? " active" : ""}`} onClick={() => { setClosedFilter("losses"); setHistoryLimit(50); }}>
+                  Losses {closedSignals.filter((signal) => String(signal?.result || "").toUpperCase() === "SL_HIT").length}
+                </button>
+              </div>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <span className="pill pill-success">{winCount} wins</span>
@@ -235,13 +278,13 @@ export default function Stocks() {
             signals={visibleClosed}
             emptyLabel={historyLoading || !historyLoaded ? "Loading SmartAPI history..." : "No closed trades yet."}
           />
-          {closedSignals.length > historyLimit && (
+          {outcomeFilteredClosed.length > historyLimit && (
             <div style={{ textAlign: "center", padding: "16px 0 4px" }}>
               <button
                 onClick={() => setHistoryLimit(l => l + 50)}
                 style={{ background: "rgba(99,102,241,0.15)", color: "#818cf8", border: "1px solid rgba(99,102,241,0.3)", borderRadius: 8, padding: "8px 24px", cursor: "pointer", fontSize: 13, fontWeight: 600 }}
               >
-                Load More ({historyLimit}/{closedSignals.length} showing)
+                Load More ({historyLimit}/{outcomeFilteredClosed.length} showing)
               </button>
             </div>
           )}

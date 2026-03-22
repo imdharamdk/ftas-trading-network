@@ -583,10 +583,19 @@ export default function Dashboard() {
             <span className="pill pill-success">{overview?.winRate ?? 0}% win rate</span>
           </div>
           <div className="detail-grid">
-            <div><span className="detail-label">Active</span><strong>{overview?.activeSignals ?? 0}</strong></div>
+            <div>
+              <span className="detail-label">Active</span>
+              <strong><a href="/crypto?focus=active">{overview?.activeSignals ?? 0}</a></strong>
+            </div>
             <div><span className="detail-label">Resolved</span><strong>{overview?.closedSignals ?? 0}</strong></div>
-            <div><span className="detail-label">Wins ✅</span><strong style={{color:"#34d399"}}>{overview?.totalWins ?? 0}</strong></div>
-            <div><span className="detail-label">Losses ❌</span><strong style={{color:"#f87171"}}>{overview?.totalLosses ?? 0}</strong></div>
+            <div>
+              <span className="detail-label">Wins ✅</span>
+              <strong style={{color:"#34d399"}}><a href="/crypto?focus=wins" style={{ color: "inherit" }}>{overview?.totalWins ?? 0}</a></strong>
+            </div>
+            <div>
+              <span className="detail-label">Losses ❌</span>
+              <strong style={{color:"#f87171"}}><a href="/crypto?focus=losses" style={{ color: "inherit" }}>{overview?.totalLosses ?? 0}</a></strong>
+            </div>
             <div><span className="detail-label">Win Rate</span><strong style={{ color: "#34d399", fontSize: "1.2rem" }}>{overview?.winRate ?? 0}%</strong></div>
             <div><span className="detail-label">Expired</span><strong style={{color:"#94a3b8"}}>{overview?.expiredSignals ?? 0}</strong></div>
             <div><span className="detail-label">Avg Confidence</span><strong>{overview?.averageConfidence ?? 0}%</strong></div>
@@ -601,10 +610,19 @@ export default function Dashboard() {
             <span className="pill pill-success">{stockOverview?.winRate ?? 0}% win rate</span>
           </div>
           <div className="detail-grid">
-            <div><span className="detail-label">Active</span><strong>{stockOverview?.activeSignals ?? 0}</strong></div>
+            <div>
+              <span className="detail-label">Active</span>
+              <strong><a href="/stocks?focus=active">{stockOverview?.activeSignals ?? 0}</a></strong>
+            </div>
             <div><span className="detail-label">Resolved</span><strong>{stockOverview?.closedSignals ?? 0}</strong></div>
-            <div><span className="detail-label">Wins ✅</span><strong style={{color:"#34d399"}}>{stockOverview?.totalWins ?? 0}</strong></div>
-            <div><span className="detail-label">Losses ❌</span><strong style={{color:"#f87171"}}>{stockOverview?.totalLosses ?? 0}</strong></div>
+            <div>
+              <span className="detail-label">Wins ✅</span>
+              <strong style={{color:"#34d399"}}><a href="/stocks?focus=wins" style={{ color: "inherit" }}>{stockOverview?.totalWins ?? 0}</a></strong>
+            </div>
+            <div>
+              <span className="detail-label">Losses ❌</span>
+              <strong style={{color:"#f87171"}}><a href="/stocks?focus=losses" style={{ color: "inherit" }}>{stockOverview?.totalLosses ?? 0}</a></strong>
+            </div>
             <div><span className="detail-label">Win Rate</span><strong style={{ color: "#34d399", fontSize: "1.2rem" }}>{stockOverview?.winRate ?? 0}%</strong></div>
             <div><span className="detail-label">Expired</span><strong style={{color:"#94a3b8"}}>{stockOverview?.expiredSignals ?? 0}</strong></div>
             <div><span className="detail-label">Avg Confidence</span><strong>{stockOverview?.averageConfidence ?? 0}%</strong></div>

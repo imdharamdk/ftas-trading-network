@@ -42,6 +42,10 @@ function formatCountdown(ms) {
   return `${min}:${sec.toString().padStart(2, "0")}`;
 }
 
+function isWinningResult(result) {
+  return ["TP1_HIT", "TP2_HIT", "TP3_HIT"].includes(String(result || "").toUpperCase());
+}
+
 // ─── Single global tick — ONE timer for the whole page ───────────────────────
 function useNow() {
   const [now, setNow] = useState(Date.now);
@@ -87,8 +91,32 @@ export default function Crypto() {
   const [expiredLoaded, setExpiredLoaded]   = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [expiredLoading, setExpiredLoading] = useState(false);
+  const [closedFilter, setClosedFilter] = useState("all");
 
   const ALL_TF = ["1m","5m","15m","30m","1h"];
+
+  const dashboardFocus = useMemo(() => {
+    if (typeof window === "undefined") return "";
+    const params = new URLSearchParams(window.location.search || "");
+    return String(params.get("focus") || "").toLowerCase();
+  }, []);
+
+  useEffect(() => {
+    if (dashboardFocus === "active") {
+      setTab("active");
+      setClosedFilter("all");
+      return;
+    }
+    if (dashboardFocus === "wins") {
+      setTab("closed");
+      setClosedFilter("wins");
+      return;
+    }
+    if (dashboardFocus === "losses") {
+      setTab("closed");
+      setClosedFilter("losses");
+    }
+  }, [dashboardFocus]);
 
   // ── WebSocket handlers ─────────────────────────────────────────────────────
   const onSignalNew = useCallback((signal) => {
@@ -281,7 +309,7 @@ export default function Crypto() {
   const closedSignals  = historySignals; // historySignals already = TP/SL only from backend
   const closedCount    = closedSignals.length;
   const expiredCount   = expiredSignals.length;
-  const winCount       = closedSignals.filter(s => ["TP1_HIT","TP2_HIT","TP3_HIT"].includes(s.result)).length;
+  const winCount       = closedSignals.filter(s => isWinningResult(s.result)).length;
   const resolvedCount  = closedCount;
   const winRate        = resolvedCount > 0 ? ((winCount / resolvedCount) * 100).toFixed(1) : "—";
 
@@ -289,7 +317,12 @@ export default function Crypto() {
   const filteredActive   = tfFilter === "ALL" ? activeSignals  : activeSignals.filter(s => s.timeframe === tfFilter);
   const filteredClosed   = tfFilter === "ALL" ? closedSignals  : closedSignals.filter(s => s.timeframe === tfFilter);
   const filteredExpired  = tfFilter === "ALL" ? expiredSignals : expiredSignals.filter(s => s.timeframe === tfFilter);
-  const visibleHistory   = filteredClosed.slice(0, historyLimit);
+  const outcomeFilteredClosed = filteredClosed.filter((signal) => {
+    if (closedFilter === "wins") return isWinningResult(signal.result);
+    if (closedFilter === "losses") return String(signal?.result || "").toUpperCase() === "SL_HIT";
+    return true;
+  });
+  const visibleHistory   = outcomeFilteredClosed.slice(0, historyLimit);
   const visibleExpired   = filteredExpired.slice(0, expiredLimit);
 
   return (
@@ -618,6 +651,17 @@ export default function Crypto() {
               <p style={{ fontSize:12, color:"#64748b", margin:"4px 0 0" }}>
                 TP1 / TP2 / TP3 hits &amp; Stop Loss hits only
               </p>
+              <div style={{ display:"flex", gap:8, marginTop:10, flexWrap:"wrap" }}>
+                <button type="button" className={`tf-btn${closedFilter === "all" ? " active" : ""}`} onClick={() => { setClosedFilter("all"); setHistoryLimit(50); }}>
+                  All {filteredClosed.length}
+                </button>
+                <button type="button" className={`tf-btn${closedFilter === "wins" ? " active" : ""}`} onClick={() => { setClosedFilter("wins"); setHistoryLimit(50); }}>
+                  Wins {filteredClosed.filter((signal) => isWinningResult(signal.result)).length}
+                </button>
+                <button type="button" className={`tf-btn${closedFilter === "losses" ? " active" : ""}`} onClick={() => { setClosedFilter("losses"); setHistoryLimit(50); }}>
+                  Losses {filteredClosed.filter((signal) => String(signal?.result || "").toUpperCase() === "SL_HIT").length}
+                </button>
+              </div>
             </div>
             <div style={{ display:"flex", gap:8 }}>
               <span className="pill pill-success">{winCount} wins</span>
@@ -629,7 +673,7 @@ export default function Crypto() {
             emptyLabel={historyLoading || !historyLoaded ? "Loading history..." : "No closed signals yet."}
             signals={visibleHistory}
           />
-          {filteredClosed.length > historyLimit && (
+          {outcomeFilteredClosed.length > historyLimit && (
             <div style={{ textAlign:"center", padding:"16px 0 4px" }}>
               <button
                 onClick={() => setHistoryLimit(l => l + 50)}
@@ -639,13 +683,13 @@ export default function Crypto() {
                   padding:"8px 24px", cursor:"pointer", fontSize:13, fontWeight:600,
                 }}
               >
-                Load More ({historyLimit}/{filteredClosed.length} showing)
+                Load More ({historyLimit}/{outcomeFilteredClosed.length} showing)
               </button>
             </div>
           )}
-          {filteredClosed.length > 0 && filteredClosed.length <= historyLimit && (
+          {outcomeFilteredClosed.length > 0 && outcomeFilteredClosed.length <= historyLimit && (
             <p style={{ textAlign:"center", fontSize:12, color:"#475569", padding:"12px 0 0" }}>
-              All {filteredClosed.length} signals loaded
+              All {outcomeFilteredClosed.length} signals loaded
             </p>
           )}
         </section>
