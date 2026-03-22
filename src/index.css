@@ -561,6 +561,36 @@ h1, h2, h3 { letter-spacing: -0.03em; line-height: 1.2; }
 
 .detail-grid strong { font-size: 0.94rem; }
 
+.signal-drill-link {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  display: inline-flex;
+  min-width: 34px;
+  justify-content: center;
+  line-height: 1;
+  padding: 4px 8px;
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast);
+}
+
+.signal-drill-link:hover {
+  background: rgba(255, 138, 61, 0.14);
+  border-color: rgba(255, 179, 71, 0.34);
+  color: #ffdcae;
+  transform: translateY(-1px);
+}
+
+.signal-drill-link:focus-visible {
+  background: rgba(88, 199, 255, 0.14);
+  border-color: rgba(88, 199, 255, 0.52);
+  box-shadow: 0 0 0 2px rgba(88, 199, 255, 0.2);
+  color: #cdefff;
+  outline: none;
+}
+
+.signal-drill-link:active {
+  transform: scale(0.97);
+}
+
 
 /* ─── 24. LIST CARDS ────────────────────────────────────────────────────────── */
 .list-stack { display: grid; gap: var(--s2); margin-top: var(--s3); }
