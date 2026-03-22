@@ -24,19 +24,9 @@ function segmentColor(segment) {
 function TabBtn({ active, children, onClick }) {
   return (
     <button
+      className={`market-tab-btn${active ? " active" : ""}`}
       onClick={onClick}
       type="button"
-      style={{
-        background: active ? "rgba(255,138,61,0.15)" : "rgba(255,255,255,0.04)",
-        border: active ? "1px solid rgba(255,138,61,0.5)" : "1px solid rgba(255,255,255,0.08)",
-        borderRadius: "8px",
-        color: active ? "#ff8a3d" : "rgba(255,255,255,0.65)",
-        cursor: "pointer",
-        fontSize: "0.85rem",
-        fontWeight: active ? 700 : 500,
-        padding: "8px 18px",
-        transition: "all 0.18s",
-      }}
     >
       {children}
     </button>

@@ -1381,3 +1381,293 @@ h1, h2, h3 { letter-spacing: -0.03em; line-height: 1.2; }
 @media (max-width: 479px) {
   .skeleton-grid { grid-template-columns: 1fr; }
 }
+
+/* ========================================================================
+   FTAS UI OVERHAUL v3 (global override layer)
+   ======================================================================== */
+
+:root {
+  --c-bg: #07121e;
+  --c-panel: rgba(10, 22, 37, 0.88);
+  --c-panel-2: rgba(12, 27, 46, 0.94);
+  --c-border: rgba(166, 196, 224, 0.16);
+  --c-border-hi: rgba(166, 196, 224, 0.28);
+  --c-text: #f3f7fb;
+  --c-muted: #9db2c8;
+  --c-accent: #ff9248;
+  --c-accent2: #ffc06a;
+  --c-yellow: #ffd166;
+  --c-sky: #5dd2ff;
+  --c-green: #34d399;
+  --c-red: #fb7185;
+  --shadow-card: 0 10px 28px rgba(3, 10, 18, 0.46);
+  --shadow-lg: 0 24px 64px rgba(3, 10, 18, 0.58);
+  font-family: "Space Grotesk", "Manrope", "Segoe UI", Arial, sans-serif;
+}
+
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+
+body::before {
+  background:
+    radial-gradient(50% 38% at 12% 8%, rgba(93, 210, 255, 0.13), transparent 74%),
+    radial-gradient(44% 36% at 88% 10%, rgba(255, 146, 72, 0.13), transparent 72%),
+    radial-gradient(60% 52% at 50% 104%, rgba(52, 211, 153, 0.08), transparent 72%);
+}
+
+body::after {
+  background-image: linear-gradient(rgba(157,178,200,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(157,178,200,0.035) 1px, transparent 1px);
+  background-size: 28px 28px;
+  opacity: 0.45;
+}
+
+.shell {
+  min-height: 100svh;
+}
+
+.main {
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+  gap: 16px;
+}
+
+.main > section,
+.main > article,
+.main > .panel,
+.main > .table-card {
+  animation: rise-in 0.36s ease both;
+}
+
+.main > :nth-child(2) { animation-delay: 0.04s; }
+.main > :nth-child(3) { animation-delay: 0.08s; }
+.main > :nth-child(4) { animation-delay: 0.12s; }
+.main > :nth-child(5) { animation-delay: 0.16s; }
+
+.page-header {
+  background: linear-gradient(140deg, rgba(14, 30, 48, 0.9), rgba(9, 21, 35, 0.86));
+  border: 1px solid var(--c-border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+  padding: 14px 16px;
+}
+
+.page-header h1 {
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.panel,
+.table-card {
+  background: linear-gradient(165deg, rgba(10, 22, 37, 0.94), rgba(9, 18, 30, 0.9));
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-card);
+}
+
+.panel:hover,
+.table-card:hover,
+.metric-card:hover,
+.list-card:hover,
+.ticker-card:hover,
+.signal-card:hover {
+  border-color: var(--c-border-hi);
+}
+
+.metric-card {
+  background: linear-gradient(165deg, rgba(15, 31, 49, 0.76), rgba(10, 21, 34, 0.74));
+  min-height: 108px;
+}
+
+.metric-card strong {
+  font-size: clamp(1.15rem, 2.8vw, 1.95rem);
+}
+
+.list-card,
+.signal-card,
+.ticker-card {
+  backdrop-filter: blur(8px);
+}
+
+.button {
+  border-radius: 12px;
+  min-height: 42px;
+}
+
+.button-primary {
+  box-shadow: 0 8px 20px rgba(255, 146, 72, 0.28);
+}
+
+.button-ghost {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.market-tabs {
+  background: rgba(10, 22, 37, 0.76);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  padding: 8px;
+}
+
+.market-tab-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--c-muted);
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 700;
+  min-height: 40px;
+  padding: 0 14px;
+  transition: all 0.18s ease;
+}
+
+.market-tab-btn:hover {
+  background: rgba(255,255,255,0.05);
+  color: var(--c-text);
+}
+
+.market-tab-btn.active {
+  background: linear-gradient(135deg, rgba(255, 146, 72, 0.2), rgba(93, 210, 255, 0.14));
+  border-color: rgba(255, 146, 72, 0.42);
+  color: #ffd7ba;
+}
+
+.table-wrap {
+  border-radius: 12px;
+  border: 1px solid rgba(166, 196, 224, 0.12);
+}
+
+.signal-table {
+  min-width: 760px;
+}
+
+.signal-table th {
+  background: rgba(10, 20, 34, 0.96);
+}
+
+.signal-table th:first-child,
+.signal-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: rgba(9, 20, 33, 0.97);
+}
+
+.signal-table th:first-child {
+  z-index: 3;
+}
+
+.ticker-row:hover td {
+  background: rgba(255,255,255,0.03);
+}
+
+.skeleton-grid {
+  gap: 12px;
+}
+
+.skeleton-tile {
+  min-height: 98px;
+}
+
+.command-modal {
+  border-radius: 16px;
+}
+
+.sidebar {
+  background: linear-gradient(165deg, rgba(7, 17, 29, 0.98), rgba(8, 19, 33, 0.96));
+}
+
+.mobile-topbar {
+  border-bottom-color: rgba(166, 196, 224, 0.16);
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 1023px) {
+  .main {
+    max-width: 100%;
+  }
+
+  .page-header {
+    border-radius: 13px;
+    padding: 12px 13px;
+  }
+
+  .panel,
+  .table-card {
+    border-radius: 14px;
+  }
+}
+
+@media (max-width: 767px) {
+  .page-header {
+    gap: 10px;
+  }
+
+  .page-header p {
+    font-size: 0.78rem;
+  }
+
+  .metric-card {
+    min-height: 94px;
+  }
+
+  .signal-table {
+    min-width: 700px;
+  }
+
+  .list-card {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 479px) {
+  .page-header {
+    padding: 10px 11px;
+  }
+
+  .panel,
+  .table-card {
+    padding: 11px;
+  }
+
+  .market-tabs {
+    padding: 6px;
+    gap: 6px;
+  }
+
+  .market-tab-btn {
+    font-size: 0.76rem;
+    min-height: 36px;
+    padding: 0 10px;
+  }
+
+  .metric-card strong {
+    font-size: 1.2rem;
+  }
+
+  .signal-card {
+    gap: 10px;
+  }
+}
