@@ -76,6 +76,8 @@ const SHOCK_CANDLE_GUARD_ENABLED = String(process.env.CRYPTO_SHOCK_CANDLE_GUARD_
 const SHOCK_CANDLE_BODY_ATR_MULT = Math.min(3.5, Math.max(1.2, Number(process.env.CRYPTO_SHOCK_CANDLE_BODY_ATR_MULT || 2.1)));
 const COIN_PUBLISH_COOLDOWN_ENABLED = String(process.env.CRYPTO_COIN_PUBLISH_COOLDOWN_ENABLED || "true").toLowerCase() !== "false";
 const COIN_PUBLISH_COOLDOWN_MINUTES = Math.max(5, Number(process.env.CRYPTO_COIN_PUBLISH_COOLDOWN_MINUTES || 45));
+const TREND_SEPARATION_GUARD_ENABLED = String(process.env.CRYPTO_TREND_SEPARATION_GUARD_ENABLED || "true").toLowerCase() !== "false";
+const TREND_SEPARATION_MIN_ATR = Math.min(2.0, Math.max(0.05, Number(process.env.CRYPTO_TREND_SEPARATION_MIN_ATR || 0.22)));
 const SIDE_TF_BLOCK_MIN_SAMPLE = Math.max(10, Number(process.env.CRYPTO_SIDE_TF_BLOCK_MIN_SAMPLE || 12));
 const SIDE_TF_BLOCK_WINRATE = Math.min(45, Math.max(18, Number(process.env.CRYPTO_SIDE_TF_BLOCK_WINRATE || 33)));
 const SIDE_TF_WEAK_WINRATE = Math.min(60, Math.max(SIDE_TF_BLOCK_WINRATE + 5, Number(process.env.CRYPTO_SIDE_TF_WEAK_WINRATE || 45)));
@@ -961,6 +963,12 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const coreBearStack = ema50 < ema100 * 1.003;
   if (side === "LONG"  && !coreBullStack) return null;
   if (side === "SHORT" && !coreBearStack) return null;
+
+  if (TREND_SEPARATION_GUARD_ENABLED) {
+    const separation = Math.abs(Number(ema50 || 0) - Number(ema100 || 0));
+    const sepAtr = atr > 0 ? (separation / atr) : 0;
+    if (!Number.isFinite(sepAtr) || sepAtr < TREND_SEPARATION_MIN_ATR) return null;
+  }
 
   // GATE 3: ADX — trend must exist
   const minAdx     = tfRule.minAdx ?? 20;
