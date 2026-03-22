@@ -81,6 +81,10 @@ const TREND_SEPARATION_MIN_ATR = Math.min(2.0, Math.max(0.05, Number(process.env
 const RSI_EXTREME_GUARD_ENABLED = String(process.env.CRYPTO_RSI_EXTREME_GUARD_ENABLED || "true").toLowerCase() !== "false";
 const RSI_EXTREME_LONG_MAX = Math.min(90, Math.max(60, Number(process.env.CRYPTO_RSI_EXTREME_LONG_MAX || 72)));
 const RSI_EXTREME_SHORT_MIN = Math.min(40, Math.max(10, Number(process.env.CRYPTO_RSI_EXTREME_SHORT_MIN || 28)));
+const RISK_OFF_GUARD_ENABLED = String(process.env.CRYPTO_RISK_OFF_GUARD_ENABLED || "true").toLowerCase() !== "false";
+const RISK_OFF_RECENT_MIN_SAMPLE = Math.max(8, Number(process.env.CRYPTO_RISK_OFF_RECENT_MIN_SAMPLE || 14));
+const RISK_OFF_RECENT_WINRATE = Math.min(55, Math.max(30, Number(process.env.CRYPTO_RISK_OFF_RECENT_WINRATE || 46)));
+const RISK_OFF_MIN_PUBLISH_FLOOR = Math.min(92, Math.max(78, Number(process.env.CRYPTO_RISK_OFF_MIN_PUBLISH_FLOOR || 84)));
 const SIDE_TF_BLOCK_MIN_SAMPLE = Math.max(10, Number(process.env.CRYPTO_SIDE_TF_BLOCK_MIN_SAMPLE || 12));
 const SIDE_TF_BLOCK_WINRATE = Math.min(45, Math.max(18, Number(process.env.CRYPTO_SIDE_TF_BLOCK_WINRATE || 33)));
 const SIDE_TF_WEAK_WINRATE = Math.min(60, Math.max(SIDE_TF_BLOCK_WINRATE + 5, Number(process.env.CRYPTO_SIDE_TF_WEAK_WINRATE || 45)));
@@ -654,6 +658,17 @@ function getAdaptiveQualityConfig(performanceSnapshot, { coin, side, timeframe }
     config.publishFloorBoost += 2;
     config.minPublishFloorAbs = Math.max(config.minPublishFloorAbs, 80);
     config.reasons.push("recent_30_winrate_guard");
+  }
+  if (
+    RISK_OFF_GUARD_ENABLED &&
+    Number(recent30.total || 0) >= RISK_OFF_RECENT_MIN_SAMPLE &&
+    recent30.winRate !== null &&
+    Number(recent30.winRate) <= RISK_OFF_RECENT_WINRATE
+  ) {
+    config.publishFloorBoost += 3;
+    config.minConfirmationsBoost += 1;
+    config.minPublishFloorAbs = Math.max(config.minPublishFloorAbs, RISK_OFF_MIN_PUBLISH_FLOOR);
+    config.reasons.push("risk_off_recent_drawdown");
   }
   const tfStats = performanceSnapshot[timeframe] || buildTally();
   const tfTotal = Number(tfStats.wins || 0) + Number(tfStats.losses || 0);
