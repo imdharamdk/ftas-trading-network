@@ -43,8 +43,6 @@ const fallbackPaymentSettings = {
 const EXPIRY_PROMPT_STORAGE_KEY = "ftas_expiry_prompt_dismissed";
 const ANALYTICS_REFRESH_MS = 10 * 60 * 1000;
 const MISSED_SIGNALS_LAST_SEEN_KEY = "ftas_missed_signals_last_seen";
-const AUTO_RECO_APPLY_STORAGE_KEY = "ftas_auto_reco_applied_v1";
-const AUTO_RECO_AUDIT_STORAGE_KEY = "ftas_auto_reco_audit_v1";
 
 function deferTask(fn) {
   if (typeof window !== "undefined" && "requestIdleCallback" in window) {
@@ -79,93 +77,6 @@ function buildPlanUpdate(plan) {
 
 function hasActivePaidPlan(user) {
   return user?.subscriptionStatus === "ACTIVE" && ["PRO", "PREMIUM"].includes(user?.plan);
-}
-
-function getDefaultSignalPrefs() {
-  return {
-    minConfidence: 0,
-    sides: ["LONG", "SHORT"],
-    timeframes: [],
-    blockedTimeframes: [],
-    excludedCoins: [],
-    onlyStrong: false,
-  };
-}
-
-function normalizeDashboardSignalPrefs(value = {}) {
-  return {
-    minConfidence: Number(value?.minConfidence || 0),
-    sides: Array.isArray(value?.sides) && value.sides.length ? value.sides : ["LONG", "SHORT"],
-    timeframes: Array.isArray(value?.timeframes) ? value.timeframes : [],
-    blockedTimeframes: Array.isArray(value?.blockedTimeframes) ? value.blockedTimeframes : [],
-    excludedCoins: Array.isArray(value?.excludedCoins) ? value.excludedCoins : [],
-    onlyStrong: Boolean(value?.onlyStrong),
-  };
-}
-
-function buildSignalPreferencePayload(prefs = {}) {
-  const normalized = normalizeDashboardSignalPrefs(prefs);
-  return {
-    minConfidence: Number(normalized.minConfidence || 0),
-    onlyStrong: Boolean(normalized.onlyStrong),
-    sides: normalized.sides,
-    timeframes: normalized.timeframes,
-    blockedTimeframes: normalized.blockedTimeframes,
-    excludedCoins: normalized.excludedCoins,
-  };
-}
-
-function deriveAutoRecommendationPrefs(recommendations = [], currentPrefs = {}) {
-  const next = normalizeDashboardSignalPrefs(currentPrefs);
-  const actions = [];
-
-  recommendations.forEach((item) => {
-    const rec = String(item || "").trim();
-    if (!rec) return;
-
-    const confidenceMatch = rec.match(/signals in\s+([0-9]+)(?:-([0-9]+)|\+)\s+confidence band/i);
-    if (confidenceMatch) {
-      const lower = Number(confidenceMatch[1] || 0);
-      const upper = Number(confidenceMatch[2] || lower);
-      const target = Math.min(100, Math.max(next.minConfidence, upper + 1));
-      if (target > next.minConfidence) {
-        next.minConfidence = target;
-        actions.push("raise_min_conf_" + String(target));
-      }
-      return;
-    }
-
-    const sideMatch = rec.match(/\b(LONG|SHORT)\b\s+side is underperforming/i);
-    if (sideMatch) {
-      const weakSide = sideMatch[1].toUpperCase();
-      if (next.sides.includes(weakSide) && next.sides.length > 1) {
-        next.sides = next.sides.filter((side) => side !== weakSide);
-        actions.push("disable_side_" + weakSide);
-      }
-      return;
-    }
-
-    const timeframeMatch = rec.match(/^([0-9]+[mhd])\s+setups are underperforming/i);
-    if (timeframeMatch) {
-      const weakTimeframe = timeframeMatch[1].toLowerCase();
-      if (!next.blockedTimeframes.includes(weakTimeframe)) {
-        next.blockedTimeframes = [...next.blockedTimeframes, weakTimeframe];
-        actions.push("block_tf_" + weakTimeframe);
-      }
-      return;
-    }
-
-    const coinMatch = rec.match(/^([A-Z0-9:_-]+)\s+is causing repeated stop losses/i);
-    if (coinMatch) {
-      const weakCoin = coinMatch[1].toUpperCase();
-      if (!next.excludedCoins.includes(weakCoin)) {
-        next.excludedCoins = [...next.excludedCoins, weakCoin];
-        actions.push("exclude_coin_" + weakCoin);
-      }
-    }
-  });
-
-  return { actions, next };
 }
 
 const FEATURES = [
@@ -242,20 +153,9 @@ export default function Dashboard() {
   const [manualForm, setManualForm] = useState(defaultManualForm);
   const analyticsFetchedAtRef = useRef(0);
 
-  const [signalPrefs, setSignalPrefs] = useState(getDefaultSignalPrefs());
   const [missedSignals, setMissedSignals] = useState([]);
   const [activityEvents, setActivityEvents] = useState([]);
   const [selfLearningStatus, setSelfLearningStatus] = useState(null);
-  const [autoApplyAudit, setAutoApplyAudit] = useState(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const raw = window.localStorage.getItem(AUTO_RECO_AUDIT_STORAGE_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
 
   // ── WebSocket — realtime stats ────────────────────────────────────────────
   const onStatsUpdate = useCallback(({ crypto, stocks }) => {
@@ -284,10 +184,6 @@ export default function Dashboard() {
     else setShowExpiryPrompt(false);
   }, [subscriptionExpiresSoon, expiryPromptDismissed]);
 
-  useEffect(() => {
-    if (!user?.signalPreferences) return;
-    setSignalPrefs(normalizeDashboardSignalPrefs(user.signalPreferences));
-  }, [user?.signalPreferences]);
 
   useEffect(() => {
     if (!availablePaymentSettings) return;
@@ -299,62 +195,6 @@ export default function Dashboard() {
     });
   }, [availablePaymentMethods, availablePaymentSettings, availablePlans]);
 
-  useEffect(() => {
-    const recommendations = performance?.recommendations || [];
-    if (!user?.id || !recommendations.length) return;
-    if (actionBusy === "signal-preferences") return;
-
-    const currentPrefs = normalizeDashboardSignalPrefs(user?.signalPreferences || signalPrefs);
-    const { actions, next } = deriveAutoRecommendationPrefs(recommendations, currentPrefs);
-    if (!actions.length) return;
-
-    const signature = user.id + ":" + JSON.stringify(recommendations) + ":" + JSON.stringify(next);
-    if (typeof window !== "undefined" && window.localStorage.getItem(AUTO_RECO_APPLY_STORAGE_KEY) === signature) return;
-
-    let active = true;
-    (async () => {
-      try {
-        setActionBusy("signal-preferences");
-        setError("");
-        await apiFetch("/auth/me/preferences", {
-          method: "PATCH",
-          body: buildSignalPreferencePayload(next),
-        });
-
-        if (typeof window !== "undefined") {
-          window.localStorage.setItem(AUTO_RECO_APPLY_STORAGE_KEY, signature);
-        }
-        if (!active) return;
-
-        setSignalPrefs(next);
-        const entry = {
-          id: "audit_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
-          createdAt: new Date().toISOString(),
-          type: "AUTO_APPLY",
-          actions,
-          recommendationCount: recommendations.length,
-        };
-        setAutoApplyAudit((current) => {
-          const nextAudit = [entry, ...(Array.isArray(current) ? current : [])].slice(0, 40);
-          if (typeof window !== "undefined") {
-            window.localStorage.setItem(AUTO_RECO_AUDIT_STORAGE_KEY, JSON.stringify(nextAudit));
-          }
-          return nextAudit;
-        });
-        setFeedback("AI recommendations auto-applied (" + actions.length + " changes)");
-        setTimeout(() => setFeedback(""), 4000);
-        await refreshUser();
-      } catch (e) {
-        if (active) setError(e.message);
-      } finally {
-        if (active) setActionBusy("");
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, [actionBusy, performance?.recommendations, refreshUser, signalPrefs, user?.id, user?.signalPreferences]);
 
   const loadPublicData = useCallback(async () => {
     // Phase 1: fast endpoints first so dashboard renders quickly
@@ -469,86 +309,6 @@ export default function Dashboard() {
 
       window.localStorage.setItem(MISSED_SIGNALS_LAST_SEEN_KEY, nowIso);
     } catch {}
-  }
-
-  function applySignalPreset(preset) {
-    if (preset === "SCALP") {
-      setSignalPrefs((current) => ({
-        ...current,
-        minConfidence: 85,
-        onlyStrong: true,
-        timeframes: ["1m", "5m"],
-      }));
-      return;
-    }
-
-    if (preset === "SWING") {
-      setSignalPrefs((current) => ({
-        ...current,
-        minConfidence: 78,
-        onlyStrong: false,
-        timeframes: ["15m", "30m", "1h"],
-      }));
-      return;
-    }
-
-    if (preset === "RISK_OFF") {
-      setSignalPrefs((current) => ({
-        ...current,
-        minConfidence: 90,
-        onlyStrong: true,
-        sides: ["LONG"],
-      }));
-    }
-  }
-
-  async function handleSignalPreferenceSave(event) {
-    event.preventDefault();
-    setActionBusy("signal-preferences");
-    setError("");
-    try {
-      const payload = buildSignalPreferencePayload(signalPrefs);
-      await apiFetch("/auth/me/preferences", { method: "PATCH", body: payload });
-      await refreshWithFeedback("Signal preferences updated");
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setActionBusy("");
-    }
-  }
-
-  async function handleResetAiAppliedFilters() {
-    setActionBusy("signal-preferences");
-    setError("");
-    try {
-      const resetPrefs = getDefaultSignalPrefs();
-      await apiFetch("/auth/me/preferences", { method: "PATCH", body: buildSignalPreferencePayload(resetPrefs) });
-      if (typeof window !== "undefined") {
-        window.localStorage.removeItem(AUTO_RECO_APPLY_STORAGE_KEY);
-      }
-      setSignalPrefs(resetPrefs);
-
-      const entry = {
-        id: "audit_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8),
-        createdAt: new Date().toISOString(),
-        type: "RESET_FILTERS",
-        actions: ["reset_to_default"],
-        recommendationCount: 0,
-      };
-      setAutoApplyAudit((current) => {
-        const nextAudit = [entry, ...(Array.isArray(current) ? current : [])].slice(0, 40);
-        if (typeof window !== "undefined") {
-          window.localStorage.setItem(AUTO_RECO_AUDIT_STORAGE_KEY, JSON.stringify(nextAudit));
-        }
-        return nextAudit;
-      });
-
-      await refreshWithFeedback("AI-applied filters reset");
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setActionBusy("");
-    }
   }
 
   async function handleToggleSelfLearning(enabled) {
@@ -1021,80 +781,6 @@ export default function Dashboard() {
       <section className="section-grid">
         <article className="panel">
           <div className="panel-header">
-            <div><span className="eyebrow">Personalization</span><h2>Signal Preferences</h2></div>
-            <span className="pill pill-accent">Applied in API</span>
-          </div>
-          <form className="form-grid" onSubmit={handleSignalPreferenceSave}>
-            <label>
-              <span>Minimum confidence</span>
-              <input
-                max="100"
-                min="0"
-                onChange={(e) => setSignalPrefs((c) => ({ ...c, minConfidence: e.target.value }))}
-                type="number"
-                value={signalPrefs.minConfidence}
-              />
-            </label>
-
-            <label>
-              <span>Allowed sides</span>
-              <div className="button-row">
-                <button
-                  className={`button ${signalPrefs.sides.includes("LONG") ? "button-primary" : "button-ghost"}`}
-                  onClick={() => setSignalPrefs((c) => ({
-                    ...c,
-                    sides: c.sides.includes("LONG") ? c.sides.filter((v) => v !== "LONG") : [...c.sides, "LONG"],
-                  }))}
-                  type="button"
-                >
-                  LONG
-                </button>
-                <button
-                  className={`button ${signalPrefs.sides.includes("SHORT") ? "button-primary" : "button-ghost"}`}
-                  onClick={() => setSignalPrefs((c) => ({
-                    ...c,
-                    sides: c.sides.includes("SHORT") ? c.sides.filter((v) => v !== "SHORT") : [...c.sides, "SHORT"],
-                  }))}
-                  type="button"
-                >
-                  SHORT
-                </button>
-              </div>
-            </label>
-
-            <label className="auth-checkbox">
-              <input
-                checked={signalPrefs.onlyStrong}
-                onChange={(e) => setSignalPrefs((c) => ({ ...c, onlyStrong: e.target.checked }))}
-                type="checkbox"
-              />
-              <span>Show only strong signals</span>
-            </label>
-
-            <div className="button-row">
-              <button className="button button-ghost" onClick={() => applySignalPreset("SCALP")} type="button">Scalp View</button>
-              <button className="button button-ghost" onClick={() => applySignalPreset("SWING")} type="button">Swing View</button>
-              <button className="button button-ghost" onClick={() => applySignalPreset("RISK_OFF")} type="button">Risk-off</button>
-            </div>
-
-            <div className="button-row">
-              <button className="button button-primary" disabled={actionBusy === "signal-preferences"} type="submit">
-                {actionBusy === "signal-preferences" ? "Saving..." : "Save preferences"}
-              </button>
-              <button className="button button-ghost" disabled={actionBusy === "signal-preferences"} onClick={handleResetAiAppliedFilters} type="button">
-                Reset AI Filters
-              </button>
-            </div>
-
-            <div className="list-stack">
-              <div className="list-card"><strong>Blocked Timeframes</strong><span>{signalPrefs.blockedTimeframes.length ? signalPrefs.blockedTimeframes.join(", ") : "None"}</span></div>
-              <div className="list-card"><strong>Excluded Coins</strong><span>{signalPrefs.excludedCoins.length ? signalPrefs.excludedCoins.join(", ") : "None"}</span></div>
-            </div>
-          </form>
-        </article>
-
-        <article className="panel">
-          <div className="panel-header">
             <div><span className="eyebrow">Recovery</span><h2>Missed Signals</h2></div>
             <span className="pill pill-neutral">{missedSignals.length} found</span>
           </div>
@@ -1127,22 +813,6 @@ export default function Dashboard() {
       </section>
 
       <section className="section-grid">
-        <article className="panel">
-          <div className="panel-header">
-            <div><span className="eyebrow">AI Insights</span><h2>Auto-Apply Audit</h2></div>
-            <span className="pill pill-neutral">{autoApplyAudit.length} logs</span>
-          </div>
-          <div className="list-stack">
-            {autoApplyAudit.slice(0, 8).map((entry) => (
-              <div className="list-card" key={entry.id}>
-                <div><strong>{entry.type === "RESET_FILTERS" ? "Reset Filters" : "Auto Apply"}</strong><span>{entry.actions?.join(", ") || "-"}</span></div>
-                <span className="pill pill-neutral">{new Date(entry.createdAt).toLocaleDateString("en-IN")}</span>
-              </div>
-            ))}
-            {!autoApplyAudit.length ? <div className="empty-state">No auto-apply audit yet.</div> : null}
-          </div>
-        </article>
-
         {isAdmin ? (
           <article className="panel">
             <div className="panel-header">
