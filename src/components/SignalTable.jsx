@@ -26,6 +26,33 @@ function formatSignedPct(value) {
   return `${n > 0 ? "+" : ""}${n.toFixed(2)}%`;
 }
 
+function buildExplainability(signal = {}) {
+  const confirmations = Array.isArray(signal.confirmations) ? signal.confirmations : [];
+  const scanMeta = signal.scanMeta || {};
+  const indicator = signal.indicatorSnapshot || {};
+
+  const qualityReasons = Array.isArray(scanMeta?.qualityGuard?.reasons) ? scanMeta.qualityGuard.reasons : [];
+  const selfLearningReasons = Array.isArray(scanMeta?.selfLearning?.reasons) ? scanMeta.selfLearning.reasons : [];
+  const localAiReasons = Array.isArray(scanMeta?.localAI?.reasons) ? scanMeta.localAI.reasons : [];
+
+  const context = [
+    { label: "ADX", value: indicator.adx },
+    { label: "RSI", value: indicator.rsi },
+    { label: "ATR", value: indicator.atr },
+    { label: "Risk/Unit", value: indicator.riskPerUnit },
+    { label: "Publish Floor", value: scanMeta.publishFloor },
+    { label: "Model", value: scanMeta.modelVersion },
+  ].filter((item) => item.value !== undefined && item.value !== null && item.value !== "");
+
+  return {
+    confirmations,
+    qualityReasons,
+    selfLearningReasons,
+    localAiReasons,
+    context,
+  };
+}
+
 function sideClass(side) { return side === "LONG" ? "pill-success" : "pill-danger"; }
 function statusClass(status, result) {
   if (status === "ACTIVE") return "pill-warning";
@@ -60,7 +87,7 @@ function ConfBadge({ confidence }) {
   return <span className={`pill ${cls}`}>{confidence}%</span>;
 }
 
-function SignalCard({ signal, onChartOpen }) {
+function SignalCard({ signal, onChartOpen, onExplain }) {
   const move = Number(signal.signalMovePercent);
   const hasMove = Number.isFinite(move);
   const livePrice = signal.livePrice ?? signal.closePrice;
@@ -120,9 +147,12 @@ function SignalCard({ signal, onChartOpen }) {
       </div>
 
       <div className="signal-card-meta">
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           <LeverageBadge leverage={signal.leverage ?? signal.indicatorSnapshot?.leverage} />
           <span className={`pill ${statusClass(signal.status, signal.result)}`}>{result}</span>
+          <button className="button button-ghost" onClick={() => onExplain(signal)} style={{ minHeight: 24, padding: "2px 8px", fontSize: "0.72rem" }} type="button">
+            Why?
+          </button>
         </div>
         <span className="signal-card-time">{formatDate(signal.createdAt)}</span>
       </div>
@@ -137,7 +167,7 @@ function SignalCard({ signal, onChartOpen }) {
   );
 }
 
-function TableRow({ signal, onChartOpen }) {
+function TableRow({ signal, onChartOpen, onExplain }) {
   const sym = formatDisplaySymbol(signal);
   const isStock = signal.source === "SMART_ENGINE";
   return (
@@ -148,6 +178,11 @@ function TableRow({ signal, onChartOpen }) {
           {sym.detail && <span style={{ opacity: 0.55, fontSize: "0.74em", marginLeft: 5 }}>{sym.detail}</span>}
           <span className="coin-chart-icon">{isStock ? "📊" : "📈"}</span>
         </button>
+        <div style={{ marginTop: 6 }}>
+          <button className="button button-ghost" onClick={() => onExplain(signal)} style={{ minHeight: 22, padding: "2px 8px", fontSize: "0.72rem" }} type="button">
+            Why?
+          </button>
+        </div>
       </td>
       <td><span className={`pill ${sideClass(signal.side)}`}>{signal.side}</span></td>
       <td>{signal.timeframe}</td>
@@ -180,6 +215,7 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
   const [chartSignal, setChartSignal] = useState(null);
   const [tvSignal, setTvSignal] = useState(null);
   const [visibleCount, setVisibleCount] = useState(compact ? 40 : 60);
+  const [explainSignal, setExplainSignal] = useState(null);
 
   const visibleSignals = useMemo(() => signals.slice(0, visibleCount), [signals, visibleCount]);
   const hasMore = signals.length > visibleCount;
@@ -200,7 +236,7 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
         {signals.length ? (
           <>
             <div className="signal-cards">
-              {visibleSignals.map((s) => <SignalCard key={s.id} signal={s} onChartOpen={openChart} />)}
+              {visibleSignals.map((s) => <SignalCard key={s.id} signal={s} onChartOpen={openChart} onExplain={setExplainSignal} />)}
             </div>
             {hasMore ? (
               <div style={{ textAlign: "center", marginTop: 12 }}>
@@ -228,7 +264,7 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
               </thead>
               <tbody>
                 {visibleSignals.length ? (
-                  visibleSignals.map((s) => <TableRow key={s.id} signal={s} onChartOpen={openChart} />)
+                  visibleSignals.map((s) => <TableRow key={s.id} signal={s} onChartOpen={openChart} onExplain={setExplainSignal} />)
                 ) : (
                   <tr><td className="empty-row" colSpan={13}>{emptyLabel}</td></tr>
                 )}
@@ -244,6 +280,53 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
           ) : null}
         </div>
       </div>
+
+      {explainSignal ? (
+        <div style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(0,0,0,0.62)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div className="panel" style={{ width: "min(860px, 95vw)", maxHeight: "85vh", overflow: "auto" }}>
+            <div className="panel-header">
+              <div>
+                <span className="eyebrow">Explainability</span>
+                <h2>{explainSignal.coin} • {explainSignal.side} • {explainSignal.timeframe}</h2>
+              </div>
+              <button className="button button-ghost" onClick={() => setExplainSignal(null)} type="button">Close</button>
+            </div>
+            {(() => {
+              const data = buildExplainability(explainSignal);
+              return (
+                <div className="section-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}>
+                  <article className="panel" style={{ margin: 0 }}>
+                    <div className="panel-header"><div><span className="eyebrow">Signal</span><h2>Confirmations</h2></div></div>
+                    <div className="list-stack">
+                      {data.confirmations.length ? data.confirmations.map((c, idx) => <div className="list-card" key={idx}><strong>{c}</strong></div>) : <div className="empty-state">No confirmations captured.</div>}
+                    </div>
+                  </article>
+                  <article className="panel" style={{ margin: 0 }}>
+                    <div className="panel-header"><div><span className="eyebrow">Engine</span><h2>Quality Guards</h2></div></div>
+                    <div className="list-stack">
+                      {data.qualityReasons.map((r, idx) => <div className="list-card" key={`q_${idx}`}><strong>{r}</strong></div>)}
+                      {data.selfLearningReasons.map((r, idx) => <div className="list-card" key={`s_${idx}`}><strong>self-learning: {r}</strong></div>)}
+                      {data.localAiReasons.map((r, idx) => <div className="list-card" key={`l_${idx}`}><strong>local-ai: {r}</strong></div>)}
+                      {!data.qualityReasons.length && !data.selfLearningReasons.length && !data.localAiReasons.length ? <div className="empty-state">No guard reasons attached.</div> : null}
+                    </div>
+                  </article>
+                  <article className="panel" style={{ margin: 0, gridColumn: "1 / -1" }}>
+                    <div className="panel-header"><div><span className="eyebrow">Context</span><h2>Indicator Snapshot</h2></div></div>
+                    <div className="detail-grid">
+                      {data.context.map((item) => (
+                        <div key={item.label}>
+                          <span className="detail-label">{item.label}</span>
+                          <strong>{String(item.value)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      ) : null}
 
       {chartCoin ? (
         <CandlestickChart

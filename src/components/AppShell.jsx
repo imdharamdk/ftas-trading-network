@@ -34,6 +34,12 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
   const [toasts, setToasts] = useState([]);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
+  const [installingApp, setInstallingApp] = useState(false);
+  const [appInstalled, setAppInstalled] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia?.("(display-mode: standalone)")?.matches || false;
+  });
 
   const isAdmin = user?.role === "ADMIN";
   const planEnd = fmtExpiry(user?.subscriptionEndsAt);
@@ -130,11 +136,45 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
     };
   }, []);
 
+  async function handleInstallApp() {
+    if (!deferredInstallPrompt || installingApp) return;
+    setInstallingApp(true);
+    try {
+      deferredInstallPrompt.prompt();
+      const choice = await deferredInstallPrompt.userChoice;
+      if (choice?.outcome === "accepted") setAppInstalled(true);
+      setDeferredInstallPrompt(null);
+    } finally {
+      setInstallingApp(false);
+    }
+  }
+
   function selectCommand(item) {
     setCommandOpen(false);
     setCommandQuery("");
     navigate(item.to);
   }
+
+  useEffect(() => {
+    function onBeforeInstallPrompt(event) {
+      event.preventDefault();
+      setDeferredInstallPrompt(event);
+    }
+
+    function onInstalled() {
+      setAppInstalled(true);
+      setDeferredInstallPrompt(null);
+    }
+
+    window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+
+  const canInstallApp = Boolean(deferredInstallPrompt) && !appInstalled;
 
   const lastSyncLabel = new Intl.DateTimeFormat("en-IN", {
     hour: "2-digit",
@@ -184,6 +224,11 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
               {showPlanEnd ? ` · valid till ${planEnd}` : ""}
             </span>
           </div>
+          {canInstallApp ? (
+            <button className="button button-secondary" disabled={installingApp} onClick={handleInstallApp} style={{ width: "100%" }} type="button">
+              {installingApp ? "Installing..." : "Install App"}
+            </button>
+          ) : null}
           <button className="button button-ghost" onClick={logout} style={{ width: "100%" }} type="button">Logout</button>
           <div className="legal-links">
             <Link to="/terms">Terms</Link>
@@ -199,6 +244,24 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
           <span className="brand-mark" style={{ fontSize: "1.35rem" }}>FTAS</span>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <button className="button button-ghost" onClick={() => setCommandOpen(true)} style={{ minHeight: 32, padding: "0 10px" }} type="button">⌘</button>
+            {canInstallApp ? (
+              <button
+                onClick={handleInstallApp}
+                type="button"
+                style={{
+                  background: "rgba(29,78,216,0.18)",
+                  border: "1px solid rgba(29,78,216,0.35)",
+                  borderRadius: 8,
+                  color: "#9ec5ff",
+                  cursor: "pointer",
+                  fontSize: "0.72rem",
+                  fontWeight: 700,
+                  padding: "5px 8px",
+                }}
+              >
+                {installingApp ? "..." : "Install"}
+              </button>
+            ) : null}
             {isAdmin ? (
               <button
                 onClick={toggle}
