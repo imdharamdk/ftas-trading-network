@@ -816,6 +816,14 @@ export default function Dashboard() {
               <div className="list-card" key={item}><strong>{item}</strong></div>
             ))}
             {!performance?.recommendations?.length ? <div className="empty-state">Recommendations appear after more trades close.</div> : null}
+            {performance?.autonomous?.applied?.length ? (
+              <div className="list-card">
+                <strong>Auto Actions Executed ({performance.autonomous.applied.length})</strong>
+                <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                  {performance.autonomous.applied.map((a) => a.type + (a.coin ? " · " + a.coin : "")).join(" | ")}
+                </span>
+              </div>
+            ) : null}
           </div>
         </article>
       </section>

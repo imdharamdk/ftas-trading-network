@@ -93,6 +93,11 @@ export default function Crypto() {
 
   const ALL_TF = ["1m","5m","15m","30m","1h"];
 
+  const isVisibleCryptoSignal = useCallback((signal) => {
+    if (signal?.source === "SMART_ENGINE") return false;
+    return isAdmin ? true : ALL_TF.includes(signal?.timeframe);
+  }, [isAdmin]);
+
   const dashboardFocus = useMemo(() => {
     if (typeof window === "undefined") return "";
     const params = new URLSearchParams(window.location.search || "");
@@ -191,10 +196,10 @@ export default function Crypto() {
       setSearchResult(res);
       if (res.generated) {
         // Reload active signals after new signal generated
-        const activeRes = await apiFetch("/signals/active?limit=100");
+        const activeRes = await apiFetch(`/signals/active?limit=${isAdmin ? 1000 : 100}`);
         const all = activeRes.signals || [];
         const ALL_TF = ["1m","5m","15m","30m","1h"];
-        setActiveSignals(all.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe) && passesRisk(s)));
+        setActiveSignals(all.filter(s => isVisibleCryptoSignal(s) && passesRisk(s)));
         setTab("active");
       }
     } catch (e) {
@@ -235,7 +240,7 @@ export default function Crypto() {
         // Phase 1: active signals — backend expires stale ones first
         const [overviewRes, activeRes] = await Promise.allSettled([
           apiFetch("/signals/stats/overview"),
-          apiFetch("/signals/active?limit=60"),
+          apiFetch(`/signals/active?limit=${isAdmin ? 1000 : 60}`),
         ]);
         if (!mounted) return;
 
@@ -243,7 +248,7 @@ export default function Crypto() {
 
         const ALL_TF = ["1m","5m","15m","30m","1h"];
         const allActive = activeRes.status === "fulfilled" ? (activeRes.value.signals || []) : [];
-        setActiveSignals(allActive.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe) && passesRisk(s)));
+        setActiveSignals(allActive.filter(s => isVisibleCryptoSignal(s) && passesRisk(s)));
         setLoading(false); // show page immediately
       } catch (e) {
         if (mounted) { setError(e.message); setLoading(false); }
@@ -259,27 +264,27 @@ export default function Crypto() {
     if (historyLoaded || historyLoading) return;
     setHistoryLoading(true);
     try {
-      const res = await apiFetch("/signals/history?limit=200");
+      const res = await apiFetch(isAdmin ? "/signals/history?limit=5000&includeArchive=1" : "/signals/history?limit=200");
       const allHistory = res.signals || [];
       const ALL_TF = ["1m","5m","15m","30m","1h"];
-      setHistorySignals(allHistory.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe) && passesRisk(s)));
+      setHistorySignals(allHistory.filter(s => isVisibleCryptoSignal(s) && passesRisk(s)));
       setHistoryLoaded(true);
     } catch {}
     finally { setHistoryLoading(false); }
-  }, [historyLoaded, historyLoading, passesRisk]);
+  }, [historyLoaded, historyLoading, isAdmin, isVisibleCryptoSignal, passesRisk]);
 
   const loadExpired = useCallback(async () => {
     if (expiredLoaded || expiredLoading) return;
     setExpiredLoading(true);
     try {
-      const res = await apiFetch("/signals/expired?limit=200");
+      const res = await apiFetch(`/signals/expired?limit=${isAdmin ? 1000 : 200}`);
       const allExpired = res.signals || [];
       const ALL_TF = ["1m","5m","15m","30m","1h"];
-      setExpiredSignals(allExpired.filter(s => s.source !== "SMART_ENGINE" && ALL_TF.includes(s.timeframe) && passesRisk(s)));
+      setExpiredSignals(allExpired.filter(s => isVisibleCryptoSignal(s) && passesRisk(s)));
       setExpiredLoaded(true);
     } catch {}
     finally { setExpiredLoading(false); }
-  }, [expiredLoaded, expiredLoading, passesRisk]);
+  }, [expiredLoaded, expiredLoading, isAdmin, isVisibleCryptoSignal, passesRisk]);
 
   useEffect(() => {
     if (tab === "closed") loadHistory();

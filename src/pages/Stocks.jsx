@@ -42,13 +42,13 @@ export default function Stocks() {
     // Phase 1: active (fast)
     const [overviewRes, activeRes] = await Promise.allSettled([
       apiFetch("/stocks/stats/overview"),
-      apiFetch("/stocks/active?limit=40"),
+      apiFetch(`/stocks/active?limit=${isAdmin ? 1000 : 40}`),
     ]);
     setOverview(overviewRes.status === "fulfilled" ? overviewRes.value.stats : null);
     const rawActive = activeRes.status === "fulfilled" ? activeRes.value.signals || [] : [];
     setActiveSignals(rawActive.filter(s => !isCryptoCoin(s.coin) && passesRisk(s)));
     setLoading(false);
-  }, [passesRisk]);
+  }, [isAdmin, passesRisk]);
 
   // Initial load only — no polling loop.
   // FIX: Replaced 30s setInterval polling with WebSocket push below.
@@ -111,13 +111,13 @@ export default function Stocks() {
     if (historyLoaded || historyLoading) return;
     setHistoryLoading(true);
     try {
-      const res = await apiFetch("/stocks/history?limit=200");
+      const res = await apiFetch(isAdmin ? "/stocks/history?limit=5000&includeArchive=1" : "/stocks/history?limit=200");
       const rawHistory = res.signals || [];
       setHistorySignals(rawHistory.filter(s => !isCryptoCoin(s.coin) && passesRisk(s)));
       setHistoryLoaded(true);
     } catch {}
     finally { setHistoryLoading(false); }
-  }, [historyLoaded, historyLoading, passesRisk]);
+  }, [historyLoaded, historyLoading, isAdmin, passesRisk]);
 
   useEffect(() => {
     if (tab === "closed") loadHistory();

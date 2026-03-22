@@ -15,7 +15,7 @@ const scanLimiter = rateLimit({
 });
 const { getLtp } = require("../services/smartApiService");
 const { getInstrumentUniverse } = require("../services/smartInstrumentService");
-const { createManualSignal, generateForCoin, getPausedCoins, getSelfLearningStatus, getStatus, pauseCoin, resumeCoin, scanNow, setSelfLearningEnabled, start, stop } = require("../services/signalEngine");
+const { applyAutonomousActions, createManualSignal, generateForCoin, getPausedCoins, getSelfLearningStatus, getStatus, pauseCoin, resumeCoin, scanNow, setSelfLearningEnabled, start, stop } = require("../services/signalEngine");
 const cache = require("../services/apiCache");
 
 const router = express.Router();
@@ -319,6 +319,48 @@ function buildRecommendations({ confidenceBreakdown, sideBreakdown, timeframeBre
   return recommendations;
 }
 
+function buildAutonomousActions(performance) {
+  const actions = [];
+  const data = performance || {};
+
+  const weakTimeframe = (data.timeframeBreakdown || []).find((item) => Number(item?.total || 0) >= 3 && Number(item?.winRate || 0) <= 35);
+  if (weakTimeframe) {
+    actions.push({
+      type: "INCREASE_GLOBAL_FLOOR",
+      by: 1,
+      reason: String(weakTimeframe.label || "timeframe") + " timeframe underperforming (" + String(weakTimeframe.winRate || 0) + "% win rate)",
+    });
+  }
+
+  const weakConfidence = (data.confidenceBreakdown || []).find((item) => Number(item?.total || 0) >= 3 && Number(item?.winRate || 0) <= 35);
+  if (weakConfidence) {
+    actions.push({
+      type: "INCREASE_GLOBAL_FLOOR",
+      by: 1,
+      reason: "Weak confidence band " + String(weakConfidence.label || "unknown") + " (" + String(weakConfidence.winRate || 0) + "% win rate)",
+    });
+  }
+
+  const weakSide = (data.sideBreakdown || []).find((item) => Number(item?.total || 0) >= 3 && Number(item?.winRate || 0) <= 35);
+  if (weakSide) {
+    actions.push({
+      type: "INCREASE_GLOBAL_FLOOR",
+      by: 1,
+      reason: String(weakSide.label || "side") + " side underperforming (" + String(weakSide.winRate || 0) + "% win rate)",
+    });
+  }
+
+  const troubleCoin = (data.troubleCoins || []).find((item) => Number(item?.slHits || 0) >= 2);
+  if (troubleCoin && troubleCoin.coin) {
+    actions.push({
+      type: "PAUSE_COIN",
+      coin: troubleCoin.coin,
+      reason: "Auto-paused due to repeated stop losses (" + String(troubleCoin.slHits || 0) + ")",
+    });
+  }
+
+  return actions;
+}
 function buildPerformance(signals) {
   const closedSignals = sortByCreatedAtDesc(signals).filter(isClosedTrade);
   const completedSignals = closedSignals.filter((signal) => signal.result !== "EXPIRED");
@@ -537,11 +579,15 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   const signalPref = resolveEffectiveSignalPreferences(req, minConfidence);
   const prefKey = buildSignalPreferenceCacheKey(preference, signalPref, req.userId);
   const fields = String(req.query.fields || "full").toLowerCase();
-  const cacheKey = "signals:history:" + (req.query.coin || "all") + ":" + (req.query.limit || "all") + ":" + prefKey + ":" + fields;
+  const includeArchive = String(req.query.includeArchive || "").toLowerCase() === "1" || String(req.query.includeArchive || "").toLowerCase() === "true";
+  const cacheKey = "signals:history:" + (req.query.coin || "all") + ":" + (req.query.limit || "all") + ":" + prefKey + ":" + fields + ":" + (includeArchive ? "archive" : "live");
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
 
   const rawSignals = await readCollection("signals");
+  const archiveSignals = includeArchive ? await readCollection("signalsArchive") : [];
+  const sourceSignals = includeArchive ? sortByCreatedAtDesc([...rawSignals, ...archiveSignals]) : rawSignals;
+
   // History = closed signals that hit TP or SL (NOT expired)
   const coin = req.query.coin ? String(req.query.coin).toUpperCase() : null;
   const limit = Number(req.query.limit || 0);
@@ -550,7 +596,7 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
     signal.result !== "EXPIRED" &&
     (!coin || signal.coin === coin) &&
     matchesSignalPreference(signal, signalPref);
-  const signals = limit ? takeLatest(rawSignals, predicate, limit) : rawSignals.filter(predicate);
+  const signals = limit ? takeLatest(sourceSignals, predicate, limit) : sourceSignals.filter(predicate);
   const payloadSignals = fields === "lite" ? signals.map(toLiteSignal) : signals;
 
   const result = { signals: payloadSignals };
@@ -626,8 +672,20 @@ router.get("/stats/performance", requireAuth, async (req, res) => {
   const signals = await readCollection("signals");
   const archive = await readCollection("signalsArchive");
   const combined = [...signals, ...archive].filter((signal) => matchesSignalPreference(signal, signalPref));
+  const performance = buildPerformance(combined);
+  const autonomousPlan = buildAutonomousActions(performance);
+  const autonomousResult = applyAutonomousActions(autonomousPlan, { actor: { email: "ml-model" } });
+
   const result = {
-    performance: buildPerformance(combined),
+    performance: {
+      ...performance,
+      autonomous: {
+        enabled: Boolean(getSelfLearningStatus()?.autonomousAuthorityEnabled),
+        planCount: autonomousPlan.length,
+        applied: autonomousResult?.applied || [],
+        skippedReason: autonomousResult?.skippedReason || null,
+      },
+    },
   };
   cache.set("signals:performance:" + prefKey, result, 60);
   return res.json(result);

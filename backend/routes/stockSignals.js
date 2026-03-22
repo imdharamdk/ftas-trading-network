@@ -212,11 +212,14 @@ router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
 
 router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
   const { preference, minConfidence } = resolveRiskPreference(req);
-  const cacheKey = "stocks:history:" + (req.query.coin || "all") + ":" + (req.query.limit || "all") + ":" + preference;
+  const includeArchive = String(req.query.includeArchive || "").toLowerCase() === "1" || String(req.query.includeArchive || "").toLowerCase() === "true";
+  const cacheKey = "stocks:history:" + (req.query.coin || "all") + ":" + (req.query.limit || "all") + ":" + preference + ":" + (includeArchive ? "archive" : "live");
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
 
   const signals = await readCollection("stockSignals");
+  const archiveSignals = includeArchive ? await readCollection("stockSignalsArchive") : [];
+  const sourceSignals = includeArchive ? sortByCreatedAtDesc([...signals, ...archiveSignals]) : signals;
   // History = TP/SL hits only — no expired
   const coin = req.query.coin ? String(req.query.coin).toUpperCase() : null;
   const limit = Number(req.query.limit || 0);
@@ -226,7 +229,7 @@ router.get("/history", requireAuth, requireSignalAccess, async (req, res) => {
     !isCryptoCoin(signal.coin) &&
     (!coin || signal.coin === coin) &&
     Number(signal.confidence || 0) >= minConfidence;
-  const result = { signals: limit ? takeLatest(signals, predicate, limit) : signals.filter(predicate) };
+  const result = { signals: limit ? takeLatest(sourceSignals, predicate, limit) : sourceSignals.filter(predicate) };
   cache.set(cacheKey, result, 30);
   return res.json(result);
 });

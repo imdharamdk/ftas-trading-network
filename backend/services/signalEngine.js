@@ -34,6 +34,7 @@ const DEFAULT_PUBLISH_FLOOR = 72;
 const QUALITY_MODE = String(process.env.CRYPTO_QUALITY_MODE || "BALANCED").toUpperCase();
 const ULTRA_MIN_CONFIDENCE = Math.max(80, Number(process.env.CRYPTO_MIN_CONFIDENCE || 90));
 const SELF_LEARNING_ENABLED = String(process.env.CRYPTO_SELF_LEARNING_ENABLED || "true").toLowerCase() !== "false";
+const AUTONOMOUS_ACTIONS_ENABLED = String(process.env.CRYPTO_AUTONOMOUS_ACTIONS_ENABLED || "true").toLowerCase() !== "false";
 const SELF_LEARNING_REFRESH_MS = Math.max(60_000, Number(process.env.CRYPTO_SELF_LEARNING_REFRESH_MS || 10 * 60 * 1000));
 const SELF_LEARNING_LOOKBACK = Math.max(120, Number(process.env.CRYPTO_SELF_LEARNING_LOOKBACK || 600));
 const SELF_LEARNING_MIN_SAMPLE = Math.max(40, Number(process.env.CRYPTO_SELF_LEARNING_MIN_SAMPLE || 80));
@@ -141,6 +142,9 @@ const engineState = {
         byConfidenceBucket: {},
       },
     },
+    autonomousAuthorityEnabled: AUTONOMOUS_ACTIONS_ENABLED,
+    autonomousLastRunAt: 0,
+    autonomousActionsApplied: [],
   },
 };
 
@@ -1378,12 +1382,65 @@ function getSelfLearningStatus() {
       baselineWinRate: localModel.baselineWinRate ?? null,
       blockedPredictionThreshold: Number(localModel.blockedPredictionThreshold || LOCAL_AI_BLOCK_THRESHOLD),
     },
+    autonomousAuthorityEnabled: Boolean(model.autonomousAuthorityEnabled),
+    autonomousLastRunAt: Number(model.autonomousLastRunAt || 0),
+    autonomousActionsApplied: Array.isArray(model.autonomousActionsApplied) ? model.autonomousActionsApplied.slice(0, 20) : [],
   };
 }
 
 function setSelfLearningEnabled(enabled) {
   engineState.selfLearning.enabled = Boolean(enabled);
   return getSelfLearningStatus();
+}
+function applyAutonomousActions(actions = [], context = {}) {
+  const model = engineState.selfLearning || {};
+  const now = Date.now();
+  if (!model.autonomousAuthorityEnabled) {
+    return { applied: [], skippedReason: "AUTONOMOUS_AUTHORITY_DISABLED" };
+  }
+  if (!Array.isArray(actions) || !actions.length) {
+    return { applied: [], skippedReason: "NO_ACTIONS" };
+  }
+  if (now - Number(model.autonomousLastRunAt || 0) < 60 * 1000) {
+    return { applied: [], skippedReason: "THROTTLED" };
+  }
+
+  const applied = [];
+  const actor = context && context.actor ? context.actor : { email: "ml-model" };
+
+  for (const action of actions) {
+    const type = String(action && action.type ? action.type : "").toUpperCase();
+    if (!type) continue;
+
+    if (type === "INCREASE_GLOBAL_FLOOR") {
+      const by = clamp(Number(action && action.by ? action.by : 1), 1, 3);
+      const before = Number(model.globalPublishFloorBoost || 0);
+      const after = clamp(before + by, -2, 12);
+      if (after !== before) {
+        model.globalPublishFloorBoost = after;
+        applied.push({ type, before, after, by, reason: action.reason || "Performance recommendation" });
+      }
+      continue;
+    }
+
+    if (type === "PAUSE_COIN") {
+      let coin = String(action && action.coin ? action.coin : "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+      if (!coin) continue;
+      if (!coin.endsWith("USDT")) coin = coin + "USDT";
+      if (!engineState.pausedCoins[coin]) {
+        pauseCoin(coin, actor, action.reason || "ML auto-action from performance recommendation");
+        applied.push({ type, coin, reason: action.reason || "Performance recommendation" });
+      }
+    }
+  }
+
+  model.autonomousLastRunAt = now;
+  if (applied.length) {
+    const stamped = applied.map((item) => ({ ...item, at: new Date(now).toISOString() }));
+    model.autonomousActionsApplied = [...stamped, ...(Array.isArray(model.autonomousActionsApplied) ? model.autonomousActionsApplied : [])].slice(0, 40);
+  }
+
+  return { applied, skippedReason: applied.length ? null : "NO_EFFECT" };
 }
 
 // ─── Fast Expiry Checker (every 30s) ─────────────────────────────────────────
@@ -1480,4 +1537,4 @@ async function generateForCoin(symbol, actor) {
   return { generated: true, signal };
 }
 
-module.exports = { createManualSignal, evaluateActiveSignals, getCoinList, getStatus, getSelfLearningStatus, setSelfLearningEnabled, scanNow, start, stop, pauseCoin, resumeCoin, getPausedCoins, generateForCoin };
+module.exports = { createManualSignal, evaluateActiveSignals, getCoinList, getStatus, getSelfLearningStatus, setSelfLearningEnabled, applyAutonomousActions, scanNow, start, stop, pauseCoin, resumeCoin, getPausedCoins, generateForCoin };
