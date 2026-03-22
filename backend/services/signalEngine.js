@@ -55,6 +55,9 @@ const VOL_GUARD_HIGH_PCT = Math.max(VOL_GUARD_LOW_PCT + 0.2, Number(process.env.
 const COUNTER_TREND_ENABLED = String(process.env.CRYPTO_COUNTER_TREND_ENABLED || "true").toLowerCase() !== "false";
 const COUNTER_TREND_MIN_CONF = Math.min(99, Math.max(88, Number(process.env.CRYPTO_COUNTER_TREND_MIN_CONF || 92)));
 const COUNTER_TREND_ADX_MIN = Math.max(14, Number(process.env.CRYPTO_COUNTER_TREND_ADX_MIN || 24));
+const SIDE_TF_BLOCK_MIN_SAMPLE = Math.max(10, Number(process.env.CRYPTO_SIDE_TF_BLOCK_MIN_SAMPLE || 12));
+const SIDE_TF_BLOCK_WINRATE = Math.min(45, Math.max(18, Number(process.env.CRYPTO_SIDE_TF_BLOCK_WINRATE || 33)));
+const SIDE_TF_WEAK_WINRATE = Math.min(60, Math.max(SIDE_TF_BLOCK_WINRATE + 5, Number(process.env.CRYPTO_SIDE_TF_WEAK_WINRATE || 45)));
 
 // ── Per-Timeframe Rules ────────────────────────────────────────────────────────
 const TIMEFRAME_RULES = {
@@ -610,15 +613,15 @@ function getAdaptiveQualityConfig(performanceSnapshot, { coin, side, timeframe }
   const sideTfStats = performanceSnapshot.bySideTimeframe?.[sideTfKey];
   const sideTfTotal = Number(sideTfStats?.wins || 0) + Number(sideTfStats?.losses || 0);
   const sideTfWinRate = winRateFromTally(sideTfStats);
-  if (sideTfTotal >= 8 && sideTfWinRate !== null && sideTfWinRate < 45) {
+  if (sideTfTotal >= SIDE_TF_BLOCK_MIN_SAMPLE && sideTfWinRate !== null && sideTfWinRate <= SIDE_TF_BLOCK_WINRATE) {
+    config.blockCoin = true;
+    config.reasons.push(`blocked_${sideTfKey.toLowerCase()}`);
+  } else if (sideTfTotal >= 8 && sideTfWinRate !== null && sideTfWinRate <= SIDE_TF_WEAK_WINRATE) {
     config.scoreBoost += 5;
     config.publishFloorBoost += 4;
     config.minConfirmationsBoost += 1;
+    config.minPublishFloorAbs = Math.max(config.minPublishFloorAbs, 80);
     config.reasons.push(`weak_${sideTfKey.toLowerCase()}`);
-  } else if (sideTfTotal >= 8 && sideTfWinRate !== null && sideTfWinRate < 55) {
-    config.scoreBoost += 2;
-    config.publishFloorBoost += 2;
-    config.reasons.push(`soft_${sideTfKey.toLowerCase()}`);
   }
 
   const coinStats = performanceSnapshot.byCoin?.[coin];
