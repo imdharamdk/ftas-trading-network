@@ -72,6 +72,8 @@ const COUNTER_TREND_ADX_MIN = Math.max(14, Number(process.env.CRYPTO_COUNTER_TRE
 const COUNTER_TREND_DRAWDOWN_GUARD_ENABLED = String(process.env.CRYPTO_COUNTER_TREND_DRAWDOWN_GUARD_ENABLED || "true").toLowerCase() !== "false";
 const COUNTER_TREND_DRAWDOWN_MIN_SAMPLE = Math.max(8, Number(process.env.CRYPTO_COUNTER_TREND_DRAWDOWN_MIN_SAMPLE || 12));
 const COUNTER_TREND_DRAWDOWN_WINRATE = Math.min(55, Math.max(30, Number(process.env.CRYPTO_COUNTER_TREND_DRAWDOWN_WINRATE || 48)));
+const SHOCK_CANDLE_GUARD_ENABLED = String(process.env.CRYPTO_SHOCK_CANDLE_GUARD_ENABLED || "true").toLowerCase() !== "false";
+const SHOCK_CANDLE_BODY_ATR_MULT = Math.min(3.5, Math.max(1.2, Number(process.env.CRYPTO_SHOCK_CANDLE_BODY_ATR_MULT || 2.1)));
 const SIDE_TF_BLOCK_MIN_SAMPLE = Math.max(10, Number(process.env.CRYPTO_SIDE_TF_BLOCK_MIN_SAMPLE || 12));
 const SIDE_TF_BLOCK_WINRATE = Math.min(45, Math.max(18, Number(process.env.CRYPTO_SIDE_TF_BLOCK_WINRATE || 33)));
 const SIDE_TF_WEAK_WINRATE = Math.min(60, Math.max(SIDE_TF_BLOCK_WINRATE + 5, Number(process.env.CRYPTO_SIDE_TF_WEAK_WINRATE || 45)));
@@ -821,6 +823,23 @@ function hasManipulationCandle(side, analysis) {
   return false;
 }
 
+function hasShockCandle(side, analysis) {
+  const c = analysis.candles;
+  const atr = analysis.volatility.atr || analysis.averages.averageRange || 0;
+  if (!c || !Number.isFinite(atr) || atr <= 0) return false;
+
+  const body = Math.abs(Number(c.close || 0) - Number(c.open || 0));
+  const bodyAtr = body / atr;
+  if (!Number.isFinite(bodyAtr) || bodyAtr < SHOCK_CANDLE_BODY_ATR_MULT) return false;
+
+  // Avoid late entries after extended impulse in same direction.
+  const bullishBody = Number(c.close || 0) > Number(c.open || 0);
+  const bearishBody = Number(c.close || 0) < Number(c.open || 0);
+  if (side === "LONG" && bullishBody) return true;
+  if (side === "SHORT" && bearishBody) return true;
+  return false;
+}
+
 // ─── Main Signal Builder ──────────────────────────────────────────────────────
 function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketActivity = null, performanceSnapshot = null, selfLearningModel = null) {
   const bullConf = [], bearConf = [];
@@ -937,6 +956,8 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   if (tfRule.blockDailyBear && side === "LONG" && dailyBearStack) return null;
   // Manipulation candle
   if (hasManipulationCandle(side, analysis)) return null;
+  // Shock impulse candle (entry-chase protection)
+  if (SHOCK_CANDLE_GUARD_ENABLED && hasShockCandle(side, analysis)) return null;
   // REMOVED: regime === "RANGING" block — too restrictive for crypto mean-reversion
   // BB extreme zone — don't buy overbought top or sell oversold bottom
   if (bbPctB !== null) {
