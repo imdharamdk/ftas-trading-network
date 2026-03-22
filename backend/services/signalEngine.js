@@ -45,6 +45,10 @@ const AUTO_COIN_COOLDOWN_ENABLED = String(process.env.CRYPTO_AUTO_COIN_COOLDOWN_
 const AUTO_COIN_COOLDOWN_HOURS = Math.max(1, Number(process.env.CRYPTO_AUTO_COIN_COOLDOWN_HOURS || 24));
 const AUTO_COIN_COOLDOWN_WINDOW = Math.max(3, Number(process.env.CRYPTO_AUTO_COIN_COOLDOWN_WINDOW || 5));
 const AUTO_COIN_COOLDOWN_MIN_LOSSES = Math.min(AUTO_COIN_COOLDOWN_WINDOW, Math.max(2, Number(process.env.CRYPTO_AUTO_COIN_COOLDOWN_MIN_LOSSES || 3)));
+const AUTO_COIN_SIDE_COOLDOWN_ENABLED = String(process.env.CRYPTO_AUTO_COIN_SIDE_COOLDOWN_ENABLED || "true").toLowerCase() !== "false";
+const AUTO_COIN_SIDE_COOLDOWN_HOURS = Math.max(1, Number(process.env.CRYPTO_AUTO_COIN_SIDE_COOLDOWN_HOURS || 18));
+const AUTO_COIN_SIDE_COOLDOWN_WINDOW = Math.max(3, Number(process.env.CRYPTO_AUTO_COIN_SIDE_COOLDOWN_WINDOW || 5));
+const AUTO_COIN_SIDE_COOLDOWN_MIN_LOSSES = Math.min(AUTO_COIN_SIDE_COOLDOWN_WINDOW, Math.max(2, Number(process.env.CRYPTO_AUTO_COIN_SIDE_COOLDOWN_MIN_LOSSES || 3)));
 const TF_THROTTLE_MIN_SAMPLE = Math.max(10, Number(process.env.CRYPTO_TF_THROTTLE_MIN_SAMPLE || 20));
 const TF_THROTTLE_WEAK_WINRATE = Math.min(55, Math.max(25, Number(process.env.CRYPTO_TF_THROTTLE_WEAK_WINRATE || 40)));
 const TF_THROTTLE_BLOCK_WINRATE = Math.min(TF_THROTTLE_WEAK_WINRATE - 1, Math.max(15, Number(process.env.CRYPTO_TF_THROTTLE_BLOCK_WINRATE || 30)));
@@ -132,6 +136,8 @@ const engineState = {
   timer: null, expiryTimer: null,
   // Admin-controlled coin pause list: { [SYMBOL]: { pausedAt, reason, pausedBy } }
   pausedCoins: {},
+  // Auto-managed directional cooldowns: { [COIN:SIDE]: { pausedAt, pausedUntil, ... } }
+  pausedCoinSides: {},
   selfLearning: {
     enabled: SELF_LEARNING_ENABLED,
     trainedAt: null,
@@ -1169,7 +1175,7 @@ async function fetchCryptoCandles(symbol, tf) {
 }
 
 // ─── Coin Scan ────────────────────────────────────────────────────────────────
-async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = null, selfLearningModel = null) {
+async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = null, selfLearningModel = null, sidePauseMap = null) {
   const analyses = {};
   const timeframeConcurrency = getTimeframeFetchConcurrency();
 
@@ -1181,6 +1187,12 @@ async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = nu
   });
 
   const htf = { daily: analyses["1h"] || null, twelveH: null, fourH: null, oneH: analyses["1h"] || null };
+  const isSidePausedForCoin = (side) => {
+    const key = buildCoinSideKey(coin, side);
+    if (!key) return false;
+    if (sidePauseMap && sidePauseMap[key]) return true;
+    return Boolean(isCoinSidePaused(coin, side));
+  };
   const tradeTimeframes = getTradeTimeframes();
   const candidates = tradeTimeframes
     .flatMap((tf) => {
@@ -1188,8 +1200,8 @@ async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = nu
 
       const bias = getHigherTimeframeBias(analyses, tf);
       const bySide = {
-        LONG: buildCandidate(coin, tf, analyses[tf], "BULLISH", htf, marketActivity, performanceSnapshot, selfLearningModel),
-        SHORT: buildCandidate(coin, tf, analyses[tf], "BEARISH", htf, marketActivity, performanceSnapshot, selfLearningModel),
+        LONG: isSidePausedForCoin("LONG") ? null : buildCandidate(coin, tf, analyses[tf], "BULLISH", htf, marketActivity, performanceSnapshot, selfLearningModel),
+        SHORT: isSidePausedForCoin("SHORT") ? null : buildCandidate(coin, tf, analyses[tf], "BEARISH", htf, marketActivity, performanceSnapshot, selfLearningModel),
       };
 
       const picked = [];
@@ -1293,6 +1305,7 @@ async function getPerformanceSnapshot() {
     bySideTimeframe: {},
     recentSlStreakByCoin: {},
     recent5LossCountByCoin: {},
+    recentLossCountByCoinSide: {},
     recent30: { wins: 0, losses: 0, total: 0, winRate: null },
     sampleSize: 0,
   };
@@ -1305,6 +1318,7 @@ async function getPerformanceSnapshot() {
       bySideTimeframe: {},
       recentSlStreakByCoin: {},
       recent5LossCountByCoin: {},
+      recentLossCountByCoinSide: {},
       recent30: { wins: 0, losses: 0, total: 0, winRate: null },
     };
 
@@ -1343,6 +1357,7 @@ async function getPerformanceSnapshot() {
       winRate: recent30Total ? Number(((recent30Wins / recent30Total) * 100).toFixed(1)) : null,
     };
     const byCoinSeries = {};
+    const byCoinSideSeries = {};
     for (const sig of recentResolved) {
       const coin = String(sig.coin || "").toUpperCase();
       if (!coin) continue;
@@ -1350,6 +1365,12 @@ async function getPerformanceSnapshot() {
       updateTally(stats.byCoin, coin, isWin);
       if (!byCoinSeries[coin]) byCoinSeries[coin] = [];
       byCoinSeries[coin].push(sig.result);
+      const side = String(sig.side || "").toUpperCase();
+      const coinSideKey = side ? `${coin}:${side}` : "";
+      if (coinSideKey) {
+        if (!byCoinSideSeries[coinSideKey]) byCoinSideSeries[coinSideKey] = [];
+        byCoinSideSeries[coinSideKey].push(sig.result);
+      }
     }
 
     for (const [coin, series] of Object.entries(byCoinSeries)) {
@@ -1366,6 +1387,12 @@ async function getPerformanceSnapshot() {
       const recentWindow = series.slice(0, AUTO_COIN_COOLDOWN_WINDOW);
       const recentLossCount = recentWindow.filter((result) => LOSS_RESULTS.has(result)).length;
       stats.recent5LossCountByCoin[coin] = recentLossCount;
+    }
+
+    for (const [coinSideKey, series] of Object.entries(byCoinSideSeries)) {
+      const recentWindow = series.slice(0, AUTO_COIN_SIDE_COOLDOWN_WINDOW);
+      const recentLossCount = recentWindow.filter((result) => LOSS_RESULTS.has(result)).length;
+      stats.recentLossCountByCoinSide[coinSideKey] = recentLossCount;
     }
 
     stats.sampleSize = stats.overall.wins + stats.overall.losses;
@@ -1408,12 +1435,31 @@ function cleanupExpiredAutoPauses(nowMs = Date.now()) {
       delete engineState.pausedCoins[coin];
     }
   }
+  for (const [coinSideKey, entry] of Object.entries(engineState.pausedCoinSides || {})) {
+    const until = entry && entry.pausedUntil ? new Date(entry.pausedUntil).getTime() : 0;
+    if (entry && entry.autoManaged && until && until <= nowMs) {
+      delete engineState.pausedCoinSides[coinSideKey];
+    }
+  }
 }
 
 function isCoinPaused(symbol) {
   cleanupExpiredAutoPauses();
   const coin = String(symbol || "").toUpperCase();
   return engineState.pausedCoins[coin] || null;
+}
+
+function buildCoinSideKey(symbol, side) {
+  const coin = String(symbol || "").toUpperCase();
+  const dir = String(side || "").toUpperCase();
+  if (!coin || !dir) return "";
+  return `${coin}:${dir}`;
+}
+
+function isCoinSidePaused(symbol, side) {
+  cleanupExpiredAutoPauses();
+  const key = buildCoinSideKey(symbol, side);
+  return key ? (engineState.pausedCoinSides[key] || null) : null;
 }
 
 function applyAutoCoinCooldown(performanceSnapshot) {
@@ -1443,6 +1489,34 @@ function applyAutoCoinCooldown(performanceSnapshot) {
     };
   }
 }
+
+function applyAutoCoinSideCooldown(performanceSnapshot) {
+  if (!AUTO_COIN_SIDE_COOLDOWN_ENABLED) return;
+  const nowMs = Date.now();
+  const untilIso = new Date(nowMs + AUTO_COIN_SIDE_COOLDOWN_HOURS * 60 * 60 * 1000).toISOString();
+  const lossMap = performanceSnapshot && performanceSnapshot.recentLossCountByCoinSide ? performanceSnapshot.recentLossCountByCoinSide : {};
+
+  for (const [coinSideRaw, lossCountRaw] of Object.entries(lossMap)) {
+    const coinSideKey = String(coinSideRaw || "").toUpperCase();
+    const lossCount = Number(lossCountRaw || 0);
+    if (!coinSideKey || lossCount < AUTO_COIN_SIDE_COOLDOWN_MIN_LOSSES) continue;
+
+    const existing = engineState.pausedCoinSides[coinSideKey];
+    if (existing && existing.autoManaged && existing.pausedUntil) {
+      const prevUntil = new Date(existing.pausedUntil).getTime();
+      if (Number.isFinite(prevUntil) && prevUntil > nowMs) continue;
+    }
+
+    engineState.pausedCoinSides[coinSideKey] = {
+      pausedAt: new Date(nowMs).toISOString(),
+      pausedUntil: untilIso,
+      reason: "Auto side cooldown: " + String(lossCount) + "/" + String(AUTO_COIN_SIDE_COOLDOWN_WINDOW) + " recent closed trades hit SL",
+      pausedBy: "ml-model",
+      autoManaged: true,
+    };
+  }
+}
+
 async function scanNow({ source = "ENGINE" } = {}) {
   if (engineState.isScanning) return { skipped: true, message: "Scan already in progress" };
   engineState.isScanning = true;
@@ -1454,6 +1528,7 @@ async function scanNow({ source = "ENGINE" } = {}) {
     const closedSignals = await evaluateActiveSignals();
     const performanceSnapshot = await getPerformanceSnapshot();
     applyAutoCoinCooldown(performanceSnapshot);
+    applyAutoCoinSideCooldown(performanceSnapshot);
     const selfLearningModel = await refreshSelfLearningModel({ force: closedSignals.length > 0 });
     const scanUniverse = await getScanUniverse();
     const coins = scanUniverse.slice(0, getMaxCoinsPerScan());
@@ -1466,7 +1541,7 @@ async function scanNow({ source = "ENGINE" } = {}) {
         const until = pauseEntry.pausedUntil ? " until " + pauseEntry.pausedUntil : "";
         return { coin: market.symbol, skipped: true, message: (pauseEntry.autoManaged ? "Auto-cooled down" : "Paused by admin") + until + " — skipped in scan" };
       }
-      const candidate = await analyzeCoin(market.symbol, market, performanceSnapshot, selfLearningModel);
+      const candidate = await analyzeCoin(market.symbol, market, performanceSnapshot, selfLearningModel, engineState.pausedCoinSides);
       return { coin: market.symbol, candidate };
     });
 
