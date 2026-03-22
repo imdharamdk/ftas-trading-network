@@ -543,6 +543,7 @@ function getAdaptiveQualityConfig(performanceSnapshot, { coin, side, timeframe }
   const config = {
     scoreBoost: 0,
     publishFloorBoost: 0,
+    minPublishFloorAbs: 0,
     minConfirmationsBoost: 0,
     blockCoin: false,
     reasons: [],
@@ -571,6 +572,13 @@ function getAdaptiveQualityConfig(performanceSnapshot, { coin, side, timeframe }
     config.reasons.push("overall_winrate_guard");
   }
 
+  const recent30 = performanceSnapshot.recent30 || { total: 0, winRate: null };
+  if (Number(recent30.total || 0) >= 12 && recent30.winRate !== null && Number(recent30.winRate) < 50) {
+    config.scoreBoost += 2;
+    config.publishFloorBoost += 2;
+    config.minPublishFloorAbs = Math.max(config.minPublishFloorAbs, 80);
+    config.reasons.push("recent_30_winrate_guard");
+  }
   const sideTfKey = `${side}:${timeframe}`;
   const sideTfStats = performanceSnapshot.bySideTimeframe?.[sideTfKey];
   const sideTfTotal = Number(sideTfStats?.wins || 0) + Number(sideTfStats?.losses || 0);
@@ -973,7 +981,8 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const confidence = clamp(baseConfidence + learningAdjustment.scoreDelta + localAiAdjustment.confidenceDelta, 0, 100);
   const minScore         = (tfRule.minScore         || 62) + adaptiveQuality.scoreBoost;
   const minConfirmations = (tfRule.minConfirmations || 5)  + adaptiveQuality.minConfirmationsBoost;
-  const publishFloor     = (tfRule.publishFloor     || DEFAULT_PUBLISH_FLOOR) + adaptiveQuality.publishFloorBoost + learningAdjustment.publishFloorBoost + localAiAdjustment.publishFloorBoost;
+  const publishFloorBase = (tfRule.publishFloor     || DEFAULT_PUBLISH_FLOOR) + adaptiveQuality.publishFloorBoost + learningAdjustment.publishFloorBoost + localAiAdjustment.publishFloorBoost;
+  const publishFloor     = Math.max(publishFloorBase, Number(adaptiveQuality.minPublishFloorAbs || 0));
 
   if (confidence < minScore)                   return null;
   if (confirmations.length < minConfirmations) return null;
@@ -1037,6 +1046,7 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
       qualityGuard: {
         scoreBoost: adaptiveQuality.scoreBoost,
         publishFloorBoost: adaptiveQuality.publishFloorBoost,
+        minPublishFloorAbs: adaptiveQuality.minPublishFloorAbs,
         minConfirmationsBoost: adaptiveQuality.minConfirmationsBoost,
         reasons: adaptiveQuality.reasons,
       },
@@ -1202,6 +1212,7 @@ async function getPerformanceSnapshot() {
     byCoin: {},
     bySideTimeframe: {},
     recentSlStreakByCoin: {},
+    recent30: { wins: 0, losses: 0, total: 0, winRate: null },
     sampleSize: 0,
   };
 
@@ -1212,6 +1223,7 @@ async function getPerformanceSnapshot() {
       byCoin: {},
       bySideTimeframe: {},
       recentSlStreakByCoin: {},
+      recent30: { wins: 0, losses: 0, total: 0, winRate: null },
     };
 
     const resolved = [];
@@ -1238,6 +1250,16 @@ async function getPerformanceSnapshot() {
       })
       .slice(0, 140);
 
+    const recent30 = recentResolved.slice(0, 30);
+    const recent30Wins = recent30.filter((sig) => WIN_RESULTS.has(sig.result)).length;
+    const recent30Losses = recent30.filter((sig) => LOSS_RESULTS.has(sig.result)).length;
+    const recent30Total = recent30Wins + recent30Losses;
+    stats.recent30 = {
+      wins: recent30Wins,
+      losses: recent30Losses,
+      total: recent30Total,
+      winRate: recent30Total ? Number(((recent30Wins / recent30Total) * 100).toFixed(1)) : null,
+    };
     const byCoinSeries = {};
     for (const sig of recentResolved) {
       const coin = String(sig.coin || "").toUpperCase();
