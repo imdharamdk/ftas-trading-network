@@ -16,7 +16,6 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-
 async function readSignalsWithTimeout() {
   try {
     const timeoutTask = new Promise((resolve) => {
@@ -60,15 +59,66 @@ function pickBestLowRiskSignal(activeSignals = []) {
   return withScores[0]?.signal || null;
 }
 
+function hasAnyKeyword(text, keywords) {
+  return keywords.some((k) => text.includes(k));
+}
+
 function buildAssistantAnswer({ query, activeSignals, recentStats, engineStatus, selfLearningStatus }) {
   const q = String(query || "").toLowerCase();
+  const normalized = q.replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
   const activeCount = activeSignals.length;
   const topSignal = pickBestLowRiskSignal(activeSignals);
   const runningText = engineStatus?.running ? "running" : "stopped";
 
   const summaryLine = `Engine is ${runningText}; ${activeCount} active signals; recent-30 win rate ${recentStats.winRate ?? "N/A"}%.`;
 
-  if (q.includes("best") || q.includes("low") || q.includes("risk")) {
+  if (hasAnyKeyword(normalized, ["hi", "hello", "hey", "namaste", "good morning", "good evening"])) {
+    return {
+      answer: "Hi. I am FTAS Assistant. I can help with signals, performance, scanner status, and platform usage.",
+      bullets: [
+        "Ask: 'best low-risk setup now'",
+        "Ask: 'recent performance'",
+        "Ask: 'engine status'",
+      ],
+    };
+  }
+
+  if (hasAnyKeyword(normalized, ["how are you", "kaise ho", "kese ho"])) {
+    return {
+      answer: "I am operational and connected to live FTAS engine data.",
+      bullets: [summaryLine],
+    };
+  }
+
+  if (hasAnyKeyword(normalized, ["thanks", "thank you", "thx", "shukriya"])) {
+    return {
+      answer: "You're welcome.",
+      bullets: ["You can ask another question about signals or dashboard actions."],
+    };
+  }
+
+  if (hasAnyKeyword(normalized, ["who are you", "what are you", "tum kaun", "aap kaun"])) {
+    return {
+      answer: "I am the FTAS in-dashboard assistant.",
+      bullets: [
+        "I use live FTAS signal and engine state for answers.",
+        "I do not place orders; I only guide using current platform data.",
+      ],
+    };
+  }
+
+  if (hasAnyKeyword(normalized, ["help", "what can you do", "commands", "options"])) {
+    return {
+      answer: "I can answer both basic conversation and trading dashboard questions.",
+      bullets: [
+        "Conversation: hi, how are you, thanks.",
+        "Trading: best low-risk setup, win rate, drawdown.",
+        "System: scanner status, last run, generated count.",
+      ],
+    };
+  }
+
+  if (normalized.includes("best") || normalized.includes("low") || normalized.includes("risk")) {
     if (!topSignal) {
       return {
         answer: `${summaryLine} No active setup is available right now for a low-risk pick.`,
@@ -90,7 +140,7 @@ function buildAssistantAnswer({ query, activeSignals, recentStats, engineStatus,
     };
   }
 
-  if (q.includes("win rate") || q.includes("performance") || q.includes("drawdown")) {
+  if (normalized.includes("win rate") || normalized.includes("performance") || normalized.includes("drawdown")) {
     const riskMode = recentStats.winRate !== null && recentStats.winRate <= 46 ? "RISK-OFF" : "BALANCED";
     return {
       answer: `${summaryLine} Current mode is ${riskMode}.`,
@@ -102,7 +152,7 @@ function buildAssistantAnswer({ query, activeSignals, recentStats, engineStatus,
     };
   }
 
-  if (q.includes("status") || q.includes("scanner") || q.includes("engine")) {
+  if (normalized.includes("status") || normalized.includes("scanner") || normalized.includes("engine")) {
     return {
       answer: `${summaryLine} Scanner last run: ${engineStatus?.lastScanAt || "N/A"}.`,
       bullets: [
@@ -114,10 +164,11 @@ function buildAssistantAnswer({ query, activeSignals, recentStats, engineStatus,
   }
 
   return {
-    answer: `${summaryLine} Ask about low-risk setup, performance, or engine status for a focused answer.`,
+    answer: "I can handle basic chat and FTAS platform questions.",
     bullets: [
-      "Examples: 'best low-risk setup now', 'recent performance', 'engine status'.",
-      "Assistant answers are generated from live FTAS engine data.",
+      "Try: hi, who are you, help.",
+      "Try: best low-risk setup now, recent performance, engine status.",
+      summaryLine,
     ],
   };
 }
