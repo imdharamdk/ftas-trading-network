@@ -78,6 +78,9 @@ const COIN_PUBLISH_COOLDOWN_ENABLED = String(process.env.CRYPTO_COIN_PUBLISH_COO
 const COIN_PUBLISH_COOLDOWN_MINUTES = Math.max(5, Number(process.env.CRYPTO_COIN_PUBLISH_COOLDOWN_MINUTES || 45));
 const TREND_SEPARATION_GUARD_ENABLED = String(process.env.CRYPTO_TREND_SEPARATION_GUARD_ENABLED || "true").toLowerCase() !== "false";
 const TREND_SEPARATION_MIN_ATR = Math.min(2.0, Math.max(0.05, Number(process.env.CRYPTO_TREND_SEPARATION_MIN_ATR || 0.22)));
+const RSI_EXTREME_GUARD_ENABLED = String(process.env.CRYPTO_RSI_EXTREME_GUARD_ENABLED || "true").toLowerCase() !== "false";
+const RSI_EXTREME_LONG_MAX = Math.min(90, Math.max(60, Number(process.env.CRYPTO_RSI_EXTREME_LONG_MAX || 72)));
+const RSI_EXTREME_SHORT_MIN = Math.min(40, Math.max(10, Number(process.env.CRYPTO_RSI_EXTREME_SHORT_MIN || 28)));
 const SIDE_TF_BLOCK_MIN_SAMPLE = Math.max(10, Number(process.env.CRYPTO_SIDE_TF_BLOCK_MIN_SAMPLE || 12));
 const SIDE_TF_BLOCK_WINRATE = Math.min(45, Math.max(18, Number(process.env.CRYPTO_SIDE_TF_BLOCK_WINRATE || 33)));
 const SIDE_TF_WEAK_WINRATE = Math.min(60, Math.max(SIDE_TF_BLOCK_WINRATE + 5, Number(process.env.CRYPTO_SIDE_TF_WEAK_WINRATE || 45)));
@@ -979,6 +982,12 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
 
   // GATE 4: Momentum — RSI + MACD (StochRSI is bonus)
   if (!isMomentumAligned(side, analysis, tfRule)) return null;
+
+  if (RSI_EXTREME_GUARD_ENABLED) {
+    const rsiNow = Number(rsi || 0);
+    if (side === "LONG" && rsiNow >= RSI_EXTREME_LONG_MAX) return null;
+    if (side === "SHORT" && rsiNow <= RSI_EXTREME_SHORT_MIN) return null;
+  }
 
   // GATE 5: Volume — soft check (bonus scoring, not hard reject)
   // Volume is already scoring bonus points below; hard gate removed to not block valid setups
