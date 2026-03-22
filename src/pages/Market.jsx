@@ -84,39 +84,54 @@ function CryptoTab() {
 
   useEffect(() => {
     let active = true;
-    async function loadSignals() {
-      try {
-        const signalResults = await Promise.allSettled([
-          apiFetch("/signals/stats/overview"),
-          apiFetch("/signals/active?limit=80&fields=lite"),
-          apiFetch("/signals/engine/status"),
-        ]);
-        if (!active) return;
-        const [overviewRes, activeRes, engineRes] = signalResults;
-        setOverview(overviewRes.status === "fulfilled" ? overviewRes.value.stats : null);
-        setActiveSignals(activeRes.status === "fulfilled" ? activeRes.value.signals || [] : []);
-        setEngine(engineRes.status === "fulfilled" ? engineRes.value.engine : null);
-        const firstRejected = signalResults.find(r => r.status === "rejected");
-        setError(firstRejected?.reason?.message || "");
 
-        setTimeout(async () => {
-          try {
-            const historyRes = await apiFetch("/signals/history?limit=20&fields=lite");
-            if (!active) return;
-            setHistorySignals(historyRes?.signals || []);
-          } catch {
-            // keep previous history
-          }
-        }, 0);
+    async function loadSignals() {
+      // Critical-first: render active signals as soon as they arrive.
+      setLoading(true);
+      try {
+        const activeRes = await apiFetch("/signals/active?limit=80&fields=lite");
+        if (!active) return;
+        setActiveSignals(activeRes?.signals || []);
+        setError("");
       } catch (e) {
-        if (active) setError(e.message);
+        if (!active) return;
+        setError(e.message || "Failed to load active signals");
       } finally {
         if (active) setLoading(false);
       }
+
+      // Non-blocking secondary calls.
+      apiFetch("/signals/stats/overview")
+        .then((res) => {
+          if (!active) return;
+          setOverview(res?.stats || null);
+        })
+        .catch(() => {});
+
+      apiFetch("/signals/engine/status")
+        .then((res) => {
+          if (!active) return;
+          setEngine(res?.engine || null);
+        })
+        .catch(() => {});
+
+      setTimeout(async () => {
+        try {
+          const historyRes = await apiFetch("/signals/history?limit=20&fields=lite");
+          if (!active) return;
+          setHistorySignals(historyRes?.signals || []);
+        } catch {
+          // keep previous history
+        }
+      }, 0);
     }
+
     loadSignals();
     const id = window.setInterval(loadSignals, 60000);
-    return () => { active = false; window.clearInterval(id); };
+    return () => {
+      active = false;
+      window.clearInterval(id);
+    };
   }, []);
 
   useEffect(() => {

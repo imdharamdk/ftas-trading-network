@@ -131,6 +131,14 @@ async function expireStaleActives(collectionName) {
   if (nowMs - lastExpireCheckAt < EXPIRE_CHECK_INTERVAL_MS) return false;
 
   expireInFlight = (async () => {
+    // Fast pre-check: if no active signal is actually expired, skip mutate/write entirely.
+    const current = await readCollection(collectionName);
+    const hasExpiredActive = current.some((sig) => sig.status === SIGNAL_STATUS.ACTIVE && isTimeExpired(sig));
+    if (!hasExpiredActive) {
+      lastExpireCheckAt = nowMs;
+      return false;
+    }
+
     const now = new Date().toISOString();
     let hadChanges = false;
     await mutateCollection(collectionName, (records) => {
@@ -142,6 +150,7 @@ async function expireStaleActives(collectionName) {
       });
       return updated;
     });
+
     lastExpireCheckAt = nowMs;
     if (hadChanges) cache.invalidatePrefix("signals:");
     return hadChanges;
