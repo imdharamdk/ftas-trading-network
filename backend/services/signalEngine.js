@@ -53,6 +53,8 @@ const AUTO_TF_COOLDOWN_ENABLED = String(process.env.CRYPTO_AUTO_TF_COOLDOWN_ENAB
 const AUTO_TF_COOLDOWN_HOURS = Math.max(1, Number(process.env.CRYPTO_AUTO_TF_COOLDOWN_HOURS || 8));
 const AUTO_TF_COOLDOWN_WINDOW = Math.max(3, Number(process.env.CRYPTO_AUTO_TF_COOLDOWN_WINDOW || 6));
 const AUTO_TF_COOLDOWN_MIN_LOSSES = Math.min(AUTO_TF_COOLDOWN_WINDOW, Math.max(3, Number(process.env.CRYPTO_AUTO_TF_COOLDOWN_MIN_LOSSES || 4)));
+const REENTRY_COOLDOWN_ENABLED = String(process.env.CRYPTO_REENTRY_COOLDOWN_ENABLED || "true").toLowerCase() !== "false";
+const REENTRY_COOLDOWN_MINUTES = Math.max(15, Number(process.env.CRYPTO_REENTRY_COOLDOWN_MINUTES || 90));
 const TF_THROTTLE_MIN_SAMPLE = Math.max(10, Number(process.env.CRYPTO_TF_THROTTLE_MIN_SAMPLE || 20));
 const TF_THROTTLE_WEAK_WINRATE = Math.min(55, Math.max(25, Number(process.env.CRYPTO_TF_THROTTLE_WEAK_WINRATE || 40)));
 const TF_THROTTLE_BLOCK_WINRATE = Math.min(TF_THROTTLE_WEAK_WINRATE - 1, Math.max(15, Number(process.env.CRYPTO_TF_THROTTLE_BLOCK_WINRATE || 30)));
@@ -872,6 +874,13 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   if (side === "LONG" && !oneHBullAligned) return null;
   if (side === "SHORT" && !oneHBearAligned) return null;
 
+  if (REENTRY_COOLDOWN_ENABLED && performanceSnapshot) {
+    const key = `${String(coin || "").toUpperCase()}:${String(side || "").toUpperCase()}:${String(timeframe || "").toLowerCase()}`;
+    const lastLossAt = Number(performanceSnapshot.lastLossAtByCoinSideTimeframe?.[key] || 0);
+    const cooldownMs = REENTRY_COOLDOWN_MINUTES * 60 * 1000;
+    if (lastLossAt > 0 && (Date.now() - lastLossAt) < cooldownMs) return null;
+  }
+
   // GATE 2: Core EMA Trend — ema50 > ema100 required; ema200 alignment is bonus not gate
   const coreBullStack = ema50 > ema100 * 0.997;
   const coreBearStack = ema50 < ema100 * 1.003;
@@ -1320,6 +1329,7 @@ async function getPerformanceSnapshot() {
     recent5LossCountByCoin: {},
     recentLossCountByCoinSide: {},
     recentLossCountByTimeframe: {},
+    lastLossAtByCoinSideTimeframe: {},
     recent30: { wins: 0, losses: 0, total: 0, winRate: null },
     sampleSize: 0,
   };
@@ -1334,6 +1344,7 @@ async function getPerformanceSnapshot() {
       recent5LossCountByCoin: {},
       recentLossCountByCoinSide: {},
       recentLossCountByTimeframe: {},
+      lastLossAtByCoinSideTimeframe: {},
       recent30: { wins: 0, losses: 0, total: 0, winRate: null },
     };
 
@@ -1374,6 +1385,7 @@ async function getPerformanceSnapshot() {
     const byCoinSeries = {};
     const byCoinSideSeries = {};
     const byTimeframeSeries = {};
+    const lastLossAtByCoinSideTimeframe = {};
     for (const sig of recentResolved) {
       const coin = String(sig.coin || "").toUpperCase();
       if (!coin) continue;
@@ -1391,6 +1403,11 @@ async function getPerformanceSnapshot() {
       if (tfKey) {
         if (!byTimeframeSeries[tfKey]) byTimeframeSeries[tfKey] = [];
         byTimeframeSeries[tfKey].push(sig.result);
+      }
+      const sideTfKey = side && tfKey ? `${coin}:${side}:${tfKey}` : "";
+      if (sideTfKey && isLoss && !lastLossAtByCoinSideTimeframe[sideTfKey]) {
+        const ts = new Date(sig.closedAt || sig.updatedAt || sig.createdAt || 0).getTime();
+        if (Number.isFinite(ts) && ts > 0) lastLossAtByCoinSideTimeframe[sideTfKey] = ts;
       }
     }
 
@@ -1421,6 +1438,7 @@ async function getPerformanceSnapshot() {
       stats.recentLossCountByTimeframe[tfKey] = recentLossCount;
     }
 
+    stats.lastLossAtByCoinSideTimeframe = lastLossAtByCoinSideTimeframe;
     stats.sampleSize = stats.overall.wins + stats.overall.losses;
     return stats;
   } catch {
