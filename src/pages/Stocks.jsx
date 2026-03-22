@@ -17,9 +17,7 @@ function isWinningResult(result) {
 export default function Stocks() {
   const { user } = useSession();
   const isAdmin = user?.role === "ADMIN";
-  const riskPref = String(user?.riskPreference || "BALANCED").toUpperCase();
-  const minConfidence = riskPref === "AGGRESSIVE" ? 70 : riskPref === "CONSERVATIVE" ? 90 : 80;
-  const passesRisk = useCallback((signal) => Number(signal?.confidence || 0) >= minConfidence, [minConfidence]);
+  const passesRisk = useCallback(() => true, []);
 
   const [overview, setOverview]             = useState(null);
   const [activeSignals, setActiveSignals]   = useState([]);

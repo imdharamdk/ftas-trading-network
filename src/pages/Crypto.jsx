@@ -73,9 +73,7 @@ export default function Crypto() {
   const { user } = useSession();
   const isAdmin = user?.role === "ADMIN";
   const now = useNow(); // single 1s tick for all countdowns
-  const riskPref = String(user?.riskPreference || "BALANCED").toUpperCase();
-  const minConfidence = riskPref === "AGGRESSIVE" ? 70 : riskPref === "CONSERVATIVE" ? 90 : 80;
-  const passesRisk = useCallback((signal) => Number(signal?.confidence || 0) >= minConfidence, [minConfidence]);
+  const passesRisk = useCallback(() => true, []);
 
   const [activeSignals, setActiveSignals]   = useState([]);
   const [historySignals, setHistorySignals] = useState([]);

@@ -26,36 +26,20 @@ const RISK_MIN_CONFIDENCE = {
   CONSERVATIVE: 90,
 };
 
-function resolveRiskPreference(req) {
-  const pref = String(req.query.risk || req.user?.riskPreference || "BALANCED").toUpperCase();
-  if (pref === "ALL") return { preference: "ALL", minConfidence: 0 };
-  const minConfidence = RISK_MIN_CONFIDENCE[pref] ?? RISK_MIN_CONFIDENCE.BALANCED;
-  return { preference: pref, minConfidence };
+function resolveRiskPreference(_req) {
+  // Global feed mode: every user sees the exact same unfiltered signal set.
+  return { preference: "ALL", minConfidence: 0 };
 }
 
-function resolveEffectiveSignalPreferences(req, riskMinConfidence = 0) {
-  const raw = req.rawUser?.signalPreferences || req.user?.signalPreferences || {};
-  const minConfidence = Math.max(0, Math.min(100, Math.max(riskMinConfidence, Number(raw.minConfidence || 0))));
-  const sideValues = Array.isArray(raw.sides)
-    ? raw.sides.map((v) => String(v || "").toUpperCase()).filter((v) => v === "LONG" || v === "SHORT")
-    : ["LONG", "SHORT"];
-  const timeframeValues = Array.isArray(raw.timeframes)
-    ? raw.timeframes.map((v) => String(v || "").toLowerCase()).filter(Boolean)
-    : [];
-  const blockedTimeframeValues = Array.isArray(raw.blockedTimeframes)
-    ? raw.blockedTimeframes.map((v) => String(v || "").toLowerCase()).filter(Boolean)
-    : [];
-  const excludedCoinValues = Array.isArray(raw.excludedCoins)
-    ? raw.excludedCoins.map((v) => String(v || "").toUpperCase()).filter(Boolean)
-    : [];
-
+function resolveEffectiveSignalPreferences(_req, _riskMinConfidence = 0) {
+  // Global feed mode: disable all per-user preference filters.
   return {
-    minConfidence,
-    onlyStrong: Boolean(raw.onlyStrong),
-    sides: [...new Set(sideValues.length ? sideValues : ["LONG", "SHORT"])],
-    timeframes: [...new Set(timeframeValues)],
-    blockedTimeframes: [...new Set(blockedTimeframeValues)],
-    excludedCoins: [...new Set(excludedCoinValues)],
+    minConfidence: 0,
+    onlyStrong: false,
+    sides: ["LONG", "SHORT"],
+    timeframes: [],
+    blockedTimeframes: [],
+    excludedCoins: [],
   };
 }
 

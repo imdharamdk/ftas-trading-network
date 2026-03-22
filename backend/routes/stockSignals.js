@@ -16,11 +16,9 @@ const RISK_MIN_CONFIDENCE = {
   CONSERVATIVE: 90,
 };
 
-function resolveRiskPreference(req) {
-  const pref = String(req.query.risk || req.user?.riskPreference || "BALANCED").toUpperCase();
-  if (pref === "ALL") return { preference: "ALL", minConfidence: 0 };
-  const minConfidence = RISK_MIN_CONFIDENCE[pref] ?? RISK_MIN_CONFIDENCE.BALANCED;
-  return { preference: pref, minConfidence };
+function resolveRiskPreference(_req) {
+  // Global feed mode: keep stock signal response identical for all users.
+  return { preference: "ALL", minConfidence: 0 };
 }
 
 // Stock signals should NOT auto-expire.
