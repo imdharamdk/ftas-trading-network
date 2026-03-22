@@ -57,6 +57,48 @@ function hashResetCode(email, code) {
     .digest("hex");
 }
 
+const ONLINE_WINDOW_MINUTES = Math.max(2, Number(process.env.ONLINE_WINDOW_MINUTES || 5));
+const ACTIVE_WINDOW_HOURS = Math.max(1, Number(process.env.ACTIVE_WINDOW_HOURS || 24));
+const VISIT_SESSION_GAP_MINUTES = Math.max(10, Number(process.env.VISIT_SESSION_GAP_MINUTES || 30));
+
+function toVisitDate(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10);
+  return date.toISOString().slice(0, 10);
+}
+
+function toNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function buildVisitActivityUpdate(user, nowIso, options = {}) {
+  const incrementVisit = Boolean(options.incrementVisit);
+  const today = toVisitDate(nowIso);
+  const lastVisitDate = String((user && user.lastVisitDate) || "").trim();
+  let visitCountToday = lastVisitDate === today ? toNumber(user && user.visitCountToday, 0) : 0;
+  let totalVisitCount = toNumber(user && user.totalVisitCount, 0);
+
+  if (incrementVisit) {
+    visitCountToday += 1;
+    totalVisitCount += 1;
+  }
+
+  return {
+    lastSeenAt: nowIso,
+    lastVisitDate: today,
+    visitCountToday,
+    totalVisitCount,
+  };
+}
+
+function shouldCountNewVisit(user, nowIso) {
+  const lastSeen = new Date((user && user.lastSeenAt) || 0);
+  if (Number.isNaN(lastSeen.getTime())) return true;
+  const nowMs = new Date(nowIso).getTime();
+  return Number.isFinite(nowMs) && (nowMs - lastSeen.getTime()) > VISIT_SESSION_GAP_MINUTES * 60 * 1000;
+}
+
 const forgotPasswordLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
@@ -166,7 +208,7 @@ router.post("/login", async (req, res) => {
     const { email, password, otp } = req.body || {};
     const normalizedEmail = normalizeEmail(email);
     const users = await readCollection("users");
-    const user = users.find((item) => item.email === normalizedEmail);
+    let user = users.find((item) => item.email === normalizedEmail);
 
     if (!user || !user.isActive) {
       await logAuthSecurityEvent(req, {
@@ -219,6 +261,26 @@ router.post("/login", async (req, res) => {
         });
         return res.status(401).json({ message: "Invalid OTP", code: "OTP_INVALID" });
       }
+    }
+
+    const nowIso = new Date().toISOString();
+    const updatedUser = await mutateCollection("users", (records) => {
+      let nextUser = null;
+      const nextRecords = records.map((item) => {
+        if (item.id !== user.id) return item;
+        nextUser = {
+          ...item,
+          ...buildVisitActivityUpdate(item, nowIso, { incrementVisit: true }),
+          updatedAt: nowIso,
+        };
+        return nextUser;
+      });
+      return { records: nextRecords, value: nextUser };
+    });
+
+    if (updatedUser) {
+      user = updatedUser;
+      invalidateUserCache(user.id);
     }
 
     await logAuthSecurityEvent(req, {
@@ -610,6 +672,42 @@ router.get("/me", requireAuth, async (req, res) => {
   });
 });
 
+router.post("/presence", requireAuth, async (req, res) => {
+  try {
+    const nowIso = new Date().toISOString();
+    const incrementVisit = shouldCountNewVisit(req.rawUser, nowIso);
+    const updated = await mutateCollection("users", (records) => {
+      let nextUser = null;
+      const nextRecords = records.map((item) => {
+        if (item.id !== req.userId) return item;
+        nextUser = {
+          ...item,
+          ...buildVisitActivityUpdate(item, nowIso, { incrementVisit }),
+          updatedAt: nowIso,
+        };
+        return nextUser;
+      });
+      return { records: nextRecords, value: nextUser };
+    });
+
+    if (!updated) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    invalidateUserCache(req.userId);
+    return res.json({
+      user: sanitizeUser(updated),
+      presence: {
+        incrementVisit,
+        onlineWindowMinutes: ONLINE_WINDOW_MINUTES,
+        activeWindowHours: ACTIVE_WINDOW_HOURS,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
 router.get("/me/activity", requireAuth, async (req, res) => {
   try {
     const events = await listAuthSecurityEvents({
@@ -682,6 +780,55 @@ router.get("/users", requireAuth, requireAdmin, async (req, res) => {
   return res.json({
     users: users.map(sanitizeUser),
   });
+});
+
+router.get("/users/activity", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const users = await readCollection("users");
+    const nowMs = Date.now();
+    const onlineThresholdMs = ONLINE_WINDOW_MINUTES * 60 * 1000;
+    const activeThresholdMs = ACTIVE_WINDOW_HOURS * 60 * 60 * 1000;
+    const today = toVisitDate();
+
+    const mapped = users.map((user) => {
+      const lastSeenAt = user?.lastSeenAt || null;
+      const lastSeenMs = new Date(lastSeenAt || 0).getTime();
+      const isOnline = Number.isFinite(lastSeenMs) && nowMs - lastSeenMs <= onlineThresholdMs;
+      const isActiveRecently = Number.isFinite(lastSeenMs) && nowMs - lastSeenMs <= activeThresholdMs;
+      const visitCountToday = String(user?.lastVisitDate || "") === today ? toNumber(user?.visitCountToday, 0) : 0;
+      const totalVisitCount = toNumber(user?.totalVisitCount, 0);
+      return {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        plan: user.plan,
+        subscriptionStatus: user.subscriptionStatus,
+        isActive: user.isActive !== false,
+        lastSeenAt,
+        isOnline,
+        isActiveRecently,
+        visitCountToday,
+        totalVisitCount,
+      };
+    }).sort((a, b) => {
+      if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+      return new Date(b.lastSeenAt || 0).getTime() - new Date(a.lastSeenAt || 0).getTime();
+    });
+
+    const summary = {
+      totalUsers: mapped.length,
+      onlineUsers: mapped.filter((u) => u.isOnline).length,
+      activeUsers: mapped.filter((u) => u.isActiveRecently).length,
+      visitsToday: mapped.reduce((sum, u) => sum + toNumber(u.visitCountToday, 0), 0),
+      onlineWindowMinutes: ONLINE_WINDOW_MINUTES,
+      activeWindowHours: ACTIVE_WINDOW_HOURS,
+    };
+
+    return res.json({ summary, users: mapped });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
 });
 
 router.get("/security-events", requireAuth, requireAdmin, async (req, res) => {

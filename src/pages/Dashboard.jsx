@@ -79,6 +79,13 @@ function hasActivePaidPlan(user) {
   return user?.subscriptionStatus === "ACTIVE" && ["PRO", "PREMIUM"].includes(user?.plan);
 }
 
+function formatLastSeen(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }).format(date);
+}
+
 const FEATURES = [
   {
     icon: "📈",
@@ -149,6 +156,7 @@ export default function Dashboard() {
   const [pendingPayments, setPendingPayments] = useState([]);
   const [paymentSettings, setPaymentSettings] = useState(null);
   const [users, setUsers] = useState([]);
+  const [userActivity, setUserActivity] = useState({ summary: null, users: [] });
   const [paymentForm, setPaymentForm] = useState(defaultPaymentForm);
   const [manualForm, setManualForm] = useState(defaultManualForm);
   const analyticsFetchedAtRef = useRef(0);
@@ -179,6 +187,11 @@ export default function Dashboard() {
   const hasPendingPayment = useMemo(() => myPayments.some((p) => p.status === "PENDING"), [myPayments]);
   const shouldShowPaymentForm = !paidPlanActive && !hasPendingPayment;
 
+  const userActivityMap = useMemo(() => {
+    const entries = (userActivity?.users || []).map((entry) => [entry.id, entry]);
+    return new Map(entries);
+  }, [userActivity]);
+
   useEffect(() => {
     if (subscriptionExpiresSoon && !expiryPromptDismissed) setShowExpiryPrompt(true);
     else setShowExpiryPrompt(false);
@@ -196,26 +209,27 @@ export default function Dashboard() {
   }, [availablePaymentMethods, availablePaymentSettings, availablePlans]);
 
 
-  const loadPublicData = useCallback(async () => {
-    // Phase 1: fast endpoints first so dashboard renders quickly
+  const loadPublicData = useCallback(async (options = {}) => {
+    const force = Boolean(options.force);
+    const withBust = (path) => force ? path + (path.includes("?") ? "&" : "?") + "_=" + Date.now() : path;
+
     const [overviewRes, stockOverviewRes] = await Promise.all([
-      apiFetch("/signals/stats/overview").catch(() => null),
-      apiFetch("/stocks/stats/overview").catch(() => null),
+      apiFetch(withBust("/signals/stats/overview")).catch(() => null),
+      apiFetch(withBust("/stocks/stats/overview")).catch(() => null),
     ]);
 
-    if (overviewRes?.stats)      setOverview(overviewRes.stats);
+    if (overviewRes?.stats) setOverview(overviewRes.stats);
     if (stockOverviewRes?.stats) setStockOverview(stockOverviewRes.stats);
     setLoading(false);
 
-    // Phase 2: heavier analytics/performance — defer and throttle
     const now = Date.now();
-    if (now - analyticsFetchedAtRef.current > ANALYTICS_REFRESH_MS) {
+    if (force || now - analyticsFetchedAtRef.current > ANALYTICS_REFRESH_MS) {
       analyticsFetchedAtRef.current = now;
       deferTask(async () => {
         const [analyticsRes, performanceRes, selfLearningRes] = await Promise.allSettled([
-          apiFetch("/signals/stats/analytics"),
-          apiFetch("/signals/stats/performance"),
-          apiFetch("/signals/engine/self-learning"),
+          apiFetch(withBust("/signals/stats/analytics")),
+          apiFetch(withBust("/signals/stats/performance")),
+          apiFetch(withBust("/signals/engine/self-learning")),
         ]);
         if (analyticsRes.status === "fulfilled" && analyticsRes.value?.analytics) {
           setAnalytics(analyticsRes.value.analytics);
@@ -232,22 +246,32 @@ export default function Dashboard() {
     return null;
   }, []);
 
-  const loadPrivateData = useCallback(async () => {
-    const privateRequests = [apiFetch("/payments/my"), apiFetch("/payments/settings")];
+  const loadPrivateData = useCallback(async (options = {}) => {
+    const force = Boolean(options.force);
+    const withBust = (path) => force ? path + (path.includes("?") ? "&" : "?") + "_=" + Date.now() : path;
+
+    const privateRequests = [apiFetch(withBust("/payments/my")), apiFetch(withBust("/payments/settings"))];
     if (isAdmin) {
-      privateRequests.push(apiFetch("/payments/pending"));
-      privateRequests.push(apiFetch("/auth/users"));
+      privateRequests.push(apiFetch(withBust("/payments/pending")));
+      privateRequests.push(apiFetch(withBust("/auth/users")));
+      privateRequests.push(apiFetch(withBust("/auth/users/activity")));
     }
+
     const results = await Promise.allSettled(privateRequests);
-    const [myPaymentsResult, paymentSettingsResult, pendingPaymentsResult, usersResult] = results;
+    const [myPaymentsResult, paymentSettingsResult, pendingPaymentsResult, usersResult, userActivityResult] = results;
     setMyPayments(myPaymentsResult?.status === "fulfilled" ? myPaymentsResult.value.payments || [] : []);
     setPaymentSettings(paymentSettingsResult?.status === "fulfilled" ? paymentSettingsResult.value.settings || null : null);
     if (isAdmin) {
       setPendingPayments(pendingPaymentsResult?.status === "fulfilled" ? pendingPaymentsResult.value.payments || [] : []);
       setUsers(usersResult?.status === "fulfilled" ? usersResult.value.users || [] : []);
+      setUserActivity(userActivityResult?.status === "fulfilled" ? {
+        summary: userActivityResult.value?.summary || null,
+        users: userActivityResult.value?.users || [],
+      } : { summary: null, users: [] });
     } else {
       setPendingPayments([]);
       setUsers([]);
+      setUserActivity({ summary: null, users: [] });
     }
     const rejected = results.find((r) => r.status === "rejected");
     return rejected ? rejected.reason : null;
@@ -285,8 +309,8 @@ export default function Dashboard() {
   async function refreshWithFeedback(msg) {
     setFeedback(msg);
     setTimeout(() => setFeedback(""), 4000);
-    const pe = await loadPublicData();
-    const pve = await loadPrivateData();
+    const pe = await loadPublicData({ force: true });
+    const pve = await loadPrivateData({ force: true });
     setError(pe?.message || pve?.message || "");
     await refreshUser();
   }
@@ -1032,10 +1056,16 @@ export default function Dashboard() {
         <section className="panel">
           <div className="panel-header">
             <div><span className="eyebrow">Admin</span><h2>User management</h2></div>
+            <div className="button-row">
             <span className="pill pill-neutral">{users.length} users</span>
+            <span className="pill pill-success">Online {userActivity?.summary?.onlineUsers ?? 0}</span>
+            <span className="pill pill-warning">Active {userActivity?.summary?.activeUsers ?? 0}</span>
+            <span className="pill pill-accent">Visits today {userActivity?.summary?.visitsToday ?? 0}</span>
+          </div>
           </div>
           <div className="list-stack">
             {users.map((account) => {
+              const activity = userActivityMap.get(account.id) || null;
               const expiryLabel = formatSubscriptionEndsAt(account.subscriptionEndsAt);
               const expiryDate = account.subscriptionEndsAt ? new Date(account.subscriptionEndsAt) : null;
               const isExpired = expiryDate && !Number.isNaN(expiryDate.getTime()) && expiryDate.getTime() < Date.now();
@@ -1045,6 +1075,8 @@ export default function Dashboard() {
                   <div>
                     <strong>{account.email}</strong>
                     <span>{account.role} • {account.plan} • {account.subscriptionStatus}</span>
+                    <span>{activity?.isOnline ? "Online now" : "Last seen " + formatLastSeen(activity?.lastSeenAt)}</span>
+                    <span>{"Visits today: " + (activity?.visitCountToday ?? 0) + " • Total visits: " + (activity?.totalVisitCount ?? 0)}</span>
                     <span className={`pill ${expiryLabel ? (isExpired ? "pill-danger" : expiresSoon ? "pill-warning" : "pill-neutral") : "pill-neutral"}`}>
                       {expiryLabel ? `${isExpired ? "Expired" : "Expires"} ${expiryLabel}` : "No expiry set"}
                     </span>

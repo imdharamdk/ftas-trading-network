@@ -43,6 +43,17 @@ function TabBtn({ active, children, onClick }) {
   );
 }
 
+function LoadingTiles({ count = 6 }) {
+  return (
+    <div className="skeleton-grid">
+      {Array.from({ length: count }).map((_, index) => (
+        <div key={index} className="skeleton-tile" />
+      ))}
+    </div>
+  );
+}
+
+
 /* ══════════════════════════════════════════════════════════════════════════════
    CRYPTO TAB
 ══════════════════════════════════════════════════════════════════════════════ */
@@ -366,7 +377,7 @@ function CryptoTab() {
               })}
             </div>
           ) : (
-            <div className="empty-state">{tickersLoading ? "Loading..." : `No coins found${coinSearch ? ` for "${coinSearch}"` : ""}.`}</div>
+            tickersLoading ? <LoadingTiles count={6} /> : <div className="empty-state">{`No coins found${coinSearch ? ` for "${coinSearch}"` : ""}.`}</div>
           )}
         </div>
         <div className="signal-view-desktop">
@@ -576,7 +587,7 @@ function StocksTab() {
               ))}
             </div>
           ) : (
-            <div className="empty-state">{instrumentsLoading ? "Loading instruments..." : "No instruments found."}</div>
+            instrumentsLoading ? <LoadingTiles count={6} /> : <div className="empty-state">No instruments found.</div>
           )}
         </div>
 
@@ -609,7 +620,7 @@ function StocksTab() {
                     </td>
                   </tr>
                 )) : (
-                  <tr><td className="empty-row" colSpan="7">{instrumentsLoading ? "Loading..." : "No instruments found."}</td></tr>
+                  <tr><td className="empty-row" colSpan="7">{instrumentsLoading ? "Loading instruments..." : "No instruments found."}</td></tr>
                 )}
               </tbody>
             </table>
@@ -653,7 +664,7 @@ export default function Market() {
       subtitle="Crypto (Binance Futures) aur Indian stocks (NSE / BSE / NFO / MCX) — dono ek jagah."
       title="Signal Scanner"
     >
-      <div style={{ display: "flex", gap: "10px", marginBottom: "24px", flexWrap: "wrap" }}>
+      <div className="market-tabs">
         <TabBtn active={tab === "crypto"} onClick={() => setTab("crypto")}>💹 Crypto Pairs</TabBtn>
         <TabBtn active={tab === "stocks"} onClick={() => setTab("stocks")}>🇮🇳 Indian Stocks</TabBtn>
       </div>

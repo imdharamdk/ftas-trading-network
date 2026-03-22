@@ -1350,3 +1350,34 @@ h1, h2, h3 { letter-spacing: -0.03em; line-height: 1.2; }
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+/* ─── Dashboard/Market polish additions ─────────────────────────────────── */
+.market-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+.skeleton-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.skeleton-tile {
+  border-radius: 12px;
+  min-height: 86px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.12), rgba(255,255,255,0.04));
+  background-size: 220% 100%;
+  animation: shimmer 1.2s linear infinite;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+@media (min-width: 640px) {
+  .skeleton-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 479px) {
+  .skeleton-grid { grid-template-columns: 1fr; }
+}

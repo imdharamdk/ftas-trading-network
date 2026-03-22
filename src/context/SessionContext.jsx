@@ -46,6 +46,41 @@ export function SessionProvider({ children }) {
     };
   }, [token]);
 
+  useEffect(() => {
+    if (!token) return undefined;
+
+    let mounted = true;
+
+    const pingPresence = () => {
+      apiFetch("/auth/presence", { method: "POST", token })
+        .then((data) => {
+          if (!mounted) return;
+          if (data?.user) {
+            storeSession(token, data.user);
+            startTransition(() => setUser(data.user));
+          }
+        })
+        .catch(() => {});
+    };
+
+    pingPresence();
+    const intervalId = setInterval(pingPresence, 60 * 1000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") pingPresence();
+    };
+    const onFocus = () => pingPresence();
+
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      mounted = false;
+      clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [token]);
+
   async function login(credentials) {
     const data = await apiFetch("/auth/login", {
       method: "POST",

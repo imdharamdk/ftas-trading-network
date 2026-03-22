@@ -154,6 +154,7 @@ function createUser({
   privacyAcceptedAt = null,
 }) {
   const now = new Date().toISOString();
+  const visitDate = now.slice(0, 10);
 
   return {
     id: createId("usr"),
@@ -170,6 +171,10 @@ function createUser({
     subscriptionEndsAt,
     termsAcceptedAt,
     privacyAcceptedAt,
+    lastSeenAt: now,
+    lastVisitDate: visitDate,
+    visitCountToday: 1,
+    totalVisitCount: 1,
     createdAt: now,
     updatedAt: now,
   };

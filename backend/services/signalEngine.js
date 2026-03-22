@@ -1094,10 +1094,48 @@ async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = nu
   const htf = { daily: analyses["1h"] || null, twelveH: null, fourH: null, oneH: analyses["1h"] || null };
   const tradeTimeframes = getTradeTimeframes();
   const candidates = tradeTimeframes
-    .map((tf) => {
-      if (!analyses[tf]) return null;
+    .flatMap((tf) => {
+      if (!analyses[tf]) return [];
+
       const bias = getHigherTimeframeBias(analyses, tf);
-      return buildCandidate(coin, tf, analyses[tf], bias, htf, marketActivity, performanceSnapshot, selfLearningModel);
+      const bySide = {
+        LONG: buildCandidate(coin, tf, analyses[tf], "BULLISH", htf, marketActivity, performanceSnapshot, selfLearningModel),
+        SHORT: buildCandidate(coin, tf, analyses[tf], "BEARISH", htf, marketActivity, performanceSnapshot, selfLearningModel),
+      };
+
+      const picked = [];
+      if (bias === "BULLISH") {
+        if (bySide.LONG) picked.push(bySide.LONG);
+        if (bySide.SHORT && bySide.SHORT.confidence >= 88) {
+          picked.push({
+            ...bySide.SHORT,
+            confidence: Math.max(0, bySide.SHORT.confidence - 4),
+            scanMeta: {
+              ...(bySide.SHORT.scanMeta || {}),
+              counterTrend: true,
+              baseBias: bias,
+            },
+          });
+        }
+      } else if (bias === "BEARISH") {
+        if (bySide.SHORT) picked.push(bySide.SHORT);
+        if (bySide.LONG && bySide.LONG.confidence >= 88) {
+          picked.push({
+            ...bySide.LONG,
+            confidence: Math.max(0, bySide.LONG.confidence - 4),
+            scanMeta: {
+              ...(bySide.LONG.scanMeta || {}),
+              counterTrend: true,
+              baseBias: bias,
+            },
+          });
+        }
+      } else {
+        if (bySide.LONG && bySide.LONG.confidence >= 84) picked.push(bySide.LONG);
+        if (bySide.SHORT && bySide.SHORT.confidence >= 84) picked.push(bySide.SHORT);
+      }
+
+      return picked;
     })
     .filter(Boolean);
 

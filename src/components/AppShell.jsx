@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useSession } from "../context/useSession";
 import ChatBox from "./ChatBox";
 
@@ -27,7 +27,6 @@ const SIDEBAR_EXTRA = [{ to: "/settings", icon: "⚙️", label: "Settings" }];
 
 export default function AppShell({ actions = null, children, subtitle, title }) {
   const { logout, user } = useSession();
-  const location = useLocation();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
@@ -42,8 +41,6 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
 
   const close = () => setOpen(false);
   const toggle = () => setOpen((o) => !o);
-
-  const isAdminPage = location.pathname.startsWith("/settings");
 
   const allCommands = useMemo(() => {
     const base = [...NAV_ITEMS, ...SIDEBAR_EXTRA];
@@ -269,17 +266,10 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
           </NavLink>
         ))}
 
-        {isAdmin ? (
-          <button type="button" onClick={toggle} className={`bottom-nav-item${isAdminPage ? " active" : ""}`}>
-            <span className="nav-icon">🛠️</span>
-            <span>Admin</span>
-          </button>
-        ) : (
-          <NavLink to="/settings" className={({ isActive }) => `bottom-nav-item${isActive ? " active" : ""}`}>
-            <span className="nav-icon">⚙️</span>
-            <span>Settings</span>
-          </NavLink>
-        )}
+        <NavLink to="/settings" className={({ isActive }) => `bottom-nav-item${isActive ? " active" : ""}`}>
+          <span className="nav-icon">⚙️</span>
+          <span>Settings</span>
+        </NavLink>
       </nav>
 
       {commandOpen ? (
