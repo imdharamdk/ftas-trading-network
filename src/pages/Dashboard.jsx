@@ -43,6 +43,7 @@ const fallbackPaymentSettings = {
 const EXPIRY_PROMPT_STORAGE_KEY = "ftas_expiry_prompt_dismissed";
 const ANALYTICS_REFRESH_MS = 10 * 60 * 1000;
 const MISSED_SIGNALS_LAST_SEEN_KEY = "ftas_missed_signals_last_seen";
+const ASSISTANT_LANGUAGE_KEY = "ftas_assistant_language";
 
 function deferTask(fn) {
   if (typeof window !== "undefined" && "requestIdleCallback" in window) {
@@ -162,6 +163,11 @@ export default function Dashboard() {
   const [assistantQuery, setAssistantQuery] = useState("");
   const [assistantResponse, setAssistantResponse] = useState(null);
   const [assistantBusy, setAssistantBusy] = useState(false);
+  const [assistantLanguage, setAssistantLanguage] = useState(() => {
+    if (typeof window === "undefined") return "hinglish";
+    const saved = String(window.localStorage.getItem(ASSISTANT_LANGUAGE_KEY) || "hinglish").toLowerCase();
+    return ["en", "hinglish", "hi"].includes(saved) ? saved : "hinglish";
+  });
   const analyticsFetchedAtRef = useRef(0);
 
   const [missedSignals, setMissedSignals] = useState([]);
@@ -185,6 +191,15 @@ export default function Dashboard() {
   const [actionBusy, setActionBusy] = useState("");
 
   const availablePaymentSettings = useMemo(() => paymentSettings || fallbackPaymentSettings, [paymentSettings]);
+  const assistantQuickQueries = useMemo(() => {
+    if (assistantLanguage === "hi") {
+      return ["abhi sabse kam jokhim setup", "haal ka pradarshan", "engine sthiti"];
+    }
+    if (assistantLanguage === "en") {
+      return ["best low-risk setup now", "recent performance", "engine status"];
+    }
+    return ["best low-risk setup now", "recent performance", "engine status"];
+  }, [assistantLanguage]);
   const availablePaymentMethods = useMemo(() => availablePaymentSettings.paymentMethods || [], [availablePaymentSettings]);
   const availablePlans = useMemo(() => availablePaymentSettings.plans || [], [availablePaymentSettings]);
   const hasPendingPayment = useMemo(() => myPayments.some((p) => p.status === "PENDING"), [myPayments]);
@@ -199,6 +214,11 @@ export default function Dashboard() {
     if (subscriptionExpiresSoon && !expiryPromptDismissed) setShowExpiryPrompt(true);
     else setShowExpiryPrompt(false);
   }, [subscriptionExpiresSoon, expiryPromptDismissed]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(ASSISTANT_LANGUAGE_KEY, assistantLanguage);
+  }, [assistantLanguage]);
 
 
   useEffect(() => {
@@ -479,7 +499,7 @@ export default function Dashboard() {
     try {
       const response = await apiFetch("/chat/assistant", {
         method: "POST",
-        body: { query },
+        body: { query, language: assistantLanguage },
         timeoutMs: 30000,
       });
       setAssistantResponse(response || null);
@@ -535,6 +555,14 @@ export default function Dashboard() {
           <span className="pill pill-accent">Beta</span>
         </div>
         <div className="form-grid" style={{ gridTemplateColumns: "1fr auto", alignItems: "end" }}>
+          <label>
+            <span>Language</span>
+            <select value={assistantLanguage} onChange={(e) => setAssistantLanguage(e.target.value)}>
+              <option value="hinglish">Hinglish</option>
+              <option value="hi">Hindi</option>
+              <option value="en">English</option>
+            </select>
+          </label>
           <label className="form-span-2">
             <span>Ask from live engine state</span>
             <input
@@ -545,7 +573,7 @@ export default function Dashboard() {
             />
           </label>
           <div className="button-row" style={{ marginTop: 4 }}>
-            {["best low-risk setup now", "recent performance", "engine status"].map((q) => (
+            {assistantQuickQueries.map((q) => (
               <button className="button button-ghost" key={q} onClick={() => handleAssistantAsk(q)} type="button">{q}</button>
             ))}
           </div>

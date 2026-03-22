@@ -11,6 +11,19 @@ const MAX_MESSAGES = 200; // keep last 200 messages in store
 const MAX_ASSISTANT_QUERY = 300;
 const ASSISTANT_SIGNAL_READ_TIMEOUT_MS = 5000;
 
+function normalizeAssistantLanguage(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "hi" || raw === "hindi") return "hi";
+  if (raw === "hinglish") return "hinglish";
+  return "en";
+}
+
+function inLang(language, enText, hinglishText, hiText) {
+  if (language === "hi") return hiText || hinglishText || enText;
+  if (language === "hinglish") return hinglishText || enText;
+  return enText;
+}
+
 function toNumber(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -63,57 +76,101 @@ function hasAnyKeyword(text, keywords) {
   return keywords.some((k) => text.includes(k));
 }
 
-function buildAssistantAnswer({ query, activeSignals, recentStats, engineStatus, selfLearningStatus }) {
+function buildAssistantAnswer({ query, language, activeSignals, recentStats, engineStatus, selfLearningStatus }) {
   const q = String(query || "").toLowerCase();
   const normalized = q.replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
   const activeCount = activeSignals.length;
   const topSignal = pickBestLowRiskSignal(activeSignals);
-  const runningText = engineStatus?.running ? "running" : "stopped";
+  const runningText = engineStatus?.running
+    ? inLang(language, "running", "running", "chalu")
+    : inLang(language, "stopped", "stopped", "ruka hua");
 
-  const summaryLine = `Engine is ${runningText}; ${activeCount} active signals; recent-30 win rate ${recentStats.winRate ?? "N/A"}%.`;
+  const summaryLine = inLang(
+    language,
+    `Engine is ${runningText}; ${activeCount} active signals; recent-30 win rate ${recentStats.winRate ?? "N/A"}%.`,
+    `Engine ${runningText} hai; ${activeCount} active signals; recent-30 win rate ${recentStats.winRate ?? "N/A"}%.`,
+    `Engine ${runningText} hai; ${activeCount} sakriya sanket; pichhle 30 ka win rate ${recentStats.winRate ?? "N/A"}%.`
+  );
 
   if (hasAnyKeyword(normalized, ["hi", "hello", "hey", "namaste", "good morning", "good evening"])) {
     return {
-      answer: "Hi. I am FTAS Assistant. I can help with signals, performance, scanner status, and platform usage.",
+      answer: inLang(
+        language,
+        "Hi. I am FTAS Assistant. I can help with signals, performance, scanner status, and platform usage.",
+        "Hi. Main FTAS Assistant hoon. Main signals, performance, scanner status aur platform usage me help kar sakta hoon.",
+        "Namaste. Main FTAS Sahayak hoon. Main sanket, pradarshan, scanner sthiti aur platform upyog me madad kar sakta hoon."
+      ),
       bullets: [
-        "Ask: 'best low-risk setup now'",
-        "Ask: 'recent performance'",
-        "Ask: 'engine status'",
+        inLang(language, "Ask: 'best low-risk setup now'", "Pucho: 'best low-risk setup now'", "Poochhein: 'abhi sabse kam jokhim setup'"),
+        inLang(language, "Ask: 'recent performance'", "Pucho: 'recent performance'", "Poochhein: 'haal ka pradarshan'"),
+        inLang(language, "Ask: 'engine status'", "Pucho: 'engine status'", "Poochhein: 'engine sthiti'"),
       ],
     };
   }
 
   if (hasAnyKeyword(normalized, ["how are you", "kaise ho", "kese ho"])) {
     return {
-      answer: "I am operational and connected to live FTAS engine data.",
+      answer: inLang(
+        language,
+        "I am operational and connected to live FTAS engine data.",
+        "Main operational hoon aur live FTAS engine data se connected hoon.",
+        "Main sakriya hoon aur live FTAS engine data se juda hoon."
+      ),
       bullets: [summaryLine],
     };
   }
 
   if (hasAnyKeyword(normalized, ["thanks", "thank you", "thx", "shukriya"])) {
     return {
-      answer: "You're welcome.",
-      bullets: ["You can ask another question about signals or dashboard actions."],
+      answer: inLang(language, "You're welcome.", "Welcome ji.", "Aapka swagat hai."),
+      bullets: [
+        inLang(
+          language,
+          "You can ask another question about signals or dashboard actions.",
+          "Aap signals ya dashboard actions par next question puch sakte ho.",
+          "Aap sanket ya dashboard kriyaon par agla prashn pooch sakte hain."
+        ),
+      ],
     };
   }
 
   if (hasAnyKeyword(normalized, ["who are you", "what are you", "tum kaun", "aap kaun"])) {
     return {
-      answer: "I am the FTAS in-dashboard assistant.",
+      answer: inLang(
+        language,
+        "I am the FTAS in-dashboard assistant.",
+        "Main FTAS ka in-dashboard assistant hoon.",
+        "Main FTAS ka dashboard sahayak hoon."
+      ),
       bullets: [
-        "I use live FTAS signal and engine state for answers.",
-        "I do not place orders; I only guide using current platform data.",
+        inLang(
+          language,
+          "I use live FTAS signal and engine state for answers.",
+          "Main answers ke liye live FTAS signal aur engine state use karta hoon.",
+          "Main uttaron ke liye live FTAS sanket aur engine sthiti ka upyog karta hoon."
+        ),
+        inLang(
+          language,
+          "I do not place orders; I only guide using current platform data.",
+          "Main orders place nahi karta; sirf current platform data se guide karta hoon.",
+          "Main order nahi lagata; sirf vartaman platform data ke aadhar par margdarshan deta hoon."
+        ),
       ],
     };
   }
 
   if (hasAnyKeyword(normalized, ["help", "what can you do", "commands", "options"])) {
     return {
-      answer: "I can answer both basic conversation and trading dashboard questions.",
+      answer: inLang(
+        language,
+        "I can answer both basic conversation and trading dashboard questions.",
+        "Main basic conversation aur trading dashboard dono questions ka answer de sakta hoon.",
+        "Main samanya baatcheet aur trading dashboard dono prashnon ka uttar de sakta hoon."
+      ),
       bullets: [
-        "Conversation: hi, how are you, thanks.",
-        "Trading: best low-risk setup, win rate, drawdown.",
-        "System: scanner status, last run, generated count.",
+        inLang(language, "Conversation: hi, how are you, thanks.", "Conversation: hi, how are you, thanks.", "Baatcheet: namaste, kaise ho, dhanyavaad."),
+        inLang(language, "Trading: best low-risk setup, win rate, drawdown.", "Trading: best low-risk setup, win rate, drawdown.", "Trading: kam jokhim setup, win rate, drawdown."),
+        inLang(language, "System: scanner status, last run, generated count.", "System: scanner status, last run, generated count.", "System: scanner sthiti, pichhla run, generated count."),
       ],
     };
   }
@@ -121,10 +178,25 @@ function buildAssistantAnswer({ query, activeSignals, recentStats, engineStatus,
   if (normalized.includes("best") || normalized.includes("low") || normalized.includes("risk")) {
     if (!topSignal) {
       return {
-        answer: `${summaryLine} No active setup is available right now for a low-risk pick.`,
+        answer: inLang(
+          language,
+          `${summaryLine} No active setup is available right now for a low-risk pick.`,
+          `${summaryLine} Abhi low-risk pick ke liye koi active setup available nahi hai.`,
+          `${summaryLine} Is samay kam jokhim chunav ke liye koi sakriya setup uplabdh nahi hai.`
+        ),
         bullets: [
-          "Wait for next scan cycle and check highest-confidence setups.",
-          "Prefer lower leverage with strong confirmation stack.",
+          inLang(
+            language,
+            "Wait for next scan cycle and check highest-confidence setups.",
+            "Next scan cycle ka wait karo aur highest-confidence setups check karo.",
+            "Agli scan cycle ka intezar karein aur sabse uchch confidence setup dekhein."
+          ),
+          inLang(
+            language,
+            "Prefer lower leverage with strong confirmation stack.",
+            "Lower leverage aur strong confirmation stack ko prefer karo.",
+            "Kam leverage aur majboot confirmation stack ko prathmikta dein."
+          ),
         ],
       };
     }
@@ -134,40 +206,77 @@ function buildAssistantAnswer({ query, activeSignals, recentStats, engineStatus,
     const reasons = Array.isArray(topSignal.confirmations) ? topSignal.confirmations.slice(0, 3) : [];
 
     return {
-      answer:
+      answer: inLang(
+        language,
         `${summaryLine} Best low-risk candidate now: ${topSignal.coin} ${topSignal.side} (${topSignal.timeframe}) at ${conf}% confidence and ${lev}x leverage.`,
-      bullets: reasons.length ? reasons : ["Strong multi-indicator alignment", "Trend and momentum filters passed"],
+        `${summaryLine} Abhi best low-risk candidate: ${topSignal.coin} ${topSignal.side} (${topSignal.timeframe}), confidence ${conf}% aur leverage ${lev}x.`,
+        `${summaryLine} Vartaman sabse kam jokhim vikalp: ${topSignal.coin} ${topSignal.side} (${topSignal.timeframe}), confidence ${conf}% aur leverage ${lev}x.`
+      ),
+      bullets: reasons.length ? reasons : [
+        inLang(language, "Strong multi-indicator alignment", "Strong multi-indicator alignment", "Majboot multi-indicator samanvay"),
+        inLang(language, "Trend and momentum filters passed", "Trend aur momentum filters pass hue", "Trend aur momentum filters safal hue"),
+      ],
     };
   }
 
   if (normalized.includes("win rate") || normalized.includes("performance") || normalized.includes("drawdown")) {
     const riskMode = recentStats.winRate !== null && recentStats.winRate <= 46 ? "RISK-OFF" : "BALANCED";
     return {
-      answer: `${summaryLine} Current mode is ${riskMode}.`,
+      answer: inLang(
+        language,
+        `${summaryLine} Current mode is ${riskMode}.`,
+        `${summaryLine} Current mode ${riskMode} hai.`,
+        `${summaryLine} Vartaman mode ${riskMode} hai.`
+      ),
       bullets: [
-        `Recent closed trades: ${recentStats.total} (${recentStats.wins}W / ${recentStats.losses}L).`,
-        `Self-learning: ${selfLearningStatus?.enabled ? "enabled" : "disabled"}.`,
-        "If drawdown continues, keep confidence floor high and reduce frequency.",
+        inLang(
+          language,
+          `Recent closed trades: ${recentStats.total} (${recentStats.wins}W / ${recentStats.losses}L).`,
+          `Recent closed trades: ${recentStats.total} (${recentStats.wins}W / ${recentStats.losses}L).`,
+          `Haal ke closed trades: ${recentStats.total} (${recentStats.wins}W / ${recentStats.losses}L).`
+        ),
+        inLang(
+          language,
+          `Self-learning: ${selfLearningStatus?.enabled ? "enabled" : "disabled"}.`,
+          `Self-learning: ${selfLearningStatus?.enabled ? "enabled" : "disabled"}.`,
+          `Self-learning: ${selfLearningStatus?.enabled ? "enabled" : "disabled"}.`
+        ),
+        inLang(
+          language,
+          "If drawdown continues, keep confidence floor high and reduce frequency.",
+          "Agar drawdown continue ho, confidence floor high rakho aur frequency kam karo.",
+          "Yadi drawdown jaari rahe, confidence floor uchch rakhein aur frequency kam karein."
+        ),
       ],
     };
   }
 
   if (normalized.includes("status") || normalized.includes("scanner") || normalized.includes("engine")) {
     return {
-      answer: `${summaryLine} Scanner last run: ${engineStatus?.lastScanAt || "N/A"}.`,
+      answer: inLang(
+        language,
+        `${summaryLine} Scanner last run: ${engineStatus?.lastScanAt || "N/A"}.`,
+        `${summaryLine} Scanner last run: ${engineStatus?.lastScanAt || "N/A"}.`,
+        `${summaryLine} Scanner ka pichhla run: ${engineStatus?.lastScanAt || "N/A"}.`
+      ),
       bullets: [
-        `Scan count: ${toNumber(engineStatus?.scanCount)}.`,
-        `Last generated: ${toNumber(engineStatus?.lastGenerated)} signals.`,
-        `Last error: ${engineStatus?.lastError || "none"}.`,
+        inLang(language, `Scan count: ${toNumber(engineStatus?.scanCount)}.`, `Scan count: ${toNumber(engineStatus?.scanCount)}.`, `Scan count: ${toNumber(engineStatus?.scanCount)}.`),
+        inLang(language, `Last generated: ${toNumber(engineStatus?.lastGenerated)} signals.`, `Last generated: ${toNumber(engineStatus?.lastGenerated)} signals.`, `Last generated: ${toNumber(engineStatus?.lastGenerated)} sanket.`),
+        inLang(language, `Last error: ${engineStatus?.lastError || "none"}.`, `Last error: ${engineStatus?.lastError || "none"}.`, `Pichhli truti: ${engineStatus?.lastError || "none"}.`),
       ],
     };
   }
 
   return {
-    answer: "I can handle basic chat and FTAS platform questions.",
+    answer: inLang(
+      language,
+      "I can handle basic chat and FTAS platform questions.",
+      "Main basic chat aur FTAS platform questions handle kar sakta hoon.",
+      "Main samanya baatcheet aur FTAS platform prashn sambhal sakta hoon."
+    ),
     bullets: [
-      "Try: hi, who are you, help.",
-      "Try: best low-risk setup now, recent performance, engine status.",
+      inLang(language, "Try: hi, who are you, help.", "Try: hi, who are you, help.", "Poochhein: namaste, aap kaun ho, help."),
+      inLang(language, "Try: best low-risk setup now, recent performance, engine status.", "Try: best low-risk setup now, recent performance, engine status.", "Poochhein: best low-risk setup, recent performance, engine status."),
       summaryLine,
     ],
   };
@@ -228,6 +337,7 @@ router.post("/assistant", requireAuth, async (req, res) => {
   try {
     const query = String(req.body?.query || "").trim().slice(0, MAX_ASSISTANT_QUERY);
     if (!query) return res.status(400).json({ message: "query is required" });
+    const language = normalizeAssistantLanguage(req.body?.language);
 
     const signals = await readSignalsWithTimeout();
     const activeSignals = (signals || []).filter((s) => s.status === "ACTIVE");
@@ -237,6 +347,7 @@ router.post("/assistant", requireAuth, async (req, res) => {
 
     const response = buildAssistantAnswer({
       query,
+      language,
       activeSignals,
       recentStats,
       engineStatus,
@@ -248,6 +359,7 @@ router.post("/assistant", requireAuth, async (req, res) => {
       bullets: response.bullets || [],
       meta: {
         generatedAt: new Date().toISOString(),
+        language,
         activeSignals: activeSignals.length,
         recent30WinRate: recentStats.winRate,
       },
