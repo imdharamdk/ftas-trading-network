@@ -57,6 +57,8 @@ const REENTRY_COOLDOWN_ENABLED = String(process.env.CRYPTO_REENTRY_COOLDOWN_ENAB
 const REENTRY_COOLDOWN_MINUTES = Math.max(15, Number(process.env.CRYPTO_REENTRY_COOLDOWN_MINUTES || 90));
 const SR_ROOM_GUARD_ENABLED = String(process.env.CRYPTO_SR_ROOM_GUARD_ENABLED || "true").toLowerCase() !== "false";
 const SR_ROOM_MIN_R = Math.min(2.0, Math.max(0.25, Number(process.env.CRYPTO_SR_ROOM_MIN_R || 0.55)));
+const MID_TF_ALIGNMENT_GUARD_ENABLED = String(process.env.CRYPTO_MID_TF_ALIGNMENT_GUARD_ENABLED || "true").toLowerCase() !== "false";
+const MID_TF_ALIGNMENT_MIN_ADX = Math.max(8, Number(process.env.CRYPTO_MID_TF_ALIGNMENT_MIN_ADX || 14));
 const TF_THROTTLE_MIN_SAMPLE = Math.max(10, Number(process.env.CRYPTO_TF_THROTTLE_MIN_SAMPLE || 20));
 const TF_THROTTLE_WEAK_WINRATE = Math.min(55, Math.max(25, Number(process.env.CRYPTO_TF_THROTTLE_WEAK_WINRATE || 40)));
 const TF_THROTTLE_BLOCK_WINRATE = Math.min(TF_THROTTLE_WEAK_WINRATE - 1, Math.max(15, Number(process.env.CRYPTO_TF_THROTTLE_BLOCK_WINRATE || 30)));
@@ -837,7 +839,7 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const stochK = stochRsi?.k ?? null;
   const kdK    = stochKD?.k  ?? null;
   const kdD    = stochKD?.d  ?? null;
-  const { daily, oneH } = htf;
+  const { daily, oneH, fifteenM, thirtyM } = htf;
   const dailyTrend     = daily?.trend || {};
   const dailyBearStack = (dailyTrend.ema50||0) < (dailyTrend.ema100||0) && (dailyTrend.adx||0) >= 16;
   const dailyBullStack = (dailyTrend.ema50||0) > (dailyTrend.ema100||0) && (dailyTrend.adx||0) >= 16;
@@ -881,6 +883,24 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
     const lastLossAt = Number(performanceSnapshot.lastLossAtByCoinSideTimeframe?.[key] || 0);
     const cooldownMs = REENTRY_COOLDOWN_MINUTES * 60 * 1000;
     if (lastLossAt > 0 && (Date.now() - lastLossAt) < cooldownMs) return null;
+  }
+
+  if (MID_TF_ALIGNMENT_GUARD_ENABLED && (timeframe === "1m" || timeframe === "5m")) {
+    const midRefs = [fifteenM, thirtyM].filter(Boolean);
+    let aligned = 0;
+    let checked = 0;
+    for (const mid of midRefs) {
+      const mTrend = mid?.trend || {};
+      const mEma50 = Number(mTrend.ema50 || 0);
+      const mEma100 = Number(mTrend.ema100 || 0);
+      const mAdx = Number(mTrend.adx || 0);
+      if (!mEma50 || !mEma100 || mAdx < MID_TF_ALIGNMENT_MIN_ADX) continue;
+      checked += 1;
+      const isBull = mEma50 > mEma100;
+      const isBear = mEma50 < mEma100;
+      if ((side === "LONG" && isBull) || (side === "SHORT" && isBear)) aligned += 1;
+    }
+    if (checked > 0 && aligned === 0) return null;
   }
 
   // GATE 2: Core EMA Trend — ema50 > ema100 required; ema200 alignment is bonus not gate
@@ -1213,7 +1233,14 @@ async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = nu
     return true;
   });
 
-  const htf = { daily: analyses["1h"] || null, twelveH: null, fourH: null, oneH: analyses["1h"] || null };
+  const htf = {
+    daily: analyses["1h"] || null,
+    twelveH: null,
+    fourH: null,
+    oneH: analyses["1h"] || null,
+    fifteenM: analyses["15m"] || null,
+    thirtyM: analyses["30m"] || null,
+  };
   const isSidePausedForCoin = (side) => {
     const key = buildCoinSideKey(coin, side);
     if (!key) return false;
