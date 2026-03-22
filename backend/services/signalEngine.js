@@ -55,6 +55,8 @@ const AUTO_TF_COOLDOWN_WINDOW = Math.max(3, Number(process.env.CRYPTO_AUTO_TF_CO
 const AUTO_TF_COOLDOWN_MIN_LOSSES = Math.min(AUTO_TF_COOLDOWN_WINDOW, Math.max(3, Number(process.env.CRYPTO_AUTO_TF_COOLDOWN_MIN_LOSSES || 4)));
 const REENTRY_COOLDOWN_ENABLED = String(process.env.CRYPTO_REENTRY_COOLDOWN_ENABLED || "true").toLowerCase() !== "false";
 const REENTRY_COOLDOWN_MINUTES = Math.max(15, Number(process.env.CRYPTO_REENTRY_COOLDOWN_MINUTES || 90));
+const SR_ROOM_GUARD_ENABLED = String(process.env.CRYPTO_SR_ROOM_GUARD_ENABLED || "true").toLowerCase() !== "false";
+const SR_ROOM_MIN_R = Math.min(2.0, Math.max(0.25, Number(process.env.CRYPTO_SR_ROOM_MIN_R || 0.55)));
 const TF_THROTTLE_MIN_SAMPLE = Math.max(10, Number(process.env.CRYPTO_TF_THROTTLE_MIN_SAMPLE || 20));
 const TF_THROTTLE_WEAK_WINRATE = Math.min(55, Math.max(25, Number(process.env.CRYPTO_TF_THROTTLE_WEAK_WINRATE || 40)));
 const TF_THROTTLE_BLOCK_WINRATE = Math.min(TF_THROTTLE_WEAK_WINRATE - 1, Math.max(15, Number(process.env.CRYPTO_TF_THROTTLE_BLOCK_WINRATE || 30)));
@@ -1102,6 +1104,15 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const targets         = calculateTargets(side, analysis, timeframe);
   const leverage        = calculateLeverage(analysis, confidence, timeframe);
   if (!Number.isFinite(targets.riskPerUnit) || targets.riskPerUnit <= 0) return null;
+  let srRoomR = null;
+  if (SR_ROOM_GUARD_ENABLED) {
+    if (side === "LONG" && Number.isFinite(srRes) && srRes > targets.entry) {
+      srRoomR = (srRes - targets.entry) / targets.riskPerUnit;
+    } else if (side === "SHORT" && Number.isFinite(srSup) && srSup < targets.entry) {
+      srRoomR = (targets.entry - srSup) / targets.riskPerUnit;
+    }
+    if (srRoomR !== null && srRoomR < SR_ROOM_MIN_R) return null;
+  }
   const atrPercent = price > 0 ? (atr / price) * 100 : 0;
   if (VOL_GUARD_ENABLED) {
     const volBand = getVolatilityBand(timeframe);
@@ -1138,6 +1149,7 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
       marketTradeCount: roundPrice(activeMarket.tradeCount),
       marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
       atrPercent: roundPrice(atrPercent),
+      srRoomR: srRoomR === null ? null : roundPrice(srRoomR),
       modelVersion: SIGNAL_MODEL_VERSION + "+" + engineState.selfLearning.version + "+" + (selfLearningModel?.localModel?.version || "local_nb_v1"),
       qualityGuard: {
         scoreBoost: adaptiveQuality.scoreBoost,
