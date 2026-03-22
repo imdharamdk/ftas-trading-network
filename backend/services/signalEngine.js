@@ -74,6 +74,8 @@ const COUNTER_TREND_DRAWDOWN_MIN_SAMPLE = Math.max(8, Number(process.env.CRYPTO_
 const COUNTER_TREND_DRAWDOWN_WINRATE = Math.min(55, Math.max(30, Number(process.env.CRYPTO_COUNTER_TREND_DRAWDOWN_WINRATE || 48)));
 const SHOCK_CANDLE_GUARD_ENABLED = String(process.env.CRYPTO_SHOCK_CANDLE_GUARD_ENABLED || "true").toLowerCase() !== "false";
 const SHOCK_CANDLE_BODY_ATR_MULT = Math.min(3.5, Math.max(1.2, Number(process.env.CRYPTO_SHOCK_CANDLE_BODY_ATR_MULT || 2.1)));
+const COIN_PUBLISH_COOLDOWN_ENABLED = String(process.env.CRYPTO_COIN_PUBLISH_COOLDOWN_ENABLED || "true").toLowerCase() !== "false";
+const COIN_PUBLISH_COOLDOWN_MINUTES = Math.max(5, Number(process.env.CRYPTO_COIN_PUBLISH_COOLDOWN_MINUTES || 45));
 const SIDE_TF_BLOCK_MIN_SAMPLE = Math.max(10, Number(process.env.CRYPTO_SIDE_TF_BLOCK_MIN_SAMPLE || 12));
 const SIDE_TF_BLOCK_WINRATE = Math.min(45, Math.max(18, Number(process.env.CRYPTO_SIDE_TF_BLOCK_WINRATE || 33)));
 const SIDE_TF_WEAK_WINRATE = Math.min(60, Math.max(SIDE_TF_BLOCK_WINRATE + 5, Number(process.env.CRYPTO_SIDE_TF_WEAK_WINRATE || 45)));
@@ -256,6 +258,24 @@ async function getActiveSignalKeySet() {
       .filter((s) => s.status === SIGNAL_STATUS.ACTIVE)
       .map((s) => buildSignalKey(s))
   );
+}
+async function getCoinPublishCooldownMap(nowMs = Date.now()) {
+  if (!COIN_PUBLISH_COOLDOWN_ENABLED) return {};
+  const cooldownMs = COIN_PUBLISH_COOLDOWN_MINUTES * 60 * 1000;
+  const cutoffMs = nowMs - cooldownMs;
+  const map = {};
+  const signals = await readCollection(SIGNAL_COLLECTION);
+  for (const sig of signals) {
+    const coin = String(sig?.coin || "").toUpperCase();
+    if (!coin) continue;
+    // Only apply on engine-produced signals; ignore manual/admin inserts.
+    if (String(sig?.source || "").toUpperCase() === "MANUAL") continue;
+    const ts = new Date(sig?.createdAt || sig?.updatedAt || sig?.closedAt || 0).getTime();
+    if (!Number.isFinite(ts) || ts < cutoffMs) continue;
+    const prev = map[coin] || 0;
+    if (ts > prev) map[coin] = ts;
+  }
+  return map;
 }
 function formatCompact(v) {
   const n = toNumber(v); if (!n) return "0";
@@ -1687,12 +1707,23 @@ async function scanNow({ source = "ENGINE" } = {}) {
     const coins = scanUniverse.slice(0, getMaxCoinsPerScan());
     const scanConcurrency = getCoinScanConcurrency();
     const activeSignalKeys = await getActiveSignalKeySet();
+    const coinPublishCooldownMap = await getCoinPublishCooldownMap();
+    const nowMs = Date.now();
 
     const scanResults = await mapWithConcurrency(coins, scanConcurrency, async (market) => {
       const pauseEntry = isCoinPaused(market.symbol);
       if (pauseEntry) {
         const until = pauseEntry.pausedUntil ? " until " + pauseEntry.pausedUntil : "";
         return { coin: market.symbol, skipped: true, message: (pauseEntry.autoManaged ? "Auto-cooled down" : "Paused by admin") + until + " — skipped in scan" };
+      }
+      if (COIN_PUBLISH_COOLDOWN_ENABLED) {
+        const coin = String(market.symbol || "").toUpperCase();
+        const lastPublishAt = Number(coinPublishCooldownMap[coin] || 0);
+        const cooldownMs = COIN_PUBLISH_COOLDOWN_MINUTES * 60 * 1000;
+        if (lastPublishAt > 0 && (nowMs - lastPublishAt) < cooldownMs) {
+          const nextAt = new Date(lastPublishAt + cooldownMs).toISOString();
+          return { coin, skipped: true, message: "Recent signal cooldown until " + nextAt + " — skipped in scan" };
+        }
       }
       const candidate = await analyzeCoin(market.symbol, market, performanceSnapshot, selfLearningModel, engineState.pausedCoinSides, engineState.pausedTimeframes);
       return { coin: market.symbol, candidate };
