@@ -9,10 +9,24 @@ const router = express.Router();
 const MAX_MSG_LENGTH = 500;
 const MAX_MESSAGES = 200; // keep last 200 messages in store
 const MAX_ASSISTANT_QUERY = 300;
+const ASSISTANT_SIGNAL_READ_TIMEOUT_MS = 5000;
 
 function toNumber(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+
+async function readSignalsWithTimeout() {
+  try {
+    const timeoutTask = new Promise((resolve) => {
+      setTimeout(() => resolve([]), ASSISTANT_SIGNAL_READ_TIMEOUT_MS);
+    });
+    const signals = await Promise.race([readCollection("signals"), timeoutTask]);
+    return Array.isArray(signals) ? signals : [];
+  } catch {
+    return [];
+  }
 }
 
 function buildRecentStats(signals) {
@@ -164,7 +178,7 @@ router.post("/assistant", requireAuth, async (req, res) => {
     const query = String(req.body?.query || "").trim().slice(0, MAX_ASSISTANT_QUERY);
     if (!query) return res.status(400).json({ message: "query is required" });
 
-    const signals = await readCollection("signals");
+    const signals = await readSignalsWithTimeout();
     const activeSignals = (signals || []).filter((s) => s.status === "ACTIVE");
     const recentStats = buildRecentStats(signals || []);
     const engineStatus = getCryptoEngineStatus();

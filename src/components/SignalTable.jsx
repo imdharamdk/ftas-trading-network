@@ -35,6 +35,8 @@ function buildExplainability(signal = {}) {
   const selfLearningReasons = Array.isArray(scanMeta?.selfLearning?.reasons) ? scanMeta.selfLearning.reasons : [];
   const localAiReasons = Array.isArray(scanMeta?.localAI?.reasons) ? scanMeta.localAI.reasons : [];
 
+  const closeReason = signal.closeReason || signal.reason || scanMeta.closeReason || scanMeta.abortReason || "";
+
   const context = [
     { label: "ADX", value: indicator.adx },
     { label: "RSI", value: indicator.rsi },
@@ -50,6 +52,7 @@ function buildExplainability(signal = {}) {
     selfLearningReasons,
     localAiReasons,
     context,
+    closeReason: String(closeReason || "").trim(),
   };
 }
 
@@ -307,10 +310,15 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
                       {data.qualityReasons.map((r, idx) => <div className="list-card" key={`q_${idx}`}><strong>{r}</strong></div>)}
                       {data.selfLearningReasons.map((r, idx) => <div className="list-card" key={`s_${idx}`}><strong>self-learning: {r}</strong></div>)}
                       {data.localAiReasons.map((r, idx) => <div className="list-card" key={`l_${idx}`}><strong>local-ai: {r}</strong></div>)}
-                      {!data.qualityReasons.length && !data.selfLearningReasons.length && !data.localAiReasons.length ? <div className="empty-state">No guard reasons attached.</div> : null}
+                      {!data.qualityReasons.length && !data.selfLearningReasons.length && !data.localAiReasons.length ? <div className="empty-state">No guard reasons attached yet. Signal may still be active or closed by maintenance.</div> : null}
                     </div>
                   </article>
                   <article className="panel" style={{ margin: 0, gridColumn: "1 / -1" }}>
+                    {data.closeReason ? (
+                      <div className="list-card" style={{ marginBottom: 10 }}>
+                        <strong>Closure Reason:</strong> <span>{data.closeReason}</span>
+                      </div>
+                    ) : null}
                     <div className="panel-header"><div><span className="eyebrow">Context</span><h2>Indicator Snapshot</h2></div></div>
                     <div className="detail-grid">
                       {data.context.map((item) => (

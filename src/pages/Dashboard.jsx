@@ -480,11 +480,17 @@ export default function Dashboard() {
       const response = await apiFetch("/chat/assistant", {
         method: "POST",
         body: { query },
+        timeoutMs: 30000,
       });
       setAssistantResponse(response || null);
       setAssistantQuery(query);
     } catch (e) {
-      setError(e.message || "Assistant request failed");
+      const msg = String(e?.message || "");
+      if (e?.name === "AbortError" || msg.toLowerCase().includes("aborted")) {
+        setError("Assistant request timed out. Please retry.");
+      } else {
+        setError(msg || "Assistant request failed");
+      }
     } finally {
       setAssistantBusy(false);
     }
