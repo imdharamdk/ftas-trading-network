@@ -41,6 +41,10 @@ const SELF_LEARNING_MIN_SAMPLE = Math.max(40, Number(process.env.CRYPTO_SELF_LEA
 const LOCAL_AI_ENABLED = String(process.env.CRYPTO_LOCAL_AI_ENABLED || "true").toLowerCase() !== "false";
 const LOCAL_AI_MIN_SAMPLE = Math.max(40, Number(process.env.CRYPTO_LOCAL_AI_MIN_SAMPLE || 120));
 const LOCAL_AI_BLOCK_THRESHOLD = Math.min(Math.max(Number(process.env.CRYPTO_LOCAL_AI_BLOCK_THRESHOLD || 0.32), 0.15), 0.45);
+const AUTO_COIN_COOLDOWN_ENABLED = String(process.env.CRYPTO_AUTO_COIN_COOLDOWN_ENABLED || "true").toLowerCase() !== "false";
+const AUTO_COIN_COOLDOWN_HOURS = Math.max(1, Number(process.env.CRYPTO_AUTO_COIN_COOLDOWN_HOURS || 24));
+const AUTO_COIN_COOLDOWN_WINDOW = Math.max(3, Number(process.env.CRYPTO_AUTO_COIN_COOLDOWN_WINDOW || 5));
+const AUTO_COIN_COOLDOWN_MIN_LOSSES = Math.min(AUTO_COIN_COOLDOWN_WINDOW, Math.max(2, Number(process.env.CRYPTO_AUTO_COIN_COOLDOWN_MIN_LOSSES || 3)));
 
 // ── Per-Timeframe Rules ────────────────────────────────────────────────────────
 const TIMEFRAME_RULES = {
@@ -1212,6 +1216,7 @@ async function getPerformanceSnapshot() {
     byCoin: {},
     bySideTimeframe: {},
     recentSlStreakByCoin: {},
+    recent5LossCountByCoin: {},
     recent30: { wins: 0, losses: 0, total: 0, winRate: null },
     sampleSize: 0,
   };
@@ -1223,6 +1228,7 @@ async function getPerformanceSnapshot() {
       byCoin: {},
       bySideTimeframe: {},
       recentSlStreakByCoin: {},
+      recent5LossCountByCoin: {},
       recent30: { wins: 0, losses: 0, total: 0, winRate: null },
     };
 
@@ -1280,6 +1286,10 @@ async function getPerformanceSnapshot() {
         break;
       }
       stats.recentSlStreakByCoin[coin] = streak;
+
+      const recentWindow = series.slice(0, AUTO_COIN_COOLDOWN_WINDOW);
+      const recentLossCount = recentWindow.filter((result) => LOSS_RESULTS.has(result)).length;
+      stats.recent5LossCountByCoin[coin] = recentLossCount;
     }
 
     stats.sampleSize = stats.overall.wins + stats.overall.losses;
@@ -1315,6 +1325,48 @@ async function createManualSignal(payload, actor) {
   return signal;
 }
 
+function cleanupExpiredAutoPauses(nowMs = Date.now()) {
+  for (const [coin, entry] of Object.entries(engineState.pausedCoins || {})) {
+    const until = entry && entry.pausedUntil ? new Date(entry.pausedUntil).getTime() : 0;
+    if (entry && entry.autoManaged && until && until <= nowMs) {
+      delete engineState.pausedCoins[coin];
+    }
+  }
+}
+
+function isCoinPaused(symbol) {
+  cleanupExpiredAutoPauses();
+  const coin = String(symbol || "").toUpperCase();
+  return engineState.pausedCoins[coin] || null;
+}
+
+function applyAutoCoinCooldown(performanceSnapshot) {
+  if (!AUTO_COIN_COOLDOWN_ENABLED) return;
+  const nowMs = Date.now();
+  const untilIso = new Date(nowMs + AUTO_COIN_COOLDOWN_HOURS * 60 * 60 * 1000).toISOString();
+  const lossMap = performanceSnapshot && performanceSnapshot.recent5LossCountByCoin ? performanceSnapshot.recent5LossCountByCoin : {};
+
+  for (const [coinRaw, lossCountRaw] of Object.entries(lossMap)) {
+    const coin = String(coinRaw || "").toUpperCase();
+    const lossCount = Number(lossCountRaw || 0);
+    if (!coin || lossCount < AUTO_COIN_COOLDOWN_MIN_LOSSES) continue;
+
+    const existing = engineState.pausedCoins[coin];
+    if (existing && !existing.autoManaged) continue;
+    if (existing && existing.autoManaged && existing.pausedUntil) {
+      const prevUntil = new Date(existing.pausedUntil).getTime();
+      if (Number.isFinite(prevUntil) && prevUntil > nowMs) continue;
+    }
+
+    engineState.pausedCoins[coin] = {
+      pausedAt: new Date(nowMs).toISOString(),
+      pausedUntil: untilIso,
+      reason: "Auto cooldown: " + String(lossCount) + "/" + String(AUTO_COIN_COOLDOWN_WINDOW) + " recent closed trades hit SL",
+      pausedBy: "ml-model",
+      autoManaged: true,
+    };
+  }
+}
 async function scanNow({ source = "ENGINE" } = {}) {
   if (engineState.isScanning) return { skipped: true, message: "Scan already in progress" };
   engineState.isScanning = true;
@@ -1325,6 +1377,7 @@ async function scanNow({ source = "ENGINE" } = {}) {
   try {
     const closedSignals = await evaluateActiveSignals();
     const performanceSnapshot = await getPerformanceSnapshot();
+    applyAutoCoinCooldown(performanceSnapshot);
     const selfLearningModel = await refreshSelfLearningModel({ force: closedSignals.length > 0 });
     const scanUniverse = await getScanUniverse();
     const coins = scanUniverse.slice(0, getMaxCoinsPerScan());
@@ -1332,8 +1385,10 @@ async function scanNow({ source = "ENGINE" } = {}) {
     const activeSignalKeys = await getActiveSignalKeySet();
 
     const scanResults = await mapWithConcurrency(coins, scanConcurrency, async (market) => {
-      if (engineState.pausedCoins[market.symbol]) {
-        return { coin: market.symbol, skipped: true, message: "Paused by admin — skipped in scan" };
+      const pauseEntry = isCoinPaused(market.symbol);
+      if (pauseEntry) {
+        const until = pauseEntry.pausedUntil ? " until " + pauseEntry.pausedUntil : "";
+        return { coin: market.symbol, skipped: true, message: (pauseEntry.autoManaged ? "Auto-cooled down" : "Paused by admin") + until + " — skipped in scan" };
       }
       const candidate = await analyzeCoin(market.symbol, market, performanceSnapshot, selfLearningModel);
       return { coin: market.symbol, candidate };
@@ -1510,8 +1565,10 @@ function pauseCoin(symbol, actor, reason = "") {
   if (!coin) throw new Error("Symbol required");
   engineState.pausedCoins[coin] = {
     pausedAt: new Date().toISOString(),
+    pausedUntil: null,
     reason: reason || "Repeated stop losses",
     pausedBy: actor?.email || "admin",
+    autoManaged: false,
   };
   return engineState.pausedCoins;
 }
@@ -1524,6 +1581,7 @@ function resumeCoin(symbol) {
 }
 
 function getPausedCoins() {
+  cleanupExpiredAutoPauses();
   return engineState.pausedCoins;
 }
 
