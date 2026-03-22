@@ -52,6 +52,9 @@ const TF_THROTTLE_BLOCK_MIN_SAMPLE = Math.max(TF_THROTTLE_MIN_SAMPLE, Number(pro
 const VOL_GUARD_ENABLED = String(process.env.CRYPTO_VOL_GUARD_ENABLED || "true").toLowerCase() !== "false";
 const VOL_GUARD_LOW_PCT = Math.max(0.02, Number(process.env.CRYPTO_VOL_GUARD_LOW_PCT || 0.08));
 const VOL_GUARD_HIGH_PCT = Math.max(VOL_GUARD_LOW_PCT + 0.2, Number(process.env.CRYPTO_VOL_GUARD_HIGH_PCT || 3.2));
+const COUNTER_TREND_ENABLED = String(process.env.CRYPTO_COUNTER_TREND_ENABLED || "true").toLowerCase() !== "false";
+const COUNTER_TREND_MIN_CONF = Math.min(99, Math.max(88, Number(process.env.CRYPTO_COUNTER_TREND_MIN_CONF || 92)));
+const COUNTER_TREND_ADX_MIN = Math.max(14, Number(process.env.CRYPTO_COUNTER_TREND_ADX_MIN || 24));
 
 // ── Per-Timeframe Rules ────────────────────────────────────────────────────────
 const TIMEFRAME_RULES = {
@@ -1187,29 +1190,34 @@ async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = nu
       };
 
       const picked = [];
+      const marketLiquid = Boolean(marketActivity?.isLiquid);
       if (bias === "BULLISH") {
         if (bySide.LONG) picked.push(bySide.LONG);
-        if (bySide.SHORT && bySide.SHORT.confidence >= 88) {
+        const shortAdx = Number(bySide.SHORT?.indicatorSnapshot?.adx || 0);
+        if (COUNTER_TREND_ENABLED && bySide.SHORT && bySide.SHORT.confidence >= COUNTER_TREND_MIN_CONF && shortAdx >= COUNTER_TREND_ADX_MIN && marketLiquid) {
           picked.push({
             ...bySide.SHORT,
-            confidence: Math.max(0, bySide.SHORT.confidence - 4),
+            confidence: Math.max(0, bySide.SHORT.confidence - 5),
             scanMeta: {
               ...(bySide.SHORT.scanMeta || {}),
               counterTrend: true,
               baseBias: bias,
+              counterTrendGuard: { minConfidence: COUNTER_TREND_MIN_CONF, minAdx: COUNTER_TREND_ADX_MIN, marketLiquid },
             },
           });
         }
       } else if (bias === "BEARISH") {
         if (bySide.SHORT) picked.push(bySide.SHORT);
-        if (bySide.LONG && bySide.LONG.confidence >= 88) {
+        const longAdx = Number(bySide.LONG?.indicatorSnapshot?.adx || 0);
+        if (COUNTER_TREND_ENABLED && bySide.LONG && bySide.LONG.confidence >= COUNTER_TREND_MIN_CONF && longAdx >= COUNTER_TREND_ADX_MIN && marketLiquid) {
           picked.push({
             ...bySide.LONG,
-            confidence: Math.max(0, bySide.LONG.confidence - 4),
+            confidence: Math.max(0, bySide.LONG.confidence - 5),
             scanMeta: {
               ...(bySide.LONG.scanMeta || {}),
               counterTrend: true,
               baseBias: bias,
+              counterTrendGuard: { minConfidence: COUNTER_TREND_MIN_CONF, minAdx: COUNTER_TREND_ADX_MIN, marketLiquid },
             },
           });
         }
