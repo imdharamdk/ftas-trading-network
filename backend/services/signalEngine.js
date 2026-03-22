@@ -69,6 +69,9 @@ const VOL_GUARD_HIGH_PCT = Math.max(VOL_GUARD_LOW_PCT + 0.2, Number(process.env.
 const COUNTER_TREND_ENABLED = String(process.env.CRYPTO_COUNTER_TREND_ENABLED || "true").toLowerCase() !== "false";
 const COUNTER_TREND_MIN_CONF = Math.min(99, Math.max(88, Number(process.env.CRYPTO_COUNTER_TREND_MIN_CONF || 92)));
 const COUNTER_TREND_ADX_MIN = Math.max(14, Number(process.env.CRYPTO_COUNTER_TREND_ADX_MIN || 24));
+const COUNTER_TREND_DRAWDOWN_GUARD_ENABLED = String(process.env.CRYPTO_COUNTER_TREND_DRAWDOWN_GUARD_ENABLED || "true").toLowerCase() !== "false";
+const COUNTER_TREND_DRAWDOWN_MIN_SAMPLE = Math.max(8, Number(process.env.CRYPTO_COUNTER_TREND_DRAWDOWN_MIN_SAMPLE || 12));
+const COUNTER_TREND_DRAWDOWN_WINRATE = Math.min(55, Math.max(30, Number(process.env.CRYPTO_COUNTER_TREND_DRAWDOWN_WINRATE || 48)));
 const SIDE_TF_BLOCK_MIN_SAMPLE = Math.max(10, Number(process.env.CRYPTO_SIDE_TF_BLOCK_MIN_SAMPLE || 12));
 const SIDE_TF_BLOCK_WINRATE = Math.min(45, Math.max(18, Number(process.env.CRYPTO_SIDE_TF_BLOCK_WINRATE || 33)));
 const SIDE_TF_WEAK_WINRATE = Math.min(60, Math.max(SIDE_TF_BLOCK_WINRATE + 5, Number(process.env.CRYPTO_SIDE_TF_WEAK_WINRATE || 45)));
@@ -1267,10 +1270,16 @@ async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = nu
 
       const picked = [];
       const marketLiquid = Boolean(marketActivity?.isLiquid);
+      const recent30 = performanceSnapshot?.recent30 || { total: 0, winRate: null };
+      const counterTrendAllowed = !COUNTER_TREND_DRAWDOWN_GUARD_ENABLED || !(
+        Number(recent30.total || 0) >= COUNTER_TREND_DRAWDOWN_MIN_SAMPLE &&
+        recent30.winRate !== null &&
+        Number(recent30.winRate) <= COUNTER_TREND_DRAWDOWN_WINRATE
+      );
       if (bias === "BULLISH") {
         if (bySide.LONG) picked.push(bySide.LONG);
         const shortAdx = Number(bySide.SHORT?.indicatorSnapshot?.adx || 0);
-        if (COUNTER_TREND_ENABLED && bySide.SHORT && bySide.SHORT.confidence >= COUNTER_TREND_MIN_CONF && shortAdx >= COUNTER_TREND_ADX_MIN && marketLiquid) {
+        if (COUNTER_TREND_ENABLED && counterTrendAllowed && bySide.SHORT && bySide.SHORT.confidence >= COUNTER_TREND_MIN_CONF && shortAdx >= COUNTER_TREND_ADX_MIN && marketLiquid) {
           picked.push({
             ...bySide.SHORT,
             confidence: Math.max(0, bySide.SHORT.confidence - 5),
@@ -1285,7 +1294,7 @@ async function analyzeCoin(coin, marketActivity = null, performanceSnapshot = nu
       } else if (bias === "BEARISH") {
         if (bySide.SHORT) picked.push(bySide.SHORT);
         const longAdx = Number(bySide.LONG?.indicatorSnapshot?.adx || 0);
-        if (COUNTER_TREND_ENABLED && bySide.LONG && bySide.LONG.confidence >= COUNTER_TREND_MIN_CONF && longAdx >= COUNTER_TREND_ADX_MIN && marketLiquid) {
+        if (COUNTER_TREND_ENABLED && counterTrendAllowed && bySide.LONG && bySide.LONG.confidence >= COUNTER_TREND_MIN_CONF && longAdx >= COUNTER_TREND_ADX_MIN && marketLiquid) {
           picked.push({
             ...bySide.LONG,
             confidence: Math.max(0, bySide.LONG.confidence - 5),
