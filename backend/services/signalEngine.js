@@ -251,12 +251,23 @@ function getTimeframeFetchConcurrency() {
 function buildSignalKey(signal = {}) {
   return `${String(signal.coin || "").toUpperCase()}|${String(signal.side || "").toUpperCase()}|${String(signal.timeframe || "")}`;
 }
+function buildSignalCoinSideKey(signal = {}) {
+  return `${String(signal.coin || "").toUpperCase()}|${String(signal.side || "").toUpperCase()}`;
+}
 async function getActiveSignalKeySet() {
   const signals = await readCollection(SIGNAL_COLLECTION);
   return new Set(
     signals
       .filter((s) => s.status === SIGNAL_STATUS.ACTIVE)
       .map((s) => buildSignalKey(s))
+  );
+}
+async function getActiveCoinSideSet() {
+  const signals = await readCollection(SIGNAL_COLLECTION);
+  return new Set(
+    signals
+      .filter((s) => s.status === SIGNAL_STATUS.ACTIVE)
+      .map((s) => buildSignalCoinSideKey(s))
   );
 }
 async function getCoinPublishCooldownMap(nowMs = Date.now()) {
@@ -1707,6 +1718,7 @@ async function scanNow({ source = "ENGINE" } = {}) {
     const coins = scanUniverse.slice(0, getMaxCoinsPerScan());
     const scanConcurrency = getCoinScanConcurrency();
     const activeSignalKeys = await getActiveSignalKeySet();
+    const activeCoinSides = await getActiveCoinSideSet();
     const coinPublishCooldownMap = await getCoinPublishCooldownMap();
     const nowMs = Date.now();
 
@@ -1748,9 +1760,12 @@ async function scanNow({ source = "ENGINE" } = {}) {
 
         const key = buildSignalKey(candidate);
         if (activeSignalKeys.has(key)) continue;
+        const coinSideKey = buildSignalCoinSideKey(candidate);
+        if (activeCoinSides.has(coinSideKey)) continue;
 
         generatedSignals.push(await persistSignal(candidate));
         activeSignalKeys.add(key);
+        activeCoinSides.add(coinSideKey);
       } catch (e) {
         errors.push({ coin: result.coin, message: e.message });
       }
