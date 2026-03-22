@@ -768,6 +768,8 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const dailyBullStack = (dailyTrend.ema50||0) > (dailyTrend.ema100||0) && (dailyTrend.adx||0) >= 16;
   const psarBull = Number.isFinite(psar) ? psar < price : false;
   const psarBear = Number.isFinite(psar) ? psar > price : false;
+  const oneHBullAligned = Number(oneH?.trend?.ema50 || 0) > Number(oneH?.trend?.ema100 || 0);
+  const oneHBearAligned = Number(oneH?.trend?.ema50 || 0) < Number(oneH?.trend?.ema100 || 0);
   const rsiDivBull  = analysis.divergence?.rsi?.bullish        || false;
   const rsiDivBear  = analysis.divergence?.rsi?.bearish        || false;
   const rsiHidBull  = analysis.divergence?.rsi?.hidden_bullish || false;
@@ -794,6 +796,10 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   // GATE 1: HTF Alignment
   if (higherBias === "NEUTRAL") return null;
   const side = higherBias === "BULLISH" ? "LONG" : "SHORT";
+
+  // HARD DIRECTIONAL FILTER: only align with 1H trend direction
+  if (side === "LONG" && !oneHBullAligned) return null;
+  if (side === "SHORT" && !oneHBearAligned) return null;
 
   // GATE 2: Core EMA Trend — ema50 > ema100 required; ema200 alignment is bonus not gate
   const coreBullStack = ema50 > ema100 * 0.997;
