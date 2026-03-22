@@ -660,14 +660,33 @@ function getHigherTimeframeBias(analyses, tradeTimeframe = "5m") {
 
 // ─── SL / TP ──────────────────────────────────────────────────────────────────
 function calculateTargets(side, analysis, timeframe = "5m") {
-  const entry = analysis.currentPrice;
-  const atr   = analysis.volatility.atr || analysis.averages.averageRange || entry * 0.003;
+  const marketEntry = Number(analysis.currentPrice || 0);
+  const atr   = analysis.volatility.atr || analysis.averages.averageRange || marketEntry * 0.003;
   const { low20, high20, previousLow20, previousHigh20 } = analysis.recentSwing;
   const srSup = analysis.srLevels?.supports?.[0]    ?? null;
   const srRes = analysis.srLevels?.resistances?.[0] ?? null;
+  const ema21 = Number(analysis?.trend?.ema21 || NaN);
+  const vwap  = Number(analysis?.trend?.vwap || NaN);
   const tpMult = timeframe === "1m" ? TP_R_MULTIPLIERS_1M : TP_R_MULTIPLIERS_5M;
 
-  // Tighter SL band → better RR
+  // Pullback entry model: avoid market chasing while keeping fills realistic.
+  const pullbackCap = Math.max(atr * 0.18, atr * (timeframe === "1m" ? 0.28 : 0.36));
+  let entry = marketEntry;
+  if (side === "LONG") {
+    const refs = [ema21, vwap].filter(Number.isFinite).filter((v) => v <= marketEntry);
+    if (refs.length) {
+      const target = refs.reduce((a, b) => a + b, 0) / refs.length;
+      entry = clamp(target, marketEntry - pullbackCap, marketEntry);
+    }
+  } else {
+    const refs = [ema21, vwap].filter(Number.isFinite).filter((v) => v >= marketEntry);
+    if (refs.length) {
+      const target = refs.reduce((a, b) => a + b, 0) / refs.length;
+      entry = clamp(target, marketEntry, marketEntry + pullbackCap);
+    }
+  }
+
+  // Tighter SL band -> better RR
   const slMin  = atr * 0.7;
   const slMax  = atr * 1.6;
 
