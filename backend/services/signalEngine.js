@@ -45,6 +45,10 @@ const AUTO_COIN_COOLDOWN_ENABLED = String(process.env.CRYPTO_AUTO_COIN_COOLDOWN_
 const AUTO_COIN_COOLDOWN_HOURS = Math.max(1, Number(process.env.CRYPTO_AUTO_COIN_COOLDOWN_HOURS || 24));
 const AUTO_COIN_COOLDOWN_WINDOW = Math.max(3, Number(process.env.CRYPTO_AUTO_COIN_COOLDOWN_WINDOW || 5));
 const AUTO_COIN_COOLDOWN_MIN_LOSSES = Math.min(AUTO_COIN_COOLDOWN_WINDOW, Math.max(2, Number(process.env.CRYPTO_AUTO_COIN_COOLDOWN_MIN_LOSSES || 3)));
+const TF_THROTTLE_MIN_SAMPLE = Math.max(10, Number(process.env.CRYPTO_TF_THROTTLE_MIN_SAMPLE || 20));
+const TF_THROTTLE_WEAK_WINRATE = Math.min(55, Math.max(25, Number(process.env.CRYPTO_TF_THROTTLE_WEAK_WINRATE || 40)));
+const TF_THROTTLE_BLOCK_WINRATE = Math.min(TF_THROTTLE_WEAK_WINRATE - 1, Math.max(15, Number(process.env.CRYPTO_TF_THROTTLE_BLOCK_WINRATE || 30)));
+const TF_THROTTLE_BLOCK_MIN_SAMPLE = Math.max(TF_THROTTLE_MIN_SAMPLE, Number(process.env.CRYPTO_TF_THROTTLE_BLOCK_MIN_SAMPLE || 25));
 
 // ── Per-Timeframe Rules ────────────────────────────────────────────────────────
 const TIMEFRAME_RULES = {
@@ -582,6 +586,19 @@ function getAdaptiveQualityConfig(performanceSnapshot, { coin, side, timeframe }
     config.publishFloorBoost += 2;
     config.minPublishFloorAbs = Math.max(config.minPublishFloorAbs, 80);
     config.reasons.push("recent_30_winrate_guard");
+  }
+  const tfStats = performanceSnapshot[timeframe] || buildTally();
+  const tfTotal = Number(tfStats.wins || 0) + Number(tfStats.losses || 0);
+  const tfWinRate = winRateFromTally(tfStats);
+  if (tfTotal >= TF_THROTTLE_BLOCK_MIN_SAMPLE && tfWinRate !== null && tfWinRate <= TF_THROTTLE_BLOCK_WINRATE) {
+    config.blockCoin = true;
+    config.reasons.push(`blocked_tf_${timeframe}`);
+  } else if (tfTotal >= TF_THROTTLE_MIN_SAMPLE && tfWinRate !== null && tfWinRate <= TF_THROTTLE_WEAK_WINRATE) {
+    config.scoreBoost += 3;
+    config.publishFloorBoost += 3;
+    config.minConfirmationsBoost += 1;
+    config.minPublishFloorAbs = Math.max(config.minPublishFloorAbs, 80);
+    config.reasons.push(`weak_tf_${timeframe}`);
   }
   const sideTfKey = `${side}:${timeframe}`;
   const sideTfStats = performanceSnapshot.bySideTimeframe?.[sideTfKey];
