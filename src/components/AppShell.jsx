@@ -25,11 +25,6 @@ const NAV_ITEMS = [
 
 const SIDEBAR_EXTRA = [{ to: "/settings", icon: "⚙️", label: "Settings" }];
 
-const ADMIN_NAV_ITEMS = [
-  { to: "/analytics", icon: "📈", label: "Analytics" },
-  { to: "/post-generator", icon: "✍️", label: "Post Gen" },
-];
-
 export default function AppShell({ actions = null, children, subtitle, title }) {
   const { logout, user } = useSession();
   const location = useLocation();
@@ -48,18 +43,17 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
   const close = () => setOpen(false);
   const toggle = () => setOpen((o) => !o);
 
-  const isAdminPage = ADMIN_NAV_ITEMS.some((i) => location.pathname.startsWith(i.to)) || location.pathname.startsWith("/settings");
+  const isAdminPage = location.pathname.startsWith("/settings");
 
   const allCommands = useMemo(() => {
     const base = [...NAV_ITEMS, ...SIDEBAR_EXTRA];
-    const admin = isAdmin ? ADMIN_NAV_ITEMS : [];
-    return [...base, ...admin].map((item) => ({
+    return base.map((item) => ({
       id: item.to,
       label: item.label,
       icon: item.icon,
       to: item.to,
     }));
-  }, [isAdmin]);
+  }, []);
 
   const visibleCommands = useMemo(() => {
     const q = commandQuery.trim().toLowerCase();
@@ -177,21 +171,6 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
                 {item.icon} {item.label}
               </NavLink>
             ))}
-
-            {isAdmin ? (
-              <>
-                <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", margin: "8px 0 4px", paddingTop: 8 }}>
-                  <span style={{ color: "rgba(255,138,61,0.7)", fontSize: "0.65rem", fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase" }}>
-                    Admin Tools
-                  </span>
-                </div>
-                {ADMIN_NAV_ITEMS.map((item) => (
-                  <NavLink key={item.to} className={navCls} onClick={close} to={item.to}>
-                    {item.icon} {item.label}
-                  </NavLink>
-                ))}
-              </>
-            ) : null}
           </nav>
         </div>
 

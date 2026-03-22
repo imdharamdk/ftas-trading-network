@@ -3,6 +3,7 @@ import AppShell from "../components/AppShell";
 import { apiFetch } from "../lib/api";
 import { useSession } from "../context/useSession";
 import { usePushNotifications } from "../lib/usePushNotifications";
+import { Link } from "react-router-dom";
 
 // ─── Section wrapper ──────────────────────────────────────────────────────────
 function Section({ title, eyebrow, children, accent }) {
@@ -590,6 +591,37 @@ export default function Settings() {
           </div>
         </Section>
 
+
+        {isAdmin && (
+          <Section eyebrow="Admin" title="Admin Tools Hub" accent="#f97316">
+            <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 12 }}>All admin operations are grouped here under Settings.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+              {[
+                { to: "/dashboard", label: "Payments & Users", desc: "Pending payments, plan updates, user controls" },
+                { to: "/dashboard", label: "Manual Signal", desc: "Post manual trading signals" },
+                { to: "/analytics", label: "Analytics", desc: "Performance and distribution analytics" },
+                { to: "/post-generator", label: "Post Generator", desc: "Generate social content" },
+              ].map((item) => (
+                <Link
+                  key={item.label}
+                  to={item.to}
+                  style={{
+                    textDecoration: "none",
+                    background: "rgba(255,255,255,0.03)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: 10,
+                    padding: "12px 14px",
+                    display: "grid",
+                    gap: 4,
+                  }}
+                >
+                  <strong style={{ color: "#f8fafc", fontSize: 13 }}>{item.label}</strong>
+                  <span style={{ color: "#94a3b8", fontSize: 12 }}>{item.desc}</span>
+                </Link>
+              ))}
+            </div>
+          </Section>
+        )}
 
         {/* ── Engines (Admin only) ── */}
         {isAdmin && (
