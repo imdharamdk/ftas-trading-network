@@ -43,7 +43,6 @@ const fallbackPaymentSettings = {
 const EXPIRY_PROMPT_STORAGE_KEY = "ftas_expiry_prompt_dismissed";
 const ANALYTICS_REFRESH_MS = 10 * 60 * 1000;
 const MISSED_SIGNALS_LAST_SEEN_KEY = "ftas_missed_signals_last_seen";
-const ASSISTANT_LANGUAGE_KEY = "ftas_assistant_language";
 
 function deferTask(fn) {
   if (typeof window !== "undefined" && "requestIdleCallback" in window) {
@@ -160,14 +159,6 @@ export default function Dashboard() {
   const [userActivity, setUserActivity] = useState({ summary: null, users: [] });
   const [paymentForm, setPaymentForm] = useState(defaultPaymentForm);
   const [manualForm, setManualForm] = useState(defaultManualForm);
-  const [assistantQuery, setAssistantQuery] = useState("");
-  const [assistantResponse, setAssistantResponse] = useState(null);
-  const [assistantBusy, setAssistantBusy] = useState(false);
-  const [assistantLanguage, setAssistantLanguage] = useState(() => {
-    if (typeof window === "undefined") return "hinglish";
-    const saved = String(window.localStorage.getItem(ASSISTANT_LANGUAGE_KEY) || "hinglish").toLowerCase();
-    return ["en", "hinglish", "hi"].includes(saved) ? saved : "hinglish";
-  });
   const analyticsFetchedAtRef = useRef(0);
 
   const [missedSignals, setMissedSignals] = useState([]);
@@ -191,15 +182,6 @@ export default function Dashboard() {
   const [actionBusy, setActionBusy] = useState("");
 
   const availablePaymentSettings = useMemo(() => paymentSettings || fallbackPaymentSettings, [paymentSettings]);
-  const assistantQuickQueries = useMemo(() => {
-    if (assistantLanguage === "hi") {
-      return ["abhi sabse kam jokhim setup", "haal ka pradarshan", "engine sthiti"];
-    }
-    if (assistantLanguage === "en") {
-      return ["best low-risk setup now", "recent performance", "engine status"];
-    }
-    return ["best low-risk setup now", "recent performance", "engine status"];
-  }, [assistantLanguage]);
   const availablePaymentMethods = useMemo(() => availablePaymentSettings.paymentMethods || [], [availablePaymentSettings]);
   const availablePlans = useMemo(() => availablePaymentSettings.plans || [], [availablePaymentSettings]);
   const hasPendingPayment = useMemo(() => myPayments.some((p) => p.status === "PENDING"), [myPayments]);
@@ -214,11 +196,6 @@ export default function Dashboard() {
     if (subscriptionExpiresSoon && !expiryPromptDismissed) setShowExpiryPrompt(true);
     else setShowExpiryPrompt(false);
   }, [subscriptionExpiresSoon, expiryPromptDismissed]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(ASSISTANT_LANGUAGE_KEY, assistantLanguage);
-  }, [assistantLanguage]);
 
 
   useEffect(() => {
@@ -491,31 +468,6 @@ export default function Dashboard() {
     } catch (e) { setError(e.message); } finally { setActionBusy(""); }
   }
 
-  async function handleAssistantAsk(quickQuery = "") {
-    const query = String((quickQuery || assistantQuery || "").trim());
-    if (!query || assistantBusy) return;
-    setAssistantBusy(true);
-    setError("");
-    try {
-      const response = await apiFetch("/chat/assistant", {
-        method: "POST",
-        body: { query, language: assistantLanguage },
-        timeoutMs: 30000,
-      });
-      setAssistantResponse(response || null);
-      setAssistantQuery(query);
-    } catch (e) {
-      const msg = String(e?.message || "");
-      if (e?.name === "AbortError" || msg.toLowerCase().includes("aborted")) {
-        setError("Assistant request timed out. Please retry.");
-      } else {
-        setError(msg || "Assistant request failed");
-      }
-    } finally {
-      setAssistantBusy(false);
-    }
-  }
-
   const actions = (
     <button className="button button-ghost" onClick={() => refreshWithFeedback("Refreshed")} type="button">
       Refresh
@@ -549,49 +501,6 @@ export default function Dashboard() {
       {error ? <div className="banner banner-error">{error}</div> : null}
       {feedback ? <div className="banner banner-success">{feedback}</div> : null}
 
-      <section className="panel" style={{ border: "1px solid rgba(45,212,191,0.25)", background: "linear-gradient(135deg, rgba(20,184,166,0.12), rgba(59,130,246,0.08))" }}>
-        <div className="panel-header">
-          <div><span className="eyebrow">AI Assistant</span><h2>Live Trading Assistant</h2></div>
-          <span className="pill pill-accent">Beta</span>
-        </div>
-        <div className="form-grid" style={{ gridTemplateColumns: "1fr auto", alignItems: "end" }}>
-          <label>
-            <span>Language</span>
-            <select value={assistantLanguage} onChange={(e) => setAssistantLanguage(e.target.value)}>
-              <option value="hinglish">Hinglish</option>
-              <option value="hi">Hindi</option>
-              <option value="en">English</option>
-            </select>
-          </label>
-          <label className="form-span-2">
-            <span>Ask from live engine state</span>
-            <input
-              onChange={(e) => setAssistantQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") handleAssistantAsk(); }}
-              placeholder="Example: best low-risk setup now"
-              value={assistantQuery}
-            />
-          </label>
-          <div className="button-row" style={{ marginTop: 4 }}>
-            {assistantQuickQueries.map((q) => (
-              <button className="button button-ghost" key={q} onClick={() => handleAssistantAsk(q)} type="button">{q}</button>
-            ))}
-          </div>
-          <button className="button button-primary" disabled={assistantBusy} onClick={() => handleAssistantAsk()} type="button">
-            {assistantBusy ? "Thinking..." : "Ask Assistant"}
-          </button>
-        </div>
-        {assistantResponse ? (
-          <div className="list-stack" style={{ marginTop: 12 }}>
-            <div className="list-card"><strong>{assistantResponse.answer}</strong></div>
-            {(assistantResponse.bullets || []).map((item) => (
-              <div className="list-card" key={item}><span>{item}</span></div>
-            ))}
-          </div>
-        ) : (
-          <p className="panel-note">Assistant uses live FTAS engine stats and active signal context.</p>
-        )}
-      </section>
 
       {/* ── HERO ABOUT SECTION ── */}
       <section className="panel" style={{ background: "linear-gradient(135deg, rgba(99,102,241,0.15) 0%, rgba(16,185,129,0.08) 100%)", border: "1px solid rgba(99,102,241,0.3)" }}>
