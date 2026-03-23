@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useSession } from "../context/useSession";
 import ChatBox from "./ChatBox";
+import TickerMarquee from "./TickerMarquee";
 
 function navCls({ isActive }) {
   return `nav-link${isActive ? " nav-link-active" : ""}`;
@@ -185,6 +186,7 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
 
   return (
     <div className="shell">
+      <TickerMarquee />
       {!isOnline ? <div className="offline-banner">Offline mode: reconnecting when network is back.</div> : null}
 
       <aside className={`sidebar${open ? " sidebar-open" : ""}`}>
