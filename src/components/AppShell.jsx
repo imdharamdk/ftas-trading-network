@@ -185,8 +185,9 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
   }).format(new Date(lastSyncAt));
 
   return (
-    <div className="shell">
+    <div style={{ display: "flex", flexDirection: "column", height: "100dvh", overflow: "hidden" }}>
       <TickerMarquee />
+      <div className="shell" style={{ flex: 1, minHeight: 0 }}>
       {!isOnline ? <div className="offline-banner">Offline mode: reconnecting when network is back.</div> : null}
 
       <aside className={`sidebar${open ? " sidebar-open" : ""}`}>
@@ -370,6 +371,7 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
       </div>
 
       <ChatBox />
+    </div>
     </div>
   );
 }
