@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { SessionProvider } from "./context/SessionContext";
 import { useSession } from "./context/useSession";
 import { lazy, Suspense } from "react";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 
 const Login = lazy(() => import("./pages/Login"));
 const Signup = lazy(() => import("./pages/Signup"));
@@ -87,6 +88,7 @@ export default function App() {
               <Route element={<Navigate replace to="/" />} path="*" />
             </Routes>
           </Suspense>
+          <SpeedInsights />
         </BrowserRouter>
       </SessionProvider>
     </ErrorBoundary>
