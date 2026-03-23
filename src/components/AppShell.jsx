@@ -185,9 +185,9 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
   }).format(new Date(lastSyncAt));
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100dvh", overflow: "hidden" }}>
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "100dvh" }}>
       <TickerMarquee />
-      <div className="shell" style={{ flex: 1, minHeight: 0 }}>
+      <div className="shell" style={{ flex: 1 }}>
       {!isOnline ? <div className="offline-banner">Offline mode: reconnecting when network is back.</div> : null}
 
       <aside className={`sidebar${open ? " sidebar-open" : ""}`}>
