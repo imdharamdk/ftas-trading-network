@@ -310,11 +310,93 @@ function PostCard({ post: initialPost, isAdmin, currentUserId, onDelete }) {
   );
 }
 
+// ─── Image Upload Helper ──────────────────────────────────────────────────────
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+// ─── Image Picker Component ───────────────────────────────────────────────────
+function ImagePicker({ label, value, onChange }) {
+  const inputRef = useRef(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  async function handleFile(file) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { alert("Only image files allowed."); return; }
+    if (file.size > 5 * 1024 * 1024) { alert("Image must be under 5 MB."); return; }
+    try {
+      const b64 = await fileToBase64(file);
+      onChange(b64);
+    } catch { alert("Could not read image."); }
+  }
+
+  function handleDrop(e) {
+    e.preventDefault(); setDragOver(false);
+    handleFile(e.dataTransfer.files[0]);
+  }
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <p style={{ fontSize: 12, color: "#64748b", margin: "0 0 6px", fontWeight: 600 }}>{label}</p>
+
+      {value ? (
+        <div style={{ position: "relative" }}>
+          <img
+            src={value} alt="preview"
+            style={{ width: "100%", maxHeight: 200, objectFit: "cover", borderRadius: 10, display: "block" }}
+          />
+          <button
+            onClick={() => onChange("")}
+            style={{
+              position: "absolute", top: 8, right: 8,
+              background: "rgba(0,0,0,0.7)", border: "none", borderRadius: "50%",
+              color: "#fff", width: 28, height: 28, cursor: "pointer",
+              fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+          >✕</button>
+        </div>
+      ) : (
+        <div
+          onClick={() => inputRef.current?.click()}
+          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+          style={{
+            border: `2px dashed ${dragOver ? "#818cf8" : "rgba(255,255,255,0.12)"}`,
+            borderRadius: 10, padding: "20px 16px", textAlign: "center",
+            cursor: "pointer", transition: "all 0.15s",
+            background: dragOver ? "rgba(99,102,241,0.08)" : "rgba(255,255,255,0.02)",
+          }}
+        >
+          <div style={{ fontSize: 24, marginBottom: 6 }}>🖼️</div>
+          <p style={{ margin: 0, fontSize: 13, color: "#64748b" }}>
+            Click to upload or drag & drop
+          </p>
+          <p style={{ margin: "4px 0 0", fontSize: 11, color: "#334155" }}>PNG, JPG, GIF — max 5 MB</p>
+        </div>
+      )}
+
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={e => handleFile(e.target.files[0])}
+      />
+    </div>
+  );
+}
+
 // ─── Create Post Modal ────────────────────────────────────────────────────────
 function CreatePostModal({ onClose, onCreated }) {
   const [content, setContent]   = useState("");
-  const [imageUrl, setImageUrl] = useState("");
-  const [chartUrl, setChartUrl] = useState("");
+  const [imageData, setImageData] = useState("");   // base64 or URL
+  const [chartData, setChartData] = useState("");   // base64 or URL
   const [tags, setTags]         = useState([]);
   const [isPinned, setIsPinned] = useState(false);
   const [busy, setBusy]         = useState(false);
@@ -332,7 +414,13 @@ function CreatePostModal({ onClose, onCreated }) {
     try {
       const res = await apiFetch("/community/post", {
         method: "POST",
-        body: { content: content.trim(), imageUrl: imageUrl.trim() || null, chartUrl: chartUrl.trim() || null, tags, isPinned },
+        body: {
+          content:  content.trim(),
+          imageUrl: imageData || null,
+          chartUrl: chartData || null,
+          tags,
+          isPinned,
+        },
       });
       onCreated?.(res.post);
       onClose();
@@ -373,31 +461,11 @@ function CreatePostModal({ onClose, onCreated }) {
         />
         <p style={{ fontSize: 11, color: "#475569", margin: "4px 0 16px", textAlign: "right" }}>{content.length}/2000</p>
 
-        {/* Image URL */}
-        <input
-          value={imageUrl}
-          onChange={e => setImageUrl(e.target.value)}
-          placeholder="Image URL (optional)"
-          style={{
-            width: "100%", background: "rgba(255,255,255,0.05)",
-            border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8,
-            color: "#e2e8f0", padding: "10px 12px", fontSize: 13,
-            outline: "none", marginBottom: 10, boxSizing: "border-box",
-          }}
-        />
+        {/* Image Upload */}
+        <ImagePicker label="📷 IMAGE (optional)" value={imageData} onChange={setImageData} />
 
-        {/* Chart URL */}
-        <input
-          value={chartUrl}
-          onChange={e => setChartUrl(e.target.value)}
-          placeholder="Chart image URL (optional)"
-          style={{
-            width: "100%", background: "rgba(255,255,255,0.05)",
-            border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8,
-            color: "#e2e8f0", padding: "10px 12px", fontSize: 13,
-            outline: "none", marginBottom: 16, boxSizing: "border-box",
-          }}
-        />
+        {/* Chart Upload */}
+        <ImagePicker label="📊 CHART SCREENSHOT (optional)" value={chartData} onChange={setChartData} />
 
         {/* Tags */}
         <div style={{ marginBottom: 16 }}>
