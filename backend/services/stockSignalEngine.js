@@ -102,7 +102,7 @@ const LOSS_RESULTS = new Set(["SL_HIT"]);
 const buildTally   = () => ({ wins: 0, losses: 0 });
 
 const engineState = {
-  intervalMs: Number(process.env.SCAN_INTERVAL_MS || 60000),
+  intervalMs: Number(process.env.SMART_SCAN_INTERVAL_MS || process.env.SCAN_INTERVAL_MS || 60000),
   isScanning: false, lastError: null, lastGenerated: 0,
   lastScanAt: null, running: false, scanCount: 0,
   timer: null, expiryTimer: null,
@@ -184,7 +184,7 @@ function getScanUniverse() {
 }
 function getCoinList() { return getScanUniverse().map(m => m.symbol); }
 function getTradeTimeframes() {
-  const r = String(process.env.TRADE_TIMEFRAMES || "").split(",").map(s => s.trim()).filter(Boolean);
+  const r = String(process.env.SMART_TRADE_TIMEFRAMES || process.env.TRADE_TIMEFRAMES || "").split(",").map(s => s.trim()).filter(Boolean);
   return r.length ? r : DEFAULT_TRADE_TIMEFRAMES;
 }
 
@@ -696,8 +696,13 @@ async function fetchStockPrices(coins) {
     const universe = getInstrumentUniverse();
     const tokenMap = {};
     for (const inst of universe) {
-      const key = (inst.symbol || inst.tradingSymbol || "").toUpperCase();
-      if (key) tokenMap[key] = { exchange: inst.exchange, token: String(inst.token) };
+      const tradingKey = (inst.tradingSymbol || "").toUpperCase().trim();
+      const symbolKey = (inst.symbol || "").toUpperCase().trim();
+      const bareKey = symbolKey.includes(":") ? symbolKey.split(":")[1] : symbolKey;
+      const entry = { exchange: inst.exchange, token: String(inst.token) };
+      if (tradingKey) tokenMap[tradingKey] = entry;
+      if (bareKey && bareKey !== tradingKey) tokenMap[bareKey] = entry;
+      if (symbolKey && symbolKey !== tradingKey && symbolKey !== bareKey) tokenMap[symbolKey] = entry;
     }
     const byExchange = {};
     const tokenToCoin = {};
@@ -878,7 +883,7 @@ async function checkAndExpireSignals() {
 
 function start() {
   if (engineState.timer) { engineState.running = true; return getStatus(); }
-  engineState.intervalMs  = Number(process.env.SCAN_INTERVAL_MS || engineState.intervalMs || 60000);
+  engineState.intervalMs  = Number(process.env.SMART_SCAN_INTERVAL_MS || process.env.SCAN_INTERVAL_MS || engineState.intervalMs || 60000);
   engineState.timer        = setInterval(() => { scanNow({ source: "ENGINE" }).catch(e => { engineState.lastError = e.message; }); }, engineState.intervalMs);
   engineState.running      = true;
   scanNow({ source: "ENGINE" }).catch(e => { engineState.lastError = e.message; });

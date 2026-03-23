@@ -384,7 +384,7 @@ router.post("/engine/stop", requireAuth, requireAdmin, (_req, res) => {
 
 router.post("/scan", requireAuth, requireAdmin, async (_req, res) => {
   try {
-    const result = await stockEngine.scanNow();
+    const result = await stockEngine.scanNow({ source: "ADMIN" });
     return res.json(result);
   } catch (error) {
     return res.status(500).json({ message: error.message });
