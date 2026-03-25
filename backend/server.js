@@ -23,7 +23,8 @@ const { router: priceAlertRoutes }   = require("./routes/priceAlerts");
 const facebookRoutes                 = require("./routes/facebook");
 const settingsRoutes                 = require("./routes/settings");
 const communityRoutes                = require("./routes/community");
-const { getStatus, start } = require("./services/signalEngine");
+const { getStatus, start, getAdaptiveModelStatus } = require("./services/signalEngine");
+const adaptiveEngine = require("./services/adaptiveEngine");
 const stockSignalEngine    = require("./services/stockSignalEngine");
 const { createWsServer, getConnectedCount } = require("./services/wsServer");
 const sseManager           = require("./services/sseManager");
@@ -236,6 +237,10 @@ function createApp() {
     engine:     getStatus(),
     wsClients:  getConnectedCount(),
     sseClients: sseManager.getClientCount(),
+    adaptiveModels: {
+      crypto: adaptiveEngine.getModelStatus("crypto"),
+      stock:  adaptiveEngine.getModelStatus("stock"),
+    },
   }));
 
   // ── SSE stream (Render-only real-time for clients that can't use WS) ────────
