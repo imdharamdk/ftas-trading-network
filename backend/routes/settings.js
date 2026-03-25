@@ -138,4 +138,30 @@ router.post("/risk", requireAuth, requireAdmin, async (req, res) => {
   return res.json({ preference });
 });
 
+// ── Adaptive Engine: model status + force refresh ────────────────────────────
+router.get("/adaptive-model", requireAuth, requireAdmin, (_req, res) => {
+  const adaptiveEngine = require("../services/adaptiveEngine");
+  return res.json({
+    crypto: adaptiveEngine.getModelStatus("crypto"),
+    stock:  adaptiveEngine.getModelStatus("stock"),
+  });
+});
+
+router.post("/adaptive-model/refresh", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const adaptiveEngine = require("../services/adaptiveEngine");
+    const { readCollection } = require("../storage/fileStore");
+    const [cryptoModel, stockModel] = await Promise.all([
+      adaptiveEngine.forceRefresh(readCollection, "signals",      "crypto"),
+      adaptiveEngine.forceRefresh(readCollection, "stockSignals", "stock"),
+    ]);
+    return res.json({
+      crypto: adaptiveEngine.getModelStatus("crypto"),
+      stock:  adaptiveEngine.getModelStatus("stock"),
+    });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
+});
+
 module.exports = router;
