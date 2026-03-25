@@ -45,10 +45,34 @@ const MIN_SCAN_QUOTE_VOLUME_USDT  = 15_000_000;   // was 25M — include more li
 const MIN_SCAN_TRADE_COUNT_24H    = 20_000;        // was 30K
 const MIN_SCAN_OPEN_INTEREST_USDT = 5_000_000;    // was 8M
 
-const RULE_VERSION = "v17_stocks_working";
-const STOCK_SIGNAL_MODEL_VERSION = process.env.STOCK_SIGNAL_MODEL_VERSION || "v16_working";
+const RULE_VERSION = "v18_stocks_filtered";
+const STOCK_SIGNAL_MODEL_VERSION = process.env.STOCK_SIGNAL_MODEL_VERSION || "v18_stocks_filtered";
 const DEFAULT_PUBLISH_FLOOR = 76;
-const STRENGTH_THRESHOLDS   = { STRONG: 88, MEDIUM: 76 };
+const STRENGTH_THRESHOLDS   = { STRONG: 88, MEDIUM: 76 }; // NOTE: stock-specific — do NOT import from constants.js
+
+// ── Ported from crypto engine — all env-configurable ─────────────────────────
+const REENTRY_COOLDOWN_ENABLED  = String(process.env.STOCK_REENTRY_COOLDOWN_ENABLED  || "true").toLowerCase() !== "false";
+const REENTRY_COOLDOWN_MINUTES  = Math.max(15, Number(process.env.STOCK_REENTRY_COOLDOWN_MINUTES || 120)); // 2hr default (stocks move slower)
+const SR_ROOM_GUARD_ENABLED     = String(process.env.STOCK_SR_ROOM_GUARD_ENABLED     || "true").toLowerCase() !== "false";
+const SR_ROOM_MIN_R             = Math.min(2.0, Math.max(0.25, Number(process.env.STOCK_SR_ROOM_MIN_R || 0.60)));
+const TREND_SEPARATION_GUARD_ENABLED = String(process.env.STOCK_TREND_SEPARATION_GUARD_ENABLED || "true").toLowerCase() !== "false";
+const TREND_SEPARATION_MIN_ATR  = Math.min(2.0, Math.max(0.05, Number(process.env.STOCK_TREND_SEPARATION_MIN_ATR || 0.18)));
+const RSI_EXTREME_GUARD_ENABLED = String(process.env.STOCK_RSI_EXTREME_GUARD_ENABLED || "true").toLowerCase() !== "false";
+const RSI_EXTREME_LONG_MAX      = Math.min(90, Math.max(60, Number(process.env.STOCK_RSI_EXTREME_LONG_MAX  || 75))); // slightly more lenient than crypto
+const RSI_EXTREME_SHORT_MIN     = Math.min(40, Math.max(10, Number(process.env.STOCK_RSI_EXTREME_SHORT_MIN || 25)));
+const SHOCK_CANDLE_GUARD_ENABLED = String(process.env.STOCK_SHOCK_CANDLE_GUARD_ENABLED || "true").toLowerCase() !== "false";
+const SHOCK_CANDLE_BODY_ATR_MULT = Math.min(3.5, Math.max(1.2, Number(process.env.STOCK_SHOCK_CANDLE_BODY_ATR_MULT || 2.2)));
+const COIN_PUBLISH_COOLDOWN_ENABLED = String(process.env.STOCK_COIN_PUBLISH_COOLDOWN_ENABLED || "true").toLowerCase() !== "false";
+const COIN_PUBLISH_COOLDOWN_MINUTES = Math.max(5, Number(process.env.STOCK_COIN_PUBLISH_COOLDOWN_MINUTES || 60)); // 60 min default for stocks
+const MID_TF_ALIGNMENT_GUARD_ENABLED = String(process.env.STOCK_MID_TF_ALIGNMENT_GUARD_ENABLED || "true").toLowerCase() !== "false";
+const MID_TF_ALIGNMENT_MIN_ADX  = Math.max(8, Number(process.env.STOCK_MID_TF_ALIGNMENT_MIN_ADX || 14));
+const VOL_GUARD_ENABLED         = String(process.env.STOCK_VOL_GUARD_ENABLED || "true").toLowerCase() !== "false";
+const VOL_GUARD_LOW_PCT         = Math.max(0.02, Number(process.env.STOCK_VOL_GUARD_LOW_PCT || 0.05));  // stocks have lower ATR%
+const VOL_GUARD_HIGH_PCT        = Math.max(VOL_GUARD_LOW_PCT + 0.2, Number(process.env.STOCK_VOL_GUARD_HIGH_PCT || 5.0)); // wider upper band for stocks
+const AUTO_COIN_COOLDOWN_ENABLED = String(process.env.STOCK_AUTO_COIN_COOLDOWN_ENABLED || "true").toLowerCase() !== "false";
+const AUTO_COIN_COOLDOWN_HOURS  = Math.max(1, Number(process.env.STOCK_AUTO_COIN_COOLDOWN_HOURS || 48)); // 2 days for stocks
+const AUTO_COIN_COOLDOWN_WINDOW = Math.max(3, Number(process.env.STOCK_AUTO_COIN_COOLDOWN_WINDOW || 4));
+const AUTO_COIN_COOLDOWN_MIN_LOSSES = Math.min(AUTO_COIN_COOLDOWN_WINDOW, Math.max(2, Number(process.env.STOCK_AUTO_COIN_COOLDOWN_MIN_LOSSES || 3)));
 
 // ── NSE Market Hours Guard ─────────────────────────────────────────────────────
 // Only scan during NSE trading hours: Mon-Fri 9:15 AM – 3:30 PM IST
@@ -325,6 +349,55 @@ function hasManipulationCandle(side, analysis) {
   return false;
 }
 
+// ─── Shock Candle Detector (ported from crypto engine) ───────────────────────
+// Rejects signals immediately after a massive impulse candle (entry-chase protection)
+function hasShockCandle(side, analysis) {
+  if (!SHOCK_CANDLE_GUARD_ENABLED) return false;
+  const c   = analysis.candles;
+  const atr = analysis.volatility.atr || 1;
+  if (!c) return false;
+  const body = Math.abs((c.close || 0) - (c.open || 0));
+  if (body < atr * SHOCK_CANDLE_BODY_ATR_MULT) return false;
+  // Body is a shock candle — only reject if we're chasing in that direction
+  const isBullShock = c.close > c.open;
+  if (side === "LONG"  && isBullShock) return true;  // chasing a spike up
+  if (side === "SHORT" && !isBullShock) return true; // chasing a spike down
+  return false;
+}
+
+// ─── Volatility band per timeframe (stock-tuned) ──────────────────────────────
+function getVolatilityBand(timeframe) {
+  const bands = {
+    "15m": { min: VOL_GUARD_LOW_PCT, max: VOL_GUARD_HIGH_PCT },
+    "30m": { min: VOL_GUARD_LOW_PCT * 1.2, max: VOL_GUARD_HIGH_PCT },
+    "1h":  { min: VOL_GUARD_LOW_PCT * 1.5, max: VOL_GUARD_HIGH_PCT },
+    "4h":  { min: VOL_GUARD_LOW_PCT * 2.0, max: VOL_GUARD_HIGH_PCT },
+    "1d":  { min: VOL_GUARD_LOW_PCT * 3.0, max: VOL_GUARD_HIGH_PCT },
+  };
+  return bands[timeframe] || { min: VOL_GUARD_LOW_PCT, max: VOL_GUARD_HIGH_PCT };
+}
+
+// ─── Publish cooldown map (per stock) ────────────────────────────────────────
+async function getCoinPublishCooldownMap(nowMs = Date.now()) {
+  if (!COIN_PUBLISH_COOLDOWN_ENABLED) return {};
+  const cooldownMs = COIN_PUBLISH_COOLDOWN_MINUTES * 60 * 1000;
+  const cutoffMs   = nowMs - cooldownMs;
+  const map = {};
+  try {
+    const signals = await readCollection(STOCK_COLLECTION);
+    for (const sig of signals) {
+      const coin = String(sig?.coin || "").toUpperCase();
+      if (!coin) continue;
+      if (String(sig?.source || "").toUpperCase() === "MANUAL") continue;
+      const ts = new Date(sig?.createdAt || sig?.updatedAt || 0).getTime();
+      if (!Number.isFinite(ts) || ts < cutoffMs) continue;
+      const prev = map[coin] || 0;
+      if (ts > prev) map[coin] = ts;
+    }
+  } catch {}
+  return map;
+}
+
 // ─── Main Signal Builder ──────────────────────────────────────────────────────
 function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketActivity = null, performanceSnapshot = null) {
   const bullConf = [], bearConf = [];
@@ -372,19 +445,56 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const idmBear   = smcIDM.bear;
 
   // ════════════════════════════════════════════════════════════════════════════
-  // GATE CHECKS
+  // GATE CHECKS (crypto-parity filters — ported + tuned for Indian stocks)
   // ════════════════════════════════════════════════════════════════════════════
 
   // GATE 1: HTF Alignment
   if (higherBias === "NEUTRAL") return null;
   const side = higherBias === "BULLISH" ? "LONG" : "SHORT";
 
-  // GATE 2: Core EMA Trend — ema50 > ema100 required; ema200 alignment is bonus not gate
-  // Indian stocks have slower EMA convergence — requiring ema100>ema200 blocks too many valid setups
+  // 1H directional filter — only take signals in 1H trend direction
+  const oneHBullAligned = Number(oneH?.trend?.ema50 || 0) > Number(oneH?.trend?.ema100 || 0);
+  const oneHBearAligned = Number(oneH?.trend?.ema50 || 0) < Number(oneH?.trend?.ema100 || 0);
+  if (side === "LONG"  && !oneHBullAligned) return null;
+  if (side === "SHORT" && !oneHBearAligned) return null;
+
+  // Re-entry cooldown: skip if last SL was recent on this coin×side×TF
+  if (REENTRY_COOLDOWN_ENABLED && performanceSnapshot) {
+    const key = `${String(coin || "").toUpperCase()}:${String(side || "").toUpperCase()}:${String(timeframe || "").toLowerCase()}`;
+    const lastLossAt = Number(performanceSnapshot.lastLossAtByCoinSideTimeframe?.[key] || 0);
+    const cooldownMs = REENTRY_COOLDOWN_MINUTES * 60 * 1000;
+    if (lastLossAt > 0 && (Date.now() - lastLossAt) < cooldownMs) return null;
+  }
+
+  // Mid-TF alignment for short timeframes (15m must align with 1h when scanning 15m)
+  if (MID_TF_ALIGNMENT_GUARD_ENABLED && timeframe === "15m") {
+    const midRefs = [oneH].filter(Boolean);
+    let aligned = 0, checked = 0;
+    for (const mid of midRefs) {
+      const mTrend = mid?.trend || {};
+      const mEma50 = Number(mTrend.ema50 || 0);
+      const mEma100 = Number(mTrend.ema100 || 0);
+      const mAdx = Number(mTrend.adx || 0);
+      if (!mEma50 || !mEma100 || mAdx < MID_TF_ALIGNMENT_MIN_ADX) continue;
+      checked += 1;
+      const isBull = mEma50 > mEma100;
+      if ((side === "LONG" && isBull) || (side === "SHORT" && !isBull)) aligned += 1;
+    }
+    if (checked > 0 && aligned === 0) return null;
+  }
+
+  // GATE 2: Core EMA Trend — ema50 > ema100 required
   const coreBullStack = ema50 > ema100 * 0.997;
   const coreBearStack = ema50 < ema100 * 1.003;
   if (side === "LONG"  && !coreBullStack) return null;
   if (side === "SHORT" && !coreBearStack) return null;
+
+  // Trend separation guard: EMA50/100 must be meaningfully apart (not flat)
+  if (TREND_SEPARATION_GUARD_ENABLED) {
+    const separation = Math.abs(Number(ema50 || 0) - Number(ema100 || 0));
+    const sepAtr = atr > 0 ? (separation / atr) : 0;
+    if (!Number.isFinite(sepAtr) || sepAtr < TREND_SEPARATION_MIN_ATR) return null;
+  }
 
   // GATE 3: ADX — trend must exist
   const minAdx     = tfRule.minAdx ?? 20;
@@ -393,26 +503,32 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   if (side === "LONG"  && ((pdi||0) - (mdi||0)) < minDiDelta) return null;
   if (side === "SHORT" && ((mdi||0) - (pdi||0)) < minDiDelta) return null;
 
-  // GATE 4: Momentum — RSI + MACD (StochRSI is bonus)
+  // GATE 4: Momentum — RSI + MACD
   if (!isMomentumAligned(side, analysis, tfRule)) return null;
 
-  // GATE 5: Volume — soft check (bonus scoring, not hard reject)
-  // Volume is already scoring bonus points below; hard gate removed to not block valid setups
+  // RSI extreme guard: don't buy already overbought, don't sell already oversold
+  if (RSI_EXTREME_GUARD_ENABLED) {
+    const rsiNow = Number(rsi || 0);
+    if (side === "LONG"  && rsiNow >= RSI_EXTREME_LONG_MAX)  return null;
+    if (side === "SHORT" && rsiNow <= RSI_EXTREME_SHORT_MIN) return null;
+  }
 
-  // GATE 6 removed: HA is bonus only (not hard gate — blocks too many valid signals)
+  // GATE 5 & 6: Volume / HA are bonus scoring only (not hard gates)
 
   // ── SECONDARY FILTERS ─────────────────────────────────────────────────────
-  // VWAP check
   if (tfRule.requireVwapSupport) {
     if (side === "LONG"  && price < vwap) return null;
     if (side === "SHORT" && price > vwap) return null;
   }
-  // Daily bear block for LONGs
   if (tfRule.blockDailyBear && side === "LONG" && dailyBearStack) return null;
-  // Manipulation candle
+
+  // Manipulation candle filter
   if (hasManipulationCandle(side, analysis)) return null;
-  // REMOVED: regime === "RANGING" block — Indian stocks are often range-bound
-  // BB extreme zone — don't buy overbought top or sell oversold bottom
+
+  // Shock candle filter (entry-chase protection)
+  if (SHOCK_CANDLE_GUARD_ENABLED && hasShockCandle(side, analysis)) return null;
+
+  // BB extreme zone
   if (bbPctB !== null) {
     if (side === "LONG"  && bbPctB > 0.92) return null;
     if (side === "SHORT" && bbPctB < 0.08) return null;
@@ -608,6 +724,25 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const targets         = calculateTargets(side, analysis, timeframe);
   const leverage        = calculateLeverage(analysis, confidence, timeframe);
   if (!Number.isFinite(targets.riskPerUnit) || targets.riskPerUnit <= 0) return null;
+
+  // SR room guard: enough price room to TP before hitting resistance/support
+  let srRoomR = null;
+  if (SR_ROOM_GUARD_ENABLED) {
+    if (side === "LONG"  && Number.isFinite(srRes) && srRes > targets.entry) {
+      srRoomR = (srRes - targets.entry) / targets.riskPerUnit;
+    } else if (side === "SHORT" && Number.isFinite(srSup) && srSup < targets.entry) {
+      srRoomR = (targets.entry - srSup) / targets.riskPerUnit;
+    }
+    if (srRoomR !== null && srRoomR < SR_ROOM_MIN_R) return null;
+  }
+
+  // Volatility guard: filter extreme spikes / dead stocks
+  const atrPercent = price > 0 ? (rawAtr / price) * 100 : 0;
+  if (VOL_GUARD_ENABLED) {
+    const volBand = getVolatilityBand(timeframe);
+    if (!Number.isFinite(atrPercent) || atrPercent < volBand.min || atrPercent > volBand.max) return null;
+  }
+
   const driftMultiplier = tfRule.entryDriftMultiplier ?? 0.5;
   const entryDriftLimit = Math.max(atr * driftMultiplier, atr * 0.2);
   if (Math.abs(price - targets.entry) > entryDriftLimit) return null;
@@ -638,7 +773,9 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
       marketQuoteVolume: roundPrice(activeMarket.quoteVolume),
       marketTradeCount: roundPrice(activeMarket.tradeCount),
       marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
-      modelVersion: STOCK_SIGNAL_MODEL_VERSION + "+adaptive_v2",
+      modelVersion: STOCK_SIGNAL_MODEL_VERSION + "+adaptive_v2+filtered_v2",
+      srRoomR: srRoomR === null ? null : roundPrice(srRoomR),
+      atrPercent: roundPrice(atrPercent),
       smc: {
         choch:     { bull: false, bear: false, level: smcCHoCH.level },
         idm:       { bull: idmBull,   bear: idmBear,   sweepLevel: smcIDM.sweepLevel, rejectionStrength: smcIDM.rejectionStrength },
@@ -813,21 +950,78 @@ async function evaluateActiveSignals() {
 async function getPerformanceSnapshot() {
   try {
     const signals = await readCollection(STOCK_COLLECTION);
-    const stats   = { overall: buildTally(), LONG: buildTally(), SHORT: buildTally(), "5m": buildTally(), "1m": buildTally() };
-    for (const sig of signals) {
+    const stats = {
+      overall: buildTally(), LONG: buildTally(), SHORT: buildTally(),
+      "15m": buildTally(), "1h": buildTally(),
+      byCoin: {}, bySide: {}, bySideTimeframe: {},
+      lastLossAtByCoinSideTimeframe: {},
+      recent5LossCountByCoin: {},
+    };
+
+    // Newest-first for streak detection
+    const sorted = [...signals].sort((a, b) =>
+      new Date(b.closedAt || b.updatedAt || b.createdAt || 0) -
+      new Date(a.closedAt || a.updatedAt || a.createdAt || 0)
+    );
+
+    const coinRecentCount = {}; // track last 5 resolved per coin
+
+    for (const sig of sorted) {
       const isWin  = WIN_RESULTS.has(sig.result);
       const isLoss = LOSS_RESULTS.has(sig.result);
       if (!isWin && !isLoss) continue;
+
       const key = isWin ? "wins" : "losses";
       stats.overall[key] += 1;
-      if (stats[sig.side])      stats[sig.side][key] += 1;
-      if (!stats[sig.timeframe]) stats[sig.timeframe] = buildTally();
-      stats[sig.timeframe][key] += 1;
+
+      const coin = String(sig.coin || "").toUpperCase();
+      const side = String(sig.side || "").toUpperCase();
+      const tf   = String(sig.timeframe || "").toLowerCase();
+
+      if (stats[side]) stats[side][key] += 1;
+      if (!stats[tf]) stats[tf] = buildTally();
+      stats[tf][key] += 1;
+
+      // per-coin / side / side×TF
+      if (!stats.byCoin[coin]) stats.byCoin[coin] = buildTally();
+      stats.byCoin[coin][key] += 1;
+      if (!stats.bySide[side]) stats.bySide[side] = buildTally();
+      stats.bySide[side][key] += 1;
+      const stKey = `${side}:${tf}`;
+      if (!stats.bySideTimeframe[stKey]) stats.bySideTimeframe[stKey] = buildTally();
+      stats.bySideTimeframe[stKey][key] += 1;
+
+      // Re-entry cooldown: track last SL timestamp per coin:side:tf
+      if (isLoss) {
+        const cstKey = `${coin}:${side}:${tf}`;
+        const lossTs = new Date(sig.closedAt || sig.updatedAt || 0).getTime();
+        if (!stats.lastLossAtByCoinSideTimeframe[cstKey] ||
+            lossTs > stats.lastLossAtByCoinSideTimeframe[cstKey]) {
+          stats.lastLossAtByCoinSideTimeframe[cstKey] = lossTs;
+        }
+      }
+
+      // Recent 5 loss count per coin (for auto-cooldown)
+      if (!coinRecentCount[coin]) coinRecentCount[coin] = 0;
+      if (coinRecentCount[coin] < 5) {
+        if (isLoss) {
+          stats.recent5LossCountByCoin[coin] = (stats.recent5LossCountByCoin[coin] || 0) + 1;
+        }
+        coinRecentCount[coin] += 1;
+      }
     }
+
     stats.sampleSize = stats.overall.wins + stats.overall.losses;
     return stats;
   } catch {
-    return { overall: buildTally(), LONG: buildTally(), SHORT: buildTally(), "5m": buildTally(), "1m": buildTally(), sampleSize: 0 };
+    return {
+      overall: buildTally(), LONG: buildTally(), SHORT: buildTally(),
+      "15m": buildTally(), "1h": buildTally(),
+      byCoin: {}, bySide: {}, bySideTimeframe: {},
+      lastLossAtByCoinSideTimeframe: {},
+      recent5LossCountByCoin: {},
+      sampleSize: 0,
+    };
   }
 }
 
@@ -879,12 +1073,42 @@ async function scanNow({ source = "ENGINE" } = {}) {
     const performanceSnapshot = await getPerformanceSnapshot();
     // Refresh adaptive model before scan (10-min cache, no-op if recent)
     await adaptiveEngine.refreshModel(readCollection, STOCK_COLLECTION, "stock").catch(() => {});
+
+    // Auto coin cooldown: pause stocks with repeated recent losses
+    if (AUTO_COIN_COOLDOWN_ENABLED && performanceSnapshot.recent5LossCountByCoin) {
+      const cooldownMs = AUTO_COIN_COOLDOWN_HOURS * 60 * 60 * 1000;
+      for (const [coin, lossCount] of Object.entries(performanceSnapshot.recent5LossCountByCoin)) {
+        if (lossCount >= AUTO_COIN_COOLDOWN_MIN_LOSSES && !engineState.pausedCoins[coin]) {
+          engineState.pausedCoins[coin] = {
+            pausedAt: new Date().toISOString(),
+            reason: `Auto-cooldown: ${lossCount}/${AUTO_COIN_COOLDOWN_WINDOW} recent losses`,
+            pausedBy: "ENGINE",
+            autoExpireAt: Date.now() + cooldownMs,
+          };
+        }
+      }
+    }
+    // Expire auto-cooldowns
+    const now = Date.now();
+    for (const [coin, pause] of Object.entries(engineState.pausedCoins)) {
+      if (pause.pausedBy === "ENGINE" && pause.autoExpireAt && now >= pause.autoExpireAt) {
+        delete engineState.pausedCoins[coin];
+      }
+    }
+
+    // Publish cooldown map: skip stocks published too recently
+    const publishCooldownMap = await getCoinPublishCooldownMap(now);
+
     const scanUniverse        = getScanUniverse();
     const coins               = scanUniverse.slice(0, getMaxCoinsPerScan());
     for (const market of coins) {
-      // Skip admin-paused coins
+      // Skip admin/auto-paused coins
       if (engineState.pausedCoins[market.symbol]) {
-        errors.push({ coin: market.symbol, message: "Paused by admin — skipped in scan" });
+        errors.push({ coin: market.symbol, message: "Paused — skipped in scan" });
+        continue;
+      }
+      // Skip if published too recently
+      if (publishCooldownMap[market.symbol]) {
         continue;
       }
       try {
