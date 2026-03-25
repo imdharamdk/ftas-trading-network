@@ -3,6 +3,7 @@ const { readCollection, mutateCollection } = require("../storage/fileStore");
 const { analyzeCandles } = require("./indicatorEngine");
 const { getAllTickerStats, getAllFuturesCoins, getKlines, getPrices } = require("./binanceService");
 const { getExpiryMs, WIN_RESULTS, LOSS_RESULTS, STRENGTH_THRESHOLDS } = require("../constants");
+const adaptiveEngine = require("./adaptiveEngine");
 
 function ws()   { try { return require("./wsServer");              } catch { return null; } }
 function sse()  { try { return require("./sseManager");            } catch { return null; } }
@@ -1177,9 +1178,23 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   const localAiAdjustment = getLocalAiAdjustment(selfLearningModel?.localModel, { coin, side, timeframe, baseConfidence });
   if (adaptiveQuality.blockCoin || learningAdjustment.blockCoin || localAiAdjustment.blockCoin) return null;
 
-  const confidence = clamp(baseConfidence + learningAdjustment.scoreDelta + localAiAdjustment.confidenceDelta, 0, 100);
+  // Layer 4: Pattern Success Tracker + streak guard from shared adaptiveEngine
+  const cryptoAdaptiveModel = adaptiveEngine._models?.crypto || null;
+  const pstAdj = adaptiveEngine.getAdjustment(cryptoAdaptiveModel, {
+    coin, side, timeframe,
+    confidence: baseConfidence,
+    indicators: { rsi: analysis.rsi ?? null, adx: analysis.adx ?? null, volumeStrong, volumeSpike },
+    confirmations: (side === "LONG" ? bullConf : bearConf).map(c => (typeof c === "string" ? c : c?.text || "")),
+  });
+  // Block from new engine (coin blocked or NB low prob) — existing layers already checked above
+  if (pstAdj.block) return null;
+
+  const confidence = clamp(
+    baseConfidence + learningAdjustment.scoreDelta + localAiAdjustment.confidenceDelta + pstAdj.layers.pst.scoreDelta,
+    0, 100
+  );
   const minScore         = (tfRule.minScore         || 62) + adaptiveQuality.scoreBoost;
-  const minConfirmations = (tfRule.minConfirmations || 5)  + adaptiveQuality.minConfirmationsBoost;
+  const minConfirmations = (tfRule.minConfirmations || 5)  + adaptiveQuality.minConfirmationsBoost + pstAdj.minConfirmationsBoost;
   const publishFloorBase = (tfRule.publishFloor     || DEFAULT_PUBLISH_FLOOR) + adaptiveQuality.publishFloorBoost + learningAdjustment.publishFloorBoost + localAiAdjustment.publishFloorBoost;
   const publishFloor     = Math.max(publishFloorBase, Number(adaptiveQuality.minPublishFloorAbs || 0));
 
@@ -1279,6 +1294,13 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
         confidenceDelta: localAiAdjustment.confidenceDelta,
         publishFloorBoost: localAiAdjustment.publishFloorBoost,
         reasons: localAiAdjustment.reasons,
+      },
+      adaptiveV2: {
+        patternDelta:      pstAdj.layers.pst.scoreDelta,
+        patternReasons:    pstAdj.layers.pst.reasons,
+        streakWarning:     pstAdj.streakWarning,
+        predictedWinProb:  pstAdj.predictedWinProb,
+        modelStatus:       adaptiveEngine.getModelStatus("crypto"),
       },
       smc: {
         choch:     { bull: false, bear: false, level: smcCHoCH.level },
@@ -1746,6 +1768,8 @@ async function scanNow({ source = "ENGINE" } = {}) {
     applyAutoCoinSideCooldown(performanceSnapshot);
     applyAutoTimeframeCooldown(performanceSnapshot);
     const selfLearningModel = await refreshSelfLearningModel({ force: closedSignals.length > 0 });
+    // Refresh shared adaptive model (Pattern Tracker + NB v2) — 10-min cache
+    await adaptiveEngine.refreshModel(readCollection, SIGNAL_COLLECTION, "crypto").catch(() => {});
     const scanUniverse = await getScanUniverse();
     const coins = scanUniverse.slice(0, getMaxCoinsPerScan());
     const scanConcurrency = getCoinScanConcurrency();
@@ -1999,4 +2023,4 @@ async function generateForCoin(symbol, actor) {
   return { generated: true, signal };
 }
 
-module.exports = { createManualSignal, evaluateActiveSignals, getCoinList, getStatus, getSelfLearningStatus, setSelfLearningEnabled, applyAutonomousActions, scanNow, start, stop, pauseCoin, resumeCoin, getPausedCoins, generateForCoin };
+module.exports = { createManualSignal, evaluateActiveSignals, getCoinList, getStatus, getSelfLearningStatus, setSelfLearningEnabled, applyAutonomousActions, scanNow, start, stop, pauseCoin, resumeCoin, getPausedCoins, generateForCoin, getAdaptiveModelStatus: () => require("./adaptiveEngine").getModelStatus("crypto"), forceAdaptiveRefresh: async (readFn) => require("./adaptiveEngine").forceRefresh(readFn, "signals", "crypto") };
