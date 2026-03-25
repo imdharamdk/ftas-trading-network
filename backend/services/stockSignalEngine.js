@@ -3,6 +3,7 @@ const { readCollection, mutateCollection } = require("../storage/fileStore");
 const { analyzeCandles } = require("./indicatorEngine");
 const { ensureSession, getCandles: smartGetCandles } = require("./smartApiService");
 const { getInstrumentUniverse } = require("./smartInstrumentService");
+const adaptiveEngine = require("./adaptiveEngine");
 
 function ws()   { try { return require("./wsServer");              } catch { return null; } }
 function sse()  { try { return require("./sseManager");            } catch { return null; } }
@@ -557,13 +558,35 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
   if ((roc5||0) > 0 && side === "LONG")  bullScore += 2;
   if ((roc5||0) < 0 && side === "SHORT") bearScore += 2;
 
-  // ── Final publish check ───────────────────────────────────────────────────
-  const confidence    = side === "LONG" ? bullScore : bearScore;
-  const confirmations = side === "LONG" ? bullConf  : bearConf;
+  // ── Final publish check (Adaptive Scoring Engine v2) ─────────────────────
+  const baseConfidence = side === "LONG" ? bullScore : bearScore;
+  const confirmations  = side === "LONG" ? bullConf  : bearConf;
 
-  const minScore         = tfRule.minScore         || 62;
-  const minConfirmations = tfRule.minConfirmations || 5;
-  const publishFloor     = tfRule.publishFloor     || DEFAULT_PUBLISH_FLOOR;
+  // Adaptive model (refreshed every 10 min, in-memory cache)
+  const adaptiveModel = adaptiveEngine._models?.stock || null;
+
+  const adaptiveAdj = adaptiveEngine.getAdjustment(adaptiveModel, {
+    coin,
+    side,
+    timeframe,
+    confidence: baseConfidence,
+    indicators: {
+      rsi:          (analysis.rsi ?? null),
+      adx:          (analysis.adx ?? null),
+      volumeStrong: (volumeStrong ?? false),
+      volumeSpike:  (volumeSpike  ?? false),
+    },
+    confirmations: confirmations.map(c => (typeof c === "string" ? c : c?.text || "")),
+  });
+
+  // Hard block from any adaptive layer
+  if (adaptiveAdj.block) return null;
+
+  const confidence = Math.min(Math.max(baseConfidence + adaptiveAdj.scoreDelta, 0), 100);
+
+  const minScore         = (tfRule.minScore         || 62);
+  const minConfirmations = (tfRule.minConfirmations || 5)  + adaptiveAdj.minConfirmationsBoost;
+  const publishFloor     = (tfRule.publishFloor     || DEFAULT_PUBLISH_FLOOR) + adaptiveAdj.publishFloorBoost;
 
   if (confidence < minScore)                   return null;
   if (confirmations.length < minConfirmations) return null;
@@ -615,11 +638,21 @@ function buildCandidate(coin, timeframe, analysis, higherBias, htf = {}, marketA
       marketQuoteVolume: roundPrice(activeMarket.quoteVolume),
       marketTradeCount: roundPrice(activeMarket.tradeCount),
       marketOpenInterestValue: roundPrice(activeMarket.openInterestValue),
-      modelVersion: STOCK_SIGNAL_MODEL_VERSION,
+      modelVersion: STOCK_SIGNAL_MODEL_VERSION + "+adaptive_v2",
       smc: {
         choch:     { bull: false, bear: false, level: smcCHoCH.level },
         idm:       { bull: idmBull,   bear: idmBear,   sweepLevel: smcIDM.sweepLevel, rejectionStrength: smcIDM.rejectionStrength },
         structure: smcStructure.trend,
+      },
+      adaptive: {
+        scoreDelta:           adaptiveAdj.scoreDelta,
+        publishFloorBoost:    adaptiveAdj.publishFloorBoost,
+        minConfirmationsBoost: adaptiveAdj.minConfirmationsBoost,
+        predictedWinProb:     adaptiveAdj.predictedWinProb,
+        streakWarning:        adaptiveAdj.streakWarning,
+        reasons:              adaptiveAdj.reasons,
+        layers:               adaptiveAdj.layers,
+        modelStatus:          adaptiveEngine.getModelStatus("stock"),
       },
       sourceTimeframes: SCAN_TIMEFRAMES,
       timeframeRule: tfRule,
@@ -844,6 +877,8 @@ async function scanNow({ source = "ENGINE" } = {}) {
   try {
     const closedSignals       = await evaluateActiveSignals();
     const performanceSnapshot = await getPerformanceSnapshot();
+    // Refresh adaptive model before scan (10-min cache, no-op if recent)
+    await adaptiveEngine.refreshModel(readCollection, STOCK_COLLECTION, "stock").catch(() => {});
     const scanUniverse        = getScanUniverse();
     const coins               = scanUniverse.slice(0, getMaxCoinsPerScan());
     for (const market of coins) {
