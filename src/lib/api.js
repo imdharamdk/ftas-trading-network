@@ -129,3 +129,11 @@ export async function apiFetch(path, options = {}) {
 
   return runFetch();
 }
+
+export function loginWithFirebase(payload) {
+  return apiFetch("/auth/firebase", {
+    method: "POST",
+    body: payload,
+    skipAuth: true,
+  });
+}

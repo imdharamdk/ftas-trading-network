@@ -24,6 +24,11 @@ const SUBSCRIPTION_STATUS = {
   INACTIVE: "INACTIVE",
 };
 
+const AUTH_PROVIDERS = {
+  FIREBASE: "FIREBASE",
+  LOCAL: "LOCAL",
+};
+
 const FREE_TRIAL_DAYS = 7;
 
 const DEFAULT_SIGNAL_PREFERENCES = {
@@ -142,7 +147,7 @@ function createUser({
   email,
   isActive = true,
   name,
-  passwordHash,
+  passwordHash = null,
   plan = USER_PLANS.FREE_TRIAL,
   riskPreference = RISK_PREFERENCES.BALANCED,
   role = USER_ROLES.USER,
@@ -150,6 +155,9 @@ function createUser({
   twoFactor = {},
   subscriptionEndsAt = addDaysToIso(FREE_TRIAL_DAYS),
   subscriptionStatus = SUBSCRIPTION_STATUS.ACTIVE,
+  authProvider = AUTH_PROVIDERS.LOCAL,
+  firebaseUid = "",
+  avatarUrl = "",
   termsAcceptedAt = null,
   privacyAcceptedAt = null,
 }) {
@@ -163,6 +171,9 @@ function createUser({
     passwordHash,
     role,
     plan,
+    authProvider: String(authProvider || AUTH_PROVIDERS.LOCAL).trim().toUpperCase(),
+    firebaseUid: String(firebaseUid || "").trim(),
+    avatarUrl: String(avatarUrl || "").trim(),
     riskPreference: normalizeRiskPreference(riskPreference),
     signalPreferences: normalizeSignalPreferences(signalPreferences),
     twoFactor: normalizeTwoFactor(twoFactor),
@@ -198,6 +209,7 @@ module.exports = {
   DEFAULT_SIGNAL_PREFERENCES,
   FREE_TRIAL_DAYS,
   SUBSCRIPTION_STATUS,
+  AUTH_PROVIDERS,
   USER_ROLES,
   USER_PLANS,
   RISK_PREFERENCES,

@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { signInWithPopup } from "firebase/auth";
 import { useSession } from "../context/useSession";
 import { apiFetch } from "../lib/api";
+import { auth, googleProvider } from "../lib/firebase";
 import { evaluatePasswordStrength } from "../lib/passwordStrength";
 
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -37,9 +39,24 @@ function mapForgotError(errorMessage, step) {
   return raw;
 }
 
+function mapGoogleError(error) {
+  const message = String(error?.message || "").trim();
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes("privacy policy") || normalized.includes("terms of service")) {
+    return "No account found for this Google sign-in. Create it from Signup after accepting Terms and Privacy.";
+  }
+
+  if (normalized.includes("popup closed")) {
+    return "Google sign-in was cancelled.";
+  }
+
+  return message || "Google sign-in failed";
+}
+
 export default function Login() {
   const navigate = useNavigate();
-  const { login } = useSession();
+  const { login, loginWithFirebase } = useSession();
   const [form, setForm] = useState({
     email: "",
     password: "",
@@ -47,6 +64,7 @@ export default function Login() {
   });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
   const [otpRequired, setOtpRequired] = useState(false);
 
   const [showForgot, setShowForgot] = useState(false);
@@ -61,8 +79,6 @@ export default function Login() {
 
   const resetStrength = evaluatePasswordStrength(forgotPassword);
 
-  // Pre-warm Render backend as soon as Login page loads — user fills credentials
-  // in ~10-20s, by then backend is already warm, no cold start on first real request.
   useEffect(() => {
     const API = (import.meta.env?.VITE_API_BASE_URL || "/api").replace(/\/+$/, "");
     fetch(API + "/health", { method: "GET", cache: "no-store" }).catch(() => {});
@@ -101,6 +117,23 @@ export default function Login() {
       }
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleGoogleSignIn() {
+    setGoogleBusy(true);
+    setError("");
+    setOtpRequired(false);
+
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const idToken = await result.user.getIdToken();
+      await loginWithFirebase({ idToken });
+      navigate("/dashboard");
+    } catch (googleError) {
+      setError(mapGoogleError(googleError));
+    } finally {
+      setGoogleBusy(false);
     }
   }
 
@@ -225,10 +258,20 @@ export default function Login() {
 
             {error ? <div className="form-error">{error}</div> : null}
 
-            <button className="button button-primary" disabled={busy} type="submit">
+            <button className="button button-primary" disabled={busy || googleBusy} type="submit">
               {busy ? "Signing in..." : "Login"}
             </button>
           </form>
+
+          <button
+            className="button button-secondary"
+            disabled={busy || googleBusy}
+            onClick={handleGoogleSignIn}
+            style={{ marginTop: "10px", width: "100%" }}
+            type="button"
+          >
+            {googleBusy ? "Connecting to Google..." : "Continue with Google"}
+          </button>
 
           <button
             className="button button-ghost"

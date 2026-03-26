@@ -18,6 +18,7 @@ const {
 const { mutateCollection, readCollection, writeCollection } = require("../storage/fileStore");
 const { sendResetCodeEmail } = require("../services/emailService");
 const { listAuthSecurityEvents, logAuthSecurityEvent } = require("../services/securityEventService");
+const { verifyFirebaseIdToken } = require("../services/firebaseAdmin");
 
 const router = express.Router();
 
@@ -297,6 +298,119 @@ router.post("/login", async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ message: error.message });
+  }
+});
+
+router.post("/firebase", async (req, res) => {
+  try {
+    const idToken = String(req.body?.idToken || "").trim();
+    const requestedName = String(req.body?.name || "").trim();
+    const requestedFirstName = String(req.body?.firstName || "").trim();
+    const requestedLastName = String(req.body?.lastName || "").trim();
+    const termsAccepted = req.body?.termsAccepted === true;
+    const privacyAccepted = req.body?.privacyAccepted === true;
+
+    if (!idToken) {
+      return res.status(400).json({ message: "Firebase token is required" });
+    }
+
+    const decoded = await verifyFirebaseIdToken(idToken);
+    const firebaseUid = String(decoded.uid || "").trim();
+    const normalizedEmail = normalizeEmail(decoded.email || "");
+    const emailVerified = decoded.email_verified === true;
+    const firebaseName = String(decoded.name || "").trim();
+    const avatarUrl = String(decoded.picture || "").trim();
+
+    if (!firebaseUid) {
+      return res.status(401).json({ message: "Invalid Firebase token" });
+    }
+
+    if (!normalizedEmail) {
+      return res.status(400).json({ message: "Verified email is required" });
+    }
+
+    if (!emailVerified) {
+      return res.status(403).json({ message: "Google account email is not verified" });
+    }
+
+    const fullName = [requestedFirstName, requestedLastName].filter(Boolean).join(" ").trim() || requestedName || firebaseName || normalizedEmail.split("@")[0];
+
+    const result = await mutateCollection("users", (records) => {
+      const existing = records.find((user) => user.email === normalizedEmail);
+
+      if (existing) {
+        if (existing.firebaseUid && existing.firebaseUid !== firebaseUid) {
+          return { records, value: { error: "FIREBASE_UID_CONFLICT" } };
+        }
+
+        const nowIso = new Date().toISOString();
+        const updatedUser = {
+          ...existing,
+          firebaseUid,
+          authProvider: "FIREBASE",
+          avatarUrl: avatarUrl || existing.avatarUrl || "",
+          name: existing.name || fullName,
+          isActive: true,
+          ...buildVisitActivityUpdate(existing, nowIso, { incrementVisit: true }),
+          updatedAt: nowIso,
+        };
+
+        return {
+          records: records.map((user) => (user.id === existing.id ? updatedUser : user)),
+          value: { user: updatedUser, isNewUser: false },
+        };
+      }
+
+      if (!termsAccepted || !privacyAccepted) {
+        return { records, value: { error: "TERMS_REQUIRED" } };
+      }
+
+      const acceptedAt = new Date().toISOString();
+      const user = createUser({
+        email: normalizedEmail,
+        name: fullName,
+        passwordHash: null,
+        role: USER_ROLES.USER,
+        plan: USER_PLANS.FREE_TRIAL,
+        subscriptionStatus: SUBSCRIPTION_STATUS.ACTIVE,
+        authProvider: "FIREBASE",
+        firebaseUid,
+        avatarUrl,
+        termsAcceptedAt: acceptedAt,
+        privacyAcceptedAt: acceptedAt,
+      });
+
+      return {
+        records: [user, ...records],
+        value: { user, isNewUser: true },
+      };
+    });
+
+    if (result?.error === "FIREBASE_UID_CONFLICT") {
+      return res.status(409).json({ message: "This email is already linked to another Firebase account" });
+    }
+
+    if (result?.error === "TERMS_REQUIRED") {
+      return res.status(400).json({ message: "Please accept the Terms of Service and Privacy Policy to continue." });
+    }
+
+    invalidateUserCache(result.user.id);
+
+    await logAuthSecurityEvent(req, {
+      type: result.isNewUser ? "REGISTER" : "LOGIN",
+      userId: result.user.id,
+      email: normalizedEmail,
+      status: "OK",
+      reason: "firebase",
+    });
+
+    const token = signToken(result.user);
+    return res.json({
+      token,
+      user: sanitizeUser(result.user),
+    });
+  } catch {
+    return res.status(401).json({ message: "Invalid Firebase token" });
   }
 });
 

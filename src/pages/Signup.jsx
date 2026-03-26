@@ -1,11 +1,24 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { signInWithPopup } from "firebase/auth";
 import { useSession } from "../context/useSession";
+import { auth, googleProvider } from "../lib/firebase";
 import { evaluatePasswordStrength } from "../lib/passwordStrength";
+
+function mapGoogleError(error) {
+  const message = String(error?.message || "").trim();
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes("popup closed")) {
+    return "Google sign-in was cancelled.";
+  }
+
+  return message || "Google sign-in failed";
+}
 
 export default function Signup() {
   const navigate = useNavigate();
-  const { register } = useSession();
+  const { register, loginWithFirebase } = useSession();
   const [form, setForm] = useState({
     firstName: "",
     lastName: "",
@@ -15,6 +28,7 @@ export default function Signup() {
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
 
   const strength = evaluatePasswordStrength(form.password);
 
@@ -49,6 +63,34 @@ export default function Signup() {
       setError(submissionError.message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleGoogleSignUp() {
+    if (!acceptedTerms) {
+      setError("Please accept the Terms of Service and Privacy Policy to continue.");
+      return;
+    }
+
+    setGoogleBusy(true);
+    setError("");
+
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const idToken = await result.user.getIdToken();
+      await loginWithFirebase({
+        idToken,
+        firstName: form.firstName.trim(),
+        lastName: form.lastName.trim(),
+        name: `${form.firstName.trim()} ${form.lastName.trim()}`.trim(),
+        termsAccepted: acceptedTerms,
+        privacyAccepted: acceptedTerms,
+      });
+      navigate("/dashboard");
+    } catch (googleError) {
+      setError(mapGoogleError(googleError));
+    } finally {
+      setGoogleBusy(false);
     }
   }
 
@@ -129,10 +171,20 @@ export default function Signup() {
 
             {error ? <div className="form-error">{error}</div> : null}
 
-            <button className="button button-primary" disabled={busy} type="submit">
+            <button className="button button-primary" disabled={busy || googleBusy} type="submit">
               {busy ? "Creating..." : "Create account"}
             </button>
           </form>
+
+          <button
+            className="button button-secondary"
+            disabled={busy || googleBusy}
+            onClick={handleGoogleSignUp}
+            style={{ marginTop: "10px", width: "100%" }}
+            type="button"
+          >
+            {googleBusy ? "Connecting to Google..." : "Continue with Google"}
+          </button>
 
           <div className="auth-links">
             <span>

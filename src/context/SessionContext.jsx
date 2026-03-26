@@ -1,6 +1,6 @@
 import { startTransition, useEffect, useState } from "react";
 import { SessionContext } from "./sessionContext";
-import { apiFetch, clearSession, getStoredToken, getStoredUser, storeSession } from "../lib/api";
+import { apiFetch, clearSession, getStoredToken, getStoredUser, loginWithFirebase, storeSession } from "../lib/api";
 
 export function SessionProvider({ children }) {
   const [token, setToken] = useState(() => getStoredToken());
@@ -81,13 +81,7 @@ export function SessionProvider({ children }) {
     };
   }, [token]);
 
-  async function login(credentials) {
-    const data = await apiFetch("/auth/login", {
-      method: "POST",
-      body: credentials,
-      skipAuth: true,
-    });
-
+  function commitSession(data) {
     storeSession(data.token, data.user);
 
     startTransition(() => {
@@ -99,6 +93,21 @@ export function SessionProvider({ children }) {
     return data.user;
   }
 
+  async function login(credentials) {
+    const data = await apiFetch("/auth/login", {
+      method: "POST",
+      body: credentials,
+      skipAuth: true,
+    });
+
+    return commitSession(data);
+  }
+
+  async function loginWithFirebaseSession(payload) {
+    const data = await loginWithFirebase(payload);
+    return commitSession(data);
+  }
+
   async function register(payload) {
     const data = await apiFetch("/auth/register", {
       method: "POST",
@@ -106,15 +115,7 @@ export function SessionProvider({ children }) {
       skipAuth: true,
     });
 
-    storeSession(data.token, data.user);
-
-    startTransition(() => {
-      setToken(data.token);
-      setUser(data.user);
-      setLoading(false);
-    });
-
-    return data.user;
+    return commitSession(data);
   }
 
   function logout() {
@@ -147,6 +148,7 @@ export function SessionProvider({ children }) {
       value={{
         loading,
         login,
+        loginWithFirebase: loginWithFirebaseSession,
         logout,
         refreshUser,
         register,
