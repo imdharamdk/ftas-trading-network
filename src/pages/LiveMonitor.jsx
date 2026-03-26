@@ -27,6 +27,65 @@ function signalTone(signal) {
   return "pill-warning";
 }
 
+function getTradeGuidance(item) {
+  const signal = String(item?.signal || "").toUpperCase();
+  const strength = String(item?.strength || "").toUpperCase();
+  const change2m = Number(item?.change2m || 0);
+  const nearHigh = Boolean(item?.nearHigh);
+  const nearLow = Boolean(item?.nearLow);
+
+  if (signal === "BREAKOUT_LONG") {
+    return {
+      action: strength === "STRONG" ? "LONG trade dekh sakte ho" : "Confirmation ka wait karo",
+      plan: nearHigh
+        ? "Price breakout zone par hai. Small entry only after candle hold above range."
+        : "Momentum bullish hai, lekin breakout hold confirm karo.",
+    };
+  }
+
+  if (signal === "BREAKOUT_SHORT") {
+    return {
+      action: strength === "STRONG" ? "SHORT trade dekh sakte ho" : "Confirmation ka wait karo",
+      plan: nearLow
+        ? "Price breakdown zone par hai. Short only after candle sustain below range."
+        : "Momentum bearish hai, lekin breakdown hold confirm karo.",
+    };
+  }
+
+  if (signal === "REVERSAL_LONG") {
+    return {
+      action: strength === "STRONG" ? "Aggressive long possible" : "Abhi wait karo",
+      plan: "Reversal signal hai. Entry tab lo jab next candle higher low banaye.",
+    };
+  }
+
+  if (signal === "REVERSAL_SHORT") {
+    return {
+      action: strength === "STRONG" ? "Aggressive short possible" : "Abhi wait karo",
+      plan: "Reversal short hai. Entry tab lo jab next candle lower high confirm kare.",
+    };
+  }
+
+  if (signal === "BULLISH") {
+    return {
+      action: strength === "STRONG" && change2m > 0.3 ? "Dip buy dekh sakte ho" : "Watch rakho",
+      plan: "Trend up hai but full breakout nahi hai. Pullback ya fresh candle confirmation chahiye.",
+    };
+  }
+
+  if (signal === "BEARISH") {
+    return {
+      action: strength === "STRONG" && change2m < -0.3 ? "Short on bounce dekh sakte ho" : "Watch rakho",
+      plan: "Trend down hai but full breakdown nahi hai. Bounce reject hone ka wait karo.",
+    };
+  }
+
+  return {
+    action: "Trade mat lo abhi",
+    plan: "Signal mixed hai. Watchlist me rakho aur clear breakout ya reversal ka wait karo.",
+  };
+}
+
 function shouldAlert(item) {
   const signal = String(item?.signal || "").toUpperCase();
   const strength = String(item?.strength || "").toUpperCase();
@@ -76,6 +135,7 @@ export default function LiveMonitor() {
     return Notification.permission;
   });
   const [lastAlertText, setLastAlertText] = useState("");
+  const [viewMode, setViewMode] = useState("all");
   const seenAlertsRef = useRef(new Set());
   const bootstrappedRef = useRef(false);
 
@@ -141,6 +201,12 @@ export default function LiveMonitor() {
     };
   }, [alertsEnabled, soundEnabled]);
 
+  const visibleData = data.filter((item) => {
+    if (viewMode === "watch") return String(item.signal || "").toUpperCase() === "WATCH";
+    if (viewMode === "action") return String(item.signal || "").toUpperCase() !== "WATCH";
+    return true;
+  });
+
   async function enableDesktopAlerts() {
     if (typeof Notification === "undefined") {
       setPermission("unsupported");
@@ -197,6 +263,15 @@ export default function LiveMonitor() {
         </div>
 
         <div className="live-monitor-controls">
+          <button className={`button ${viewMode === "all" ? "button-primary" : "button-ghost"}`} onClick={() => setViewMode("all")} type="button">
+            All Signals
+          </button>
+          <button className={`button ${viewMode === "watch" ? "button-secondary" : "button-ghost"}`} onClick={() => setViewMode("watch")} type="button">
+            Watch
+          </button>
+          <button className={`button ${viewMode === "action" ? "button-secondary" : "button-ghost"}`} onClick={() => setViewMode("action")} type="button">
+            Actionable
+          </button>
           <button className={`button ${alertsEnabled ? "button-primary" : "button-ghost"}`} onClick={() => setAlertsEnabled((value) => !value)} type="button">
             {alertsEnabled ? "Alerts On" : "Alerts Off"}
           </button>
@@ -234,6 +309,7 @@ export default function LiveMonitor() {
               <tr>
                 <th>Pair</th>
                 <th>Signal</th>
+                <th>Kya Karein</th>
                 <th>Score</th>
                 <th>30s</th>
                 <th>2m</th>
@@ -243,7 +319,9 @@ export default function LiveMonitor() {
               </tr>
             </thead>
             <tbody>
-              {data.length ? data.map((item) => (
+              {visibleData.length ? visibleData.map((item) => {
+                const guidance = getTradeGuidance(item);
+                return (
                 <tr key={item.symbol}>
                   <td>
                     <div className="live-trend-symbol-cell">
@@ -261,6 +339,12 @@ export default function LiveMonitor() {
                   </td>
                   <td>
                     <div className="live-trend-score-stack">
+                      <strong>{guidance.action}</strong>
+                      <small>{guidance.plan}</small>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="live-trend-score-stack">
                       <strong className={item.momentumScore >= 0 ? "trend-up" : "trend-down"}>{formatSignedPercent(item.momentumScore)}</strong>
                       <small>{item.note}</small>
                     </div>
@@ -273,9 +357,10 @@ export default function LiveMonitor() {
                   </td>
                   <td>{`${Math.max(1, Math.round(item.recordedSeconds / 60))}m / ${item.recordedPoints} pts`}</td>
                 </tr>
-              )) : (
+              );
+              }) : (
                 <tr>
-                  <td className="empty-row" colSpan="8">{loading ? "Recording live Binance data..." : "No recorder data yet."}</td>
+                  <td className="empty-row" colSpan="9">{loading ? "Recording live Binance data..." : viewMode === "watch" ? "No watch signals right now." : viewMode === "action" ? "No actionable signals right now." : "No recorder data yet."}</td>
                 </tr>
               )}
             </tbody>
