@@ -1,36 +1,28 @@
 /**
  * useWebSocket — FTAS realtime WebSocket hook
  *
- * Auto-connects, auto-authenticates, auto-reconnects with exponential backoff.
+ * Auto-connects, auto-subscribes, auto-reconnects with exponential backoff.
  * Returns { connected, lastMessage, send }
- *
- * Usage:
- *   const { connected } = useWebSocket({
- *     onSignalNew:    (signal) => ...,
- *     onSignalClosed: (signal) => ...,
- *     onPriceUpdate:  (prices) => ...,  // { BTCUSDT: 60000, ... }
- *     onStatsUpdate:  (data)   => ...,  // { crypto: {...}, stocks: {...} }
- *     onChatMessage:  (msg)    => ...,
- *     onEngineStatus: (engine) => ...,
- *   });
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getStoredToken } from "./api";
 
-// Derive WebSocket URL from current page URL
-function getWsUrl() {
+function getWsUrl(token) {
   const base = import.meta.env.VITE_API_BASE_URL;
+  const query = token ? `?token=${encodeURIComponent(token)}` : "";
+
   if (base && base.startsWith("http")) {
-    return base.replace(/^http/, "ws").replace(/\/api\/?$/, "") + "/ws";
+    return `${base.replace(/^http/, "ws").replace(/\/api\/?$/, "")}/ws${query}`;
   }
+
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/ws`;
+  return `${proto}//${window.location.host}/ws${query}`;
 }
 
-const RECONNECT_BASE_MS  = 2_000;   // first retry after 2s
-const RECONNECT_MAX_MS   = 30_000;  // max 30s between retries
-const RECONNECT_FACTOR   = 1.8;     // exponential backoff multiplier
+const RECONNECT_BASE_MS = 2_000;
+const RECONNECT_MAX_MS = 30_000;
+const RECONNECT_FACTOR = 1.8;
 
 export function useWebSocket({
   onSignalNew,
@@ -43,41 +35,52 @@ export function useWebSocket({
   onEngineStatus,
 } = {}) {
   const [connected, setConnected] = useState(false);
-  const wsRef       = useRef(null);
-  const retryDelay  = useRef(RECONNECT_BASE_MS);
-  const retryTimer  = useRef(null);
-  const unmounted   = useRef(false);
+  const wsRef = useRef(null);
+  const retryDelay = useRef(RECONNECT_BASE_MS);
+  const retryTimer = useRef(null);
+  const unmounted = useRef(false);
+
+  const subscribeToAvailableChannels = useCallback((availableChannels = []) => {
+    const channelSet = new Set(Array.isArray(availableChannels) ? availableChannels : []);
+
+    if (channelSet.has("crypto_signals") && (onSignalNew || onSignalClosed)) {
+      wsRef.current?.send(JSON.stringify({ type: "SUBSCRIBE", channel: "crypto_signals" }));
+    }
+    if (channelSet.has("stock_signals") && (onStockNew || onStockClosed)) {
+      wsRef.current?.send(JSON.stringify({ type: "SUBSCRIBE", channel: "stock_signals" }));
+    }
+    if (channelSet.has("prices") && onPriceUpdate) {
+      wsRef.current?.send(JSON.stringify({ type: "SUBSCRIBE", channel: "prices" }));
+    }
+  }, [onPriceUpdate, onSignalClosed, onSignalNew, onStockClosed, onStockNew]);
 
   const handleMessage = useCallback((event) => {
     let msg;
-    try { msg = JSON.parse(event.data); } catch { return; }
+    try {
+      msg = JSON.parse(event.data);
+    } catch {
+      return;
+    }
 
     switch (msg.type) {
-      case "auth:ok":
+      case "CONNECTED":
         setConnected(true);
-        retryDelay.current = RECONNECT_BASE_MS; // reset backoff on success
+        retryDelay.current = RECONNECT_BASE_MS;
+        subscribeToAvailableChannels(msg?.data?.availableChannels);
         break;
-      case "auth:fail":
-        console.warn("[ws] Auth failed");
+      case "PING":
+        wsRef.current?.send(JSON.stringify({ type: "PONG" }));
         break;
-      case "ping":
-        // Respond with pong
-        wsRef.current?.send(JSON.stringify({ type: "pong" }));
+      case "NEW_SIGNAL":
+        if (msg.channel === "crypto_signals") onSignalNew?.(msg.data?.signal);
+        if (msg.channel === "stock_signals") onStockNew?.(msg.data?.signal);
         break;
-      case "signal:new":
-        onSignalNew?.(msg.signal);
+      case "SIGNAL_CLOSED":
+        if (msg.channel === "crypto_signals") onSignalClosed?.(msg.data?.signal);
+        if (msg.channel === "stock_signals") onStockClosed?.(msg.data?.signal);
         break;
-      case "signal:closed":
-        onSignalClosed?.(msg.signal);
-        break;
-      case "stock:new":
-        onStockNew?.(msg.signal);
-        break;
-      case "stock:closed":
-        onStockClosed?.(msg.signal);
-        break;
-      case "price:update":
-        onPriceUpdate?.(msg.prices);
+      case "PRICE_UPDATE":
+        onPriceUpdate?.(msg.data?.prices);
         break;
       case "stats:update":
         onStatsUpdate?.({ crypto: msg.crypto, stocks: msg.stocks });
@@ -88,27 +91,29 @@ export function useWebSocket({
       case "engine:status":
         onEngineStatus?.(msg.engine);
         break;
+      case "ERROR":
+        console.warn("[ws]", msg.message || "WebSocket error");
+        break;
       default:
         break;
     }
-  }, [onSignalNew, onSignalClosed, onStockNew, onStockClosed, onPriceUpdate, onStatsUpdate, onChatMessage, onEngineStatus]);
+  }, [onChatMessage, onEngineStatus, onPriceUpdate, onSignalClosed, onSignalNew, onStatsUpdate, onStockClosed, onStockNew, subscribeToAvailableChannels]);
 
   const connect = useCallback(() => {
     if (unmounted.current) return;
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
 
     const token = getStoredToken();
-    if (!token) return; // not logged in
+    if (!token) return;
 
-    const url = getWsUrl();
+    const url = getWsUrl(token);
     console.log("[ws] Connecting to", url);
 
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log("[ws] Connected — authenticating");
-      ws.send(JSON.stringify({ type: "auth", token }));
+      console.log("[ws] Connected");
     };
 
     ws.onmessage = handleMessage;
@@ -117,28 +122,23 @@ export function useWebSocket({
       setConnected(false);
       wsRef.current = null;
       if (unmounted.current) return;
-      // Don't reconnect on auth failure
       if (event.code === 4001) {
-        console.warn("[ws] Auth failed — not reconnecting");
+        console.warn("[ws] Auth failed, not reconnecting");
         return;
       }
-      // Exponential backoff reconnect
       const delay = retryDelay.current;
       retryDelay.current = Math.min(delay * RECONNECT_FACTOR, RECONNECT_MAX_MS);
-      console.log(`[ws] Disconnected — retrying in ${Math.round(delay / 1000)}s`);
+      console.log(`[ws] Disconnected, retrying in ${Math.round(delay / 1000)}s`);
       retryTimer.current = setTimeout(connect, delay);
     };
 
-    ws.onerror = () => {
-      // onclose will fire after onerror, handles reconnect
-    };
+    ws.onerror = () => {};
   }, [handleMessage]);
 
   useEffect(() => {
     unmounted.current = false;
     connect();
 
-    // Also reconnect when tab becomes visible again
     function onVisible() {
       if (document.visibilityState === "visible") {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -148,6 +148,7 @@ export function useWebSocket({
         }
       }
     }
+
     document.addEventListener("visibilitychange", onVisible);
 
     return () => {

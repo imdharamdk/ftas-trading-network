@@ -1,7 +1,7 @@
 // src/components/TickerMarquee.jsx
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+import { apiFetch } from "../lib/api";
 
-const BINANCE_TICKER_URL = "https://fapi.binance.com/fapi/v1/ticker/24hr";
 const REFRESH_INTERVAL_MS = 60_000;
 
 function formatPrice(price) {
@@ -23,17 +23,18 @@ export default function TickerMarquee() {
 
   const fetchTickers = async () => {
     try {
-      const res = await fetch(BINANCE_TICKER_URL);
-      const data = await res.json();
-      const tickersList = Array.isArray(data) ? data : [];
+      const res = await apiFetch("/market/tickers?limit=250&sort=changePercent&fields=lite", {
+        skipAuth: true,
+      });
+      const tickersList = Array.isArray(res?.tickers) ? res.tickers : [];
 
       const usdt = tickersList.filter((ticker) => (
         String(ticker.symbol || "").endsWith("USDT")
         && Number(ticker.quoteVolume) > 0
-        && ticker.priceChangePercent != null
+        && ticker.changePercent != null
       ));
 
-      const sorted = [...usdt].sort((a, b) => Number(b.priceChangePercent) - Number(a.priceChangePercent));
+      const sorted = [...usdt].sort((a, b) => Number(b.changePercent) - Number(a.changePercent));
       const topGainers = sorted.slice(0, 10);
       const topLosers = sorted.slice(-10).reverse();
 
@@ -54,7 +55,7 @@ export default function TickerMarquee() {
   if (loading || tickers.length === 0) {
     return (
       <div style={s.wrapper}>
-        <span style={s.loadingText}>Loading Binance Futures data…</span>
+        <span style={s.loadingText}>Loading market data…</span>
       </div>
     );
   }
@@ -69,7 +70,7 @@ export default function TickerMarquee() {
       <div style={s.trackOuter}>
         <div style={{ ...s.track, animationDuration: `${items.length * 2.6}s` }}>
           {items.map((ticker, i) => {
-            const change = Number(ticker.priceChangePercent);
+            const change = Number(ticker.changePercent);
             const isUp = change >= 0;
             const color = isUp ? "#22c55e" : "#ef4444";
             return (
@@ -78,7 +79,7 @@ export default function TickerMarquee() {
                   {ticker.symbol.replace("USDT", "")}
                   <span style={s.quote}>/USDT</span>
                 </span>
-                <span style={{ ...s.price, color }}>${formatPrice(ticker.lastPrice)}</span>
+                <span style={{ ...s.price, color }}>${formatPrice(ticker.price)}</span>
                 <span style={{ ...s.badge, background: isUp ? "rgba(34,197,94,0.13)" : "rgba(239,68,68,0.13)", color }}>
                   {isUp ? "▲" : "▼"} {formatChange(change)}
                 </span>
