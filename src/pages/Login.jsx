@@ -39,19 +39,33 @@ function mapForgotError(errorMessage, step) {
   return raw;
 }
 
+function isTermsRequiredError(error) {
+  const message = String(error?.message || "").trim().toLowerCase();
+  return message.includes("terms of service") || message.includes("privacy policy") || message.includes("accept the terms");
+}
+
 function mapGoogleError(error) {
   const message = String(error?.message || "").trim();
   const normalized = message.toLowerCase();
-
-  if (normalized.includes("privacy policy") || normalized.includes("terms of service")) {
-    return "No account found for this Google sign-in. Create it from Signup after accepting Terms and Privacy.";
-  }
 
   if (normalized.includes("popup closed")) {
     return "Google sign-in was cancelled.";
   }
 
   return message || "Google sign-in failed";
+}
+
+function splitNameParts(name) {
+  const normalized = String(name || "").trim();
+  if (!normalized) {
+    return { firstName: "", lastName: "" };
+  }
+
+  const [firstName = "", ...rest] = normalized.split(/\s+/);
+  return {
+    firstName,
+    lastName: rest.join(" ").trim(),
+  };
 }
 
 export default function Login() {
@@ -66,6 +80,8 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
   const [otpRequired, setOtpRequired] = useState(false);
+  const [pendingGoogleSignup, setPendingGoogleSignup] = useState(null);
+  const [googleTermsAccepted, setGoogleTermsAccepted] = useState(false);
 
   const [showForgot, setShowForgot] = useState(false);
   const [forgotStep, setForgotStep] = useState("request");
@@ -100,6 +116,8 @@ export default function Login() {
     event.preventDefault();
     setBusy(true);
     setError("");
+    setPendingGoogleSignup(null);
+    setGoogleTermsAccepted(false);
 
     try {
       await login(form);
@@ -124,12 +142,64 @@ export default function Login() {
     setGoogleBusy(true);
     setError("");
     setOtpRequired(false);
+    setPendingGoogleSignup(null);
+    setGoogleTermsAccepted(false);
 
     try {
       const { auth, googleProvider } = ensureFirebaseAuth();
       const result = await signInWithPopup(auth, googleProvider);
-      const idToken = await result.user.getIdToken();
+      const firebaseUser = result.user;
+      const idToken = await firebaseUser.getIdToken();
       await loginWithFirebase({ idToken });
+      navigate("/dashboard");
+    } catch (googleError) {
+      if (isTermsRequiredError(googleError)) {
+        const { auth } = ensureFirebaseAuth();
+        const currentUser = auth.currentUser;
+        const profileName = String(currentUser?.displayName || "").trim();
+        setPendingGoogleSignup({
+          email: String(currentUser?.email || "").trim(),
+          name: profileName,
+          ...splitNameParts(profileName),
+        });
+        setError("");
+      } else {
+        setError(mapGoogleError(googleError));
+      }
+    } finally {
+      setGoogleBusy(false);
+    }
+  }
+
+  async function handleGoogleSignupCompletion() {
+    if (!googleTermsAccepted) {
+      setError("Please accept the Terms of Service and Privacy Policy to continue.");
+      return;
+    }
+
+    setGoogleBusy(true);
+    setError("");
+
+    try {
+      const { auth } = ensureFirebaseAuth();
+      const currentUser = auth.currentUser;
+
+      if (!currentUser) {
+        throw new Error("Google session expired. Please continue with Google again.");
+      }
+
+      const fallbackName = String(currentUser.displayName || pendingGoogleSignup?.name || "").trim();
+      const nameParts = splitNameParts(fallbackName);
+      const idToken = await currentUser.getIdToken(true);
+
+      await loginWithFirebase({
+        idToken,
+        name: fallbackName,
+        firstName: pendingGoogleSignup?.firstName || nameParts.firstName,
+        lastName: pendingGoogleSignup?.lastName || nameParts.lastName,
+        termsAccepted: true,
+        privacyAccepted: true,
+      });
       navigate("/dashboard");
     } catch (googleError) {
       setError(mapGoogleError(googleError));
@@ -274,6 +344,36 @@ export default function Login() {
             >
               {googleBusy ? "Connecting to Google..." : "Continue with Google"}
             </button>
+          ) : null}
+
+          {pendingGoogleSignup ? (
+            <div style={{ marginTop: "12px", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "10px", padding: "12px" }}>
+              <h3 style={{ margin: "0 0 8px", fontSize: "1rem" }}>Complete Google signup</h3>
+              <p className="muted-copy" style={{ marginBottom: "10px" }}>
+                {pendingGoogleSignup.email
+                  ? `${pendingGoogleSignup.email} ka FTAS account abhi create hoga.`
+                  : "Aapka FTAS account abhi create hoga."} Terms accept karke direct continue karo.
+              </p>
+              <label className="auth-checkbox">
+                <input
+                  checked={googleTermsAccepted}
+                  onChange={(event) => setGoogleTermsAccepted(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  I agree to the <Link to="/terms">Terms of Service</Link> and <Link to="/privacy">Privacy Policy</Link>.
+                </span>
+              </label>
+              <button
+                className="button button-primary"
+                disabled={googleBusy}
+                onClick={handleGoogleSignupCompletion}
+                style={{ marginTop: "12px", width: "100%" }}
+                type="button"
+              >
+                {googleBusy ? "Creating account..." : "Accept and continue"}
+              </button>
+            </div>
           ) : null}
 
           <button
