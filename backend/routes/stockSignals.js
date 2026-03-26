@@ -185,6 +185,14 @@ function isCryptoCoin(coin) {
   return String(coin || "").toUpperCase().endsWith("USDT");
 }
 
+function isCommoditySignal(signal = {}) {
+  const instrument = signal.scanMeta?.instrument || {};
+  const exchange = String(instrument.exchange || signal.exchange || "").toUpperCase();
+  const segment = String(instrument.segment || signal.segment || "").toUpperCase();
+  const instrumentType = String(instrument.instrumentType || signal.instrumentType || "").toUpperCase();
+  return exchange === "MCX" || exchange === "NCDEX" || segment === "COMMODITY" || instrumentType.includes("COM");
+}
+
 router.get("/active", requireAuth, requireSignalAccess, async (req, res) => {
   const { preference, minConfidence } = resolveRiskPreference(req);
   const cacheKey = "stocks:active:" + (req.query.coin || "all") + ":" + (req.query.limit || 50) + ":" + preference;
@@ -368,6 +376,63 @@ router.get("/engine/status", requireAuth, (_req, res) => {
   return res.json({
     engine: stockEngine.getStatus(),
   });
+});
+
+router.get("/engine/debug", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const universe = getInstrumentUniverse({ limit: 5000 });
+    const commodityUniverse = universe.filter((instrument) => {
+      const exchange = String(instrument.exchange || "").toUpperCase();
+      const segment = String(instrument.segment || "").toUpperCase();
+      const instrumentType = String(instrument.instrumentType || "").toUpperCase();
+      return exchange === "MCX" || exchange === "NCDEX" || segment === "COMMODITY" || instrumentType.includes("COM");
+    });
+    const activeSignals = await readCollection("stockSignals");
+    const archiveSignals = await readCollection("stockSignalsArchive");
+    const commodityActive = activeSignals.filter((signal) => !isCryptoCoin(signal.coin) && isCommoditySignal(signal));
+    const commodityArchive = archiveSignals.filter((signal) => !isCryptoCoin(signal.coin) && isCommoditySignal(signal));
+
+    return res.json({
+      engine: stockEngine.getStatus(),
+      universe: {
+        total: universe.length,
+        commodity: commodityUniverse.length,
+        sample: commodityUniverse.slice(0, 20).map((instrument) => ({
+          symbol: instrument.tradingSymbol || instrument.symbol,
+          exchange: instrument.exchange,
+          segment: instrument.segment,
+          instrumentType: instrument.instrumentType,
+          token: instrument.token,
+        })),
+      },
+      signals: {
+        activeTotal: activeSignals.filter((signal) => !isCryptoCoin(signal.coin)).length,
+        activeCommodity: commodityActive.length,
+        archiveCommodity: commodityArchive.length,
+        recentCommodityActive: commodityActive.slice(0, 10).map((signal) => ({
+          coin: signal.coin,
+          status: signal.status,
+          result: signal.result,
+          createdAt: signal.createdAt,
+          exchange: signal.scanMeta?.instrument?.exchange || signal.exchange || null,
+          segment: signal.scanMeta?.instrument?.segment || signal.segment || null,
+          instrumentType: signal.scanMeta?.instrument?.instrumentType || signal.instrumentType || null,
+        })),
+        recentCommodityArchive: commodityArchive.slice(0, 10).map((signal) => ({
+          coin: signal.coin,
+          status: signal.status,
+          result: signal.result,
+          createdAt: signal.createdAt,
+          closedAt: signal.closedAt || null,
+          exchange: signal.scanMeta?.instrument?.exchange || signal.exchange || null,
+          segment: signal.scanMeta?.instrument?.segment || signal.segment || null,
+          instrumentType: signal.scanMeta?.instrument?.instrumentType || signal.instrumentType || null,
+        })),
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
 });
 
 router.post("/engine/start", requireAuth, requireAdmin, (_req, res) => {
