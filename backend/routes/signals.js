@@ -4,6 +4,7 @@ const { requireAdmin, requireAuth, requireSignalAccess } = require("../middlewar
 const { SIGNAL_STATUS } = require("../models/Signal");
 const { mutateCollection, readCollection, writeCollection } = require("../storage/fileStore");
 const { getPrices } = require("../services/binanceService");
+const { getLiveTrendScanner } = require("../services/liveTrendRecorder");
 
 // Rate limit only manual scan triggers — not signal reads
 const { ipKeyGenerator } = require("express-rate-limit");
@@ -746,6 +747,16 @@ router.get("/missed", requireAuth, requireSignalAccess, async (req, res) => {
       count: payloadSignals.length,
       signals: payloadSignals,
     });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.get("/live-trend-scanner", requireAuth, requireSignalAccess, async (req, res) => {
+  try {
+    const limit = Math.min(24, Math.max(4, Number(req.query?.limit || 12)));
+    const payload = await getLiveTrendScanner({ limit });
+    return res.json(payload);
   } catch (error) {
     return res.status(500).json({ message: error.message });
   }

@@ -351,6 +351,7 @@ export default function SignalTable({ compact = false, emptyLabel, signals }) {
           timeframe={tvSignal.timeframe || "15m"}
           tradingSymbol={tvSignal.scanMeta?.instrument?.tradingSymbol}
           exchange={tvSignal.scanMeta?.instrument?.exchange}
+          signal={tvSignal}
           onClose={() => setTvSignal(null)}
         />
       ) : null}

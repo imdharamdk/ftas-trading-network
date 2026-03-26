@@ -11,6 +11,7 @@ const Privacy = lazy(() => import("./pages/Privacy"));
 
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Market = lazy(() => import("./pages/Market"));
+const LiveMonitor = lazy(() => import("./pages/LiveMonitor"));
 const Crypto = lazy(() => import("./pages/Crypto"));
 const News = lazy(() => import("./pages/News"));
 const Stocks = lazy(() => import("./pages/Stocks"));
@@ -78,6 +79,7 @@ export default function App() {
               <Route element={<Privacy />} path="/privacy" />
               <Route element={<SessionGate><Dashboard /></SessionGate>} path="/dashboard" />
               <Route element={<SessionGate><Market /></SessionGate>} path="/market" />
+              <Route element={<SessionGate><LiveMonitor /></SessionGate>} path="/live-monitor" />
               <Route element={<SessionGate><Crypto /></SessionGate>} path="/crypto" />
               <Route element={<SessionGate><Stocks /></SessionGate>} path="/stocks" />
               <Route element={<SessionGate><Commodities /></SessionGate>} path="/commodities" />

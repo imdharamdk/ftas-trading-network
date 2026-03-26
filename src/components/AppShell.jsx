@@ -18,6 +18,7 @@ function fmtExpiry(value) {
 const NAV_ITEMS = [
   { to: "/dashboard", icon: "📊", label: "Dashboard" },
   { to: "/market", icon: "🔍", label: "Scanner" },
+  { to: "/live-monitor", icon: "🖥️", label: "Live Monitor" },
   { to: "/crypto", icon: "💹", label: "Crypto" },
   { to: "/stocks", icon: "🇮🇳", label: "Stocks" },
   { to: "/commodities", icon: "📊", label: "Commodities" },

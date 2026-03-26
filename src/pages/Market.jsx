@@ -14,6 +14,20 @@ function formatPrice(value) {
   return amount.toFixed(8);
 }
 
+function formatSignedPercent(value, digits = 2) {
+  const amount = Number(value || 0);
+  const prefix = amount > 0 ? "+" : "";
+  return `${prefix}${amount.toFixed(digits)}%`;
+}
+
+function signalTone(signal) {
+  const text = String(signal || "").toUpperCase();
+  if (text.includes("LONG") || text === "BULLISH") return "success";
+  if (text.includes("SHORT") || text === "BEARISH") return "danger";
+  if (text.startsWith("WATCH")) return "neutral";
+  return "warning";
+}
+
 function segmentColor(segment) {
   if (segment === "FNO")       return "#818cf8";
   if (segment === "COMMODITY") return "#f59e0b";
@@ -64,6 +78,9 @@ function CryptoTab() {
   const [error, setError]                   = useState("");
   const [chartCoin, setChartCoin]           = useState(null);
   const [tickerPrices, setTickerPrices]     = useState({});
+  const [liveTrendData, setLiveTrendData]   = useState([]);
+  const [liveTrendMeta, setLiveTrendMeta]   = useState(null);
+  const [liveTrendLoading, setLiveTrendLoading] = useState(true);
   const searchRef = useRef(null);
   const coinsLoadedRef = useRef(false);
 
@@ -176,6 +193,25 @@ function CryptoTab() {
     return () => { active = false; window.clearInterval(id); };
   }, [signalCoinsKey]);
 
+  useEffect(() => {
+    let active = true;
+    async function loadLiveTrend() {
+      try {
+        const res = await apiFetch("/signals/live-trend-scanner?limit=18");
+        if (!active) return;
+        setLiveTrendData(res?.trends || []);
+        setLiveTrendMeta({ summary: res?.summary || null, recorder: res?.recorder || null });
+      } catch {
+        if (active) setLiveTrendData([]);
+      } finally {
+        if (active) setLiveTrendLoading(false);
+      }
+    }
+    loadLiveTrend();
+    const id = window.setInterval(loadLiveTrend, 15000);
+    return () => { active = false; window.clearInterval(id); };
+  }, []);
+
   // FIX: Removed 12s ticker price polling — WS price:update event handles this
 
   useEffect(() => {
@@ -207,6 +243,9 @@ function CryptoTab() {
 
   const topMovers = [...filteredTickers].sort((a, b) => b.changePercent - a.changePercent).slice(0, 5);
   const topLosers = [...filteredTickers].sort((a, b) => a.changePercent - b.changePercent).slice(0, 5);
+  const trendRows = coinSearch.trim()
+    ? liveTrendData.filter((item) => item.symbol.includes(coinSearch.toUpperCase()))
+    : liveTrendData;
 
   return (
     <>
@@ -300,6 +339,91 @@ function CryptoTab() {
             </button>
           </div>
         )}
+      </section>
+
+      <section className="panel live-trend-panel">
+        <div className="panel-header">
+          <div>
+            <span className="eyebrow">Live recorder</span>
+            <h2>Binance trend scanner</h2>
+          </div>
+          <span className="pill pill-neutral">
+            {liveTrendLoading ? "Recording..." : `${liveTrendMeta?.recorder?.historyWindowMinutes || 0}m memory`}
+          </span>
+        </div>
+        <div className="live-trend-summary">
+          <article className="live-trend-stat">
+            <span>Tracked pairs</span>
+            <strong>{liveTrendMeta?.recorder?.universeSize ?? 0}</strong>
+            <small>Top Binance perpetual activity</small>
+          </article>
+          <article className="live-trend-stat">
+            <span>Bullish / bearish</span>
+            <strong>{`${liveTrendMeta?.summary?.bullish ?? 0} / ${liveTrendMeta?.summary?.bearish ?? 0}`}</strong>
+            <small>Directional setups from recorded snapshots</small>
+          </article>
+          <article className="live-trend-stat">
+            <span>Breakouts / reversals</span>
+            <strong>{`${liveTrendMeta?.summary?.breakouts ?? 0} / ${liveTrendMeta?.summary?.reversals ?? 0}`}</strong>
+            <small>Fast triggers detected from short-term trend shifts</small>
+          </article>
+          <article className="live-trend-stat">
+            <span>Recorder pace</span>
+            <strong>{Math.round((liveTrendMeta?.recorder?.sampleIntervalMs || 0) / 1000)}s</strong>
+            <small>{liveTrendMeta?.recorder?.lastSampleAt ? `Updated ${new Date(liveTrendMeta.recorder.lastSampleAt).toLocaleTimeString("en-IN")}` : "Waiting for first sample"}</small>
+          </article>
+        </div>
+        <div className="table-wrap">
+          <table className="signal-table signal-table-compact live-trend-table">
+            <thead>
+              <tr>
+                <th>Pair</th>
+                <th>Signal</th>
+                <th>Score</th>
+                <th>30s</th>
+                <th>2m</th>
+                <th>5m</th>
+                <th>24h</th>
+                <th>Recorded</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trendRows.length ? trendRows.map((item) => (
+                <tr key={item.symbol}>
+                  <td>
+                    <div className="live-trend-symbol-cell">
+                      <button className="coin-chart-btn" onClick={() => setChartCoin(item.symbol)} type="button">
+                        <strong>{item.symbol}</strong>
+                      </button>
+                      <span>{formatPrice(item.price)}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="live-trend-signal-stack">
+                      <span className={`pill ${signalTone(item.signal) === "success" ? "pill-success" : signalTone(item.signal) === "danger" ? "pill-danger" : signalTone(item.signal) === "warning" ? "pill-warning" : "pill-neutral"}`}>{item.signal.replaceAll("_", " ")}</span>
+                      <small>{item.strength}</small>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="live-trend-score-stack">
+                      <strong className={item.momentumScore >= 0 ? "trend-up" : "trend-down"}>{formatSignedPercent(item.momentumScore)}</strong>
+                      <small>{item.note}</small>
+                    </div>
+                  </td>
+                  <td className={item.change30s >= 0 ? "trend-up" : "trend-down"}>{formatSignedPercent(item.change30s, 3)}</td>
+                  <td className={item.change2m >= 0 ? "trend-up" : "trend-down"}>{formatSignedPercent(item.change2m, 3)}</td>
+                  <td className={item.change5m >= 0 ? "trend-up" : "trend-down"}>{formatSignedPercent(item.change5m, 3)}</td>
+                  <td>
+                    <span className={`pill ${item.priceChangePercent24h >= 0 ? "pill-success" : "pill-danger"}`}>{formatSignedPercent(item.priceChangePercent24h)}</span>
+                  </td>
+                  <td>{`${Math.max(1, Math.round(item.recordedSeconds / 60))}m / ${item.recordedPoints} pts`}</td>
+                </tr>
+              )) : (
+                <tr><td className="empty-row" colSpan="8">{liveTrendLoading ? "Recording live Binance data..." : "No recorder data yet."}</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="section-grid">
@@ -636,6 +760,7 @@ function StocksTab() {
           timeframe="15m"
           tradingSymbol={tvSignal.scanMeta?.instrument?.tradingSymbol}
           exchange={tvSignal.scanMeta?.instrument?.exchange}
+          signal={tvSignal}
           onClose={() => setTvSignal(null)}
         />
       )}
