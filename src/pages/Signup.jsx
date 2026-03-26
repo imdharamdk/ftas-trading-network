@@ -108,7 +108,7 @@ export default function Signup() {
               <span>First Name</span>
               <input
                 onChange={(event) => setForm((current) => ({ ...current, firstName: event.target.value }))}
-                placeholder="Dharmender"
+                placeholder="First name"
                 type="text"
                 value={form.firstName}
               />
@@ -118,7 +118,7 @@ export default function Signup() {
               <span>Last Name</span>
               <input
                 onChange={(event) => setForm((current) => ({ ...current, lastName: event.target.value }))}
-                placeholder="Kumar"
+                placeholder="Last name"
                 type="text"
                 value={form.lastName}
               />
