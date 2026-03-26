@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { signInWithPopup } from "firebase/auth";
 import { useSession } from "../context/useSession";
-import { auth, googleProvider } from "../lib/firebase";
+import { ensureFirebaseAuth, isFirebaseConfigured } from "../lib/firebase";
 import { evaluatePasswordStrength } from "../lib/passwordStrength";
 
 function mapGoogleError(error) {
@@ -76,6 +76,7 @@ export default function Signup() {
     setError("");
 
     try {
+      const { auth, googleProvider } = ensureFirebaseAuth();
       const result = await signInWithPopup(auth, googleProvider);
       const idToken = await result.user.getIdToken();
       await loginWithFirebase({
@@ -176,15 +177,17 @@ export default function Signup() {
             </button>
           </form>
 
-          <button
-            className="button button-secondary"
-            disabled={busy || googleBusy}
-            onClick={handleGoogleSignUp}
-            style={{ marginTop: "10px", width: "100%" }}
-            type="button"
-          >
-            {googleBusy ? "Connecting to Google..." : "Continue with Google"}
-          </button>
+          {isFirebaseConfigured ? (
+            <button
+              className="button button-secondary"
+              disabled={busy || googleBusy}
+              onClick={handleGoogleSignUp}
+              style={{ marginTop: "10px", width: "100%" }}
+              type="button"
+            >
+              {googleBusy ? "Connecting to Google..." : "Continue with Google"}
+            </button>
+          ) : null}
 
           <div className="auth-links">
             <span>

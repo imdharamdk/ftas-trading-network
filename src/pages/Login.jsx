@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { signInWithPopup } from "firebase/auth";
 import { useSession } from "../context/useSession";
 import { apiFetch } from "../lib/api";
-import { auth, googleProvider } from "../lib/firebase";
+import { ensureFirebaseAuth, isFirebaseConfigured } from "../lib/firebase";
 import { evaluatePasswordStrength } from "../lib/passwordStrength";
 
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -126,6 +126,7 @@ export default function Login() {
     setOtpRequired(false);
 
     try {
+      const { auth, googleProvider } = ensureFirebaseAuth();
       const result = await signInWithPopup(auth, googleProvider);
       const idToken = await result.user.getIdToken();
       await loginWithFirebase({ idToken });
@@ -263,15 +264,17 @@ export default function Login() {
             </button>
           </form>
 
-          <button
-            className="button button-secondary"
-            disabled={busy || googleBusy}
-            onClick={handleGoogleSignIn}
-            style={{ marginTop: "10px", width: "100%" }}
-            type="button"
-          >
-            {googleBusy ? "Connecting to Google..." : "Continue with Google"}
-          </button>
+          {isFirebaseConfigured ? (
+            <button
+              className="button button-secondary"
+              disabled={busy || googleBusy}
+              onClick={handleGoogleSignIn}
+              style={{ marginTop: "10px", width: "100%" }}
+              type="button"
+            >
+              {googleBusy ? "Connecting to Google..." : "Continue with Google"}
+            </button>
+          ) : null}
 
           <button
             className="button button-ghost"
