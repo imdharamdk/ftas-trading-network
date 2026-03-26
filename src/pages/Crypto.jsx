@@ -329,7 +329,7 @@ export default function Crypto() {
   const visibleExpired   = filteredExpired.slice(0, expiredLimit);
 
   return (
-    <AppShell subtitle="Bybit Futures — Multi-timeframe signals (1m · 5m · 15m · 30m · 1h)" title="Crypto Signals">
+    <AppShell subtitle="Binance Futures — Multi-timeframe signals (1m · 5m · 15m · 30m · 1h)" title="Crypto Signals">
       {/* Inline styles for expiry badges */}
       <style>{`
         .expiry-badge {

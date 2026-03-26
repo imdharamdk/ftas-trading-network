@@ -74,7 +74,7 @@ function buildSignalMessage(signal) {
   const side   = signal.side === "LONG" ? "🟢 LONG" : "🔴 SHORT";
   const market = isStock(signal)
     ? `🇮🇳 ${signal.scanMeta?.instrument?.exchange || "NSE/BSE"}`
-    : "💹 Bybit Futures";
+    : "💹 Binance Futures";
 
   const reasons = Array.isArray(signal.confirmations)
     ? signal.confirmations.slice(0, 3).map(r => `  • ${r}`).join("\n")

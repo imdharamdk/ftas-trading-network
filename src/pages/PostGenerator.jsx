@@ -38,7 +38,7 @@ function getMarketEmoji(signal) {
 }
 
 function getMarketLabel(signal) {
-  if (!isStock(signal)) return "Bybit Futures";
+  if (!isStock(signal)) return "Binance Futures";
   const exchange = signal.scanMeta?.instrument?.exchange
     || signal.indicatorSnapshot?.exchange;
   if (exchange) return exchange;
