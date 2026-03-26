@@ -233,14 +233,12 @@ export default function ChatBox() {
                   <div style={{ maxWidth: "75%", display: "flex", flexDirection: "column", gap: 2, alignItems: isMe ? "flex-end" : "flex-start" }}>
                     {/* Name + time */}
                     <div style={{ fontSize: 10, color: "#64748b", display: "flex", gap: 4, alignItems: "center" }}>
-                      {!isMe && (
-                        <span style={{ fontWeight: 600, color: avatarColor(msg.userName) }}>
-                          {msg.userName}
-                          {msg.userRole === "ADMIN" && (
-                            <span style={{ marginLeft: 4, background: "#6366f1", color: "#fff", fontSize: 9, padding: "1px 4px", borderRadius: 4 }}>ADMIN</span>
-                          )}
-                        </span>
-                      )}
+                      <span style={{ fontWeight: 600, color: isMe ? "#c4b5fd" : avatarColor(msg.userName) }}>
+                        {msg.userName || (isMe ? (user?.name || "You") : "User")}
+                        {msg.userRole === "ADMIN" && (
+                          <span style={{ marginLeft: 4, background: "#6366f1", color: "#fff", fontSize: 9, padding: "1px 4px", borderRadius: 4 }}>ADMIN</span>
+                        )}
+                      </span>
                       <span>{timeAgo(msg.createdAt)}</span>
                     </div>
 
