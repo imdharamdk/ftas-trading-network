@@ -717,19 +717,21 @@ export default function Dashboard() {
             ))}
           </div>
 
-          {/* Embedded Facebook Page Plugin */}
-          <div style={{ borderRadius: "10px", overflow: "hidden", border: "1px solid rgba(24,119,242,0.15)", background: "rgba(0,0,0,0.2)" }}>
-            <iframe
-              src="https://www.facebook.com/plugins/page.php?href=https%3A%2F%2Fwww.facebook.com%2FFtas.trading.network&tabs=timeline&width=340&height=200&small_header=true&adapt_container_width=true&hide_cover=false&show_facepile=true&appId"
-              width="100%"
-              height="200"
-              style={{ border: "none", overflow: "hidden", display: "block" }}
-              scrolling="no"
-              frameBorder="0"
-              allowFullScreen
-              allow="autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share"
-              title="FTAS Facebook Page"
-            />
+          <div style={{
+            borderRadius: "10px",
+            border: "1px solid rgba(24,119,242,0.15)",
+            background: "linear-gradient(135deg, rgba(24,119,242,0.12), rgba(13,101,217,0.06))",
+            padding: "16px",
+            display: "grid",
+            gap: "10px",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+              <strong style={{ color: "#e2e8f0", fontSize: "0.95rem" }}>Ftas.trading.network</strong>
+              <span style={{ color: "#1877f2", fontSize: "0.8rem", fontWeight: 700 }}>Facebook</span>
+            </div>
+            <p style={{ margin: 0, color: "var(--c-muted)", fontSize: "0.84rem", lineHeight: 1.6 }}>
+              Open the official FTAS Facebook page for analysis posts, educational content, and community updates without loading Facebook widgets inside the dashboard.
+            </p>
           </div>
 
           <a
