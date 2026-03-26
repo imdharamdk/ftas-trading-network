@@ -14,6 +14,7 @@ const Market = lazy(() => import("./pages/Market"));
 const Crypto = lazy(() => import("./pages/Crypto"));
 const News = lazy(() => import("./pages/News"));
 const Stocks = lazy(() => import("./pages/Stocks"));
+const Commodities = lazy(() => import("./pages/Commodities"));
 const PostGenerator = lazy(() => import("./pages/PostGenerator"));
 const Analytics = lazy(() => import("./pages/Analytics"));
 const Settings = lazy(() => import("./pages/Settings"));
@@ -79,6 +80,7 @@ export default function App() {
               <Route element={<SessionGate><Market /></SessionGate>} path="/market" />
               <Route element={<SessionGate><Crypto /></SessionGate>} path="/crypto" />
               <Route element={<SessionGate><Stocks /></SessionGate>} path="/stocks" />
+              <Route element={<SessionGate><Commodities /></SessionGate>} path="/commodities" />
               <Route element={<News />} path="/news" />
               <Route element={<SessionGate><PostGenerator /></SessionGate>} path="/post-generator" />
               <Route element={<SessionGate><Analytics /></SessionGate>} path="/analytics" />

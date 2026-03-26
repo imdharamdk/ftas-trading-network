@@ -20,6 +20,7 @@ const NAV_ITEMS = [
   { to: "/market", icon: "🔍", label: "Scanner" },
   { to: "/crypto", icon: "💹", label: "Crypto" },
   { to: "/stocks", icon: "🇮🇳", label: "Stocks" },
+  { to: "/commodities", icon: "📊", label: "Commodities" },
   { to: "/news", icon: "📰", label: "News" },
   { to: "/community", icon: "👥", label: "Community" },
 ];

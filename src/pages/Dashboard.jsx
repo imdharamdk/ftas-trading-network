@@ -118,8 +118,8 @@ const FEATURES = [
   {
     icon: "📊",
     title: "Commodities",
-    desc: "MCX contracts — crude oil, gold, silver and bullion tracked via SmartAPI.",
-    href: "/stocks",
+    desc: "MCX contracts like crude oil, gold, silver, and bullion have their own dedicated signal page.",
+    href: "/commodities",
     label: "View Commodities",
   },
   {
