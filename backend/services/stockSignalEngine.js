@@ -181,11 +181,62 @@ function getMaxCoinsPerScan() {
 // ─── Stock Scan Universe — Angel One instruments only ─────────────────────────
 // Returns an array of { symbol } objects from the SmartAPI instrument universe.
 // Falls back to FALLBACK_STOCKS if instrument list is empty.
+function isCommodityMarket(market = {}) {
+  const exchange = String(market.exchange || "").toUpperCase();
+  const instrumentType = String(market.instrumentType || "").toUpperCase();
+  return exchange === "MCX" || exchange === "NCDEX" || instrumentType.includes("COM");
+}
+
+function isFnOMarket(market = {}) {
+  const exchange = String(market.exchange || "").toUpperCase();
+  const instrumentType = String(market.instrumentType || "").toUpperCase();
+  return exchange === "NFO" || exchange === "BFO" || instrumentType.startsWith("FUT");
+}
+
+function rebalanceScanUniverse(markets) {
+  const maxPerScan = getMaxCoinsPerScan();
+  const commodity = markets.filter(isCommodityMarket);
+  const fno = markets.filter((market) => !isCommodityMarket(market) && isFnOMarket(market));
+  const equity = markets.filter((market) => !isCommodityMarket(market) && !isFnOMarket(market));
+
+  const commodityReserve = Math.min(commodity.length, Math.max(3, Math.ceil(maxPerScan * 0.2)));
+  const fnoReserve = Math.min(fno.length, Math.max(5, Math.ceil(maxPerScan * 0.25)));
+  const reservedSymbols = new Set();
+  const prioritized = [];
+
+  for (const market of commodity.slice(0, commodityReserve)) {
+    prioritized.push(market);
+    reservedSymbols.add(market.symbol);
+  }
+  for (const market of fno.slice(0, fnoReserve)) {
+    if (reservedSymbols.has(market.symbol)) continue;
+    prioritized.push(market);
+    reservedSymbols.add(market.symbol);
+  }
+  for (const market of equity) {
+    if (reservedSymbols.has(market.symbol)) continue;
+    prioritized.push(market);
+    reservedSymbols.add(market.symbol);
+  }
+  for (const market of fno.slice(fnoReserve)) {
+    if (reservedSymbols.has(market.symbol)) continue;
+    prioritized.push(market);
+    reservedSymbols.add(market.symbol);
+  }
+  for (const market of commodity.slice(commodityReserve)) {
+    if (reservedSymbols.has(market.symbol)) continue;
+    prioritized.push(market);
+    reservedSymbols.add(market.symbol);
+  }
+
+  return prioritized;
+}
+
 function getScanUniverse() {
   try {
     const instruments = getInstrumentUniverse({ limit: MAX_COINS_PER_SCAN_CAP });
     if (instruments.length) {
-      return instruments.map(inst => ({
+      const markets = instruments.map(inst => ({
         symbol: (inst.tradingSymbol || inst.symbol || "").toUpperCase(),
         exchange: inst.exchange,
         token: inst.token,
@@ -195,6 +246,7 @@ function getScanUniverse() {
         activityScore: 0, isLiquid: false, isCrowded: false,
         passesFloor: true, relaxThresholds: false,
       })).filter(m => m.symbol);
+      return rebalanceScanUniverse(markets);
     }
   } catch (e) {
     console.error("[stockEngine/getScanUniverse] Instrument load failed:", e.message);
