@@ -1,11 +1,4 @@
-/**
- * useWebSocket — FTAS realtime WebSocket hook
- *
- * Auto-connects, auto-subscribes, auto-reconnects with exponential backoff.
- * Returns { connected, lastMessage, send }
- */
-
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getStoredToken } from "./api";
 
 function getWsUrl(token) {
@@ -24,37 +17,108 @@ const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 30_000;
 const RECONNECT_FACTOR = 1.8;
 
-export function useWebSocket({
-  onSignalNew,
-  onSignalClosed,
-  onStockNew,
-  onStockClosed,
-  onPriceUpdate,
-  onStatsUpdate,
-  onChatMessage,
-  onEngineStatus,
-} = {}) {
-  const [connected, setConnected] = useState(false);
-  const wsRef = useRef(null);
-  const retryDelay = useRef(RECONNECT_BASE_MS);
-  const retryTimer = useRef(null);
-  const unmounted = useRef(false);
+let sharedSocket = null;
+let sharedConnected = false;
+let sharedRetryDelay = RECONNECT_BASE_MS;
+let sharedRetryTimer = null;
+const listeners = new Set();
 
-  const subscribeToAvailableChannels = useCallback((availableChannels = []) => {
-    const channelSet = new Set(Array.isArray(availableChannels) ? availableChannels : []);
+function emitConnected(next) {
+  sharedConnected = next;
+  for (const listener of listeners) {
+    try {
+      listener.onConnectedChange?.(next);
+    } catch {}
+  }
+}
 
-    if (channelSet.has("crypto_signals") && (onSignalNew || onSignalClosed)) {
-      wsRef.current?.send(JSON.stringify({ type: "SUBSCRIBE", channel: "crypto_signals" }));
-    }
-    if (channelSet.has("stock_signals") && (onStockNew || onStockClosed)) {
-      wsRef.current?.send(JSON.stringify({ type: "SUBSCRIBE", channel: "stock_signals" }));
-    }
-    if (channelSet.has("prices") && onPriceUpdate) {
-      wsRef.current?.send(JSON.stringify({ type: "SUBSCRIBE", channel: "prices" }));
-    }
-  }, [onPriceUpdate, onSignalClosed, onSignalNew, onStockClosed, onStockNew]);
+function notifyMessage(msg) {
+  for (const listener of listeners) {
+    try {
+      listener.onMessage?.(msg);
+    } catch {}
+  }
+}
 
-  const handleMessage = useCallback((event) => {
+function hasDemand() {
+  for (const listener of listeners) {
+    if (listener.wantsRealtime?.()) return true;
+  }
+  return false;
+}
+
+function subscribeChannels(socket, availableChannels) {
+  const channelDemand = {
+    crypto_signals: false,
+    stock_signals: false,
+    prices: false,
+  };
+
+  for (const listener of listeners) {
+    const wants = listener.getDesiredChannels?.() || [];
+    for (const channel of wants) {
+      if (channel in channelDemand) channelDemand[channel] = true;
+    }
+  }
+
+  for (const channel of availableChannels || []) {
+    if (channelDemand[channel]) {
+      socket.send(JSON.stringify({ type: "SUBSCRIBE", channel }));
+    }
+  }
+}
+
+function cleanupSocket() {
+  if (sharedSocket) {
+    try {
+      sharedSocket.onopen = null;
+      sharedSocket.onmessage = null;
+      sharedSocket.onclose = null;
+      sharedSocket.onerror = null;
+      if (sharedSocket.readyState === WebSocket.OPEN || sharedSocket.readyState === WebSocket.CONNECTING) {
+        sharedSocket.close(1000, "No listeners");
+      }
+    } catch {}
+  }
+  sharedSocket = null;
+  emitConnected(false);
+}
+
+function scheduleReconnect() {
+  if (sharedRetryTimer || !hasDemand()) return;
+  const delay = sharedRetryDelay;
+  sharedRetryDelay = Math.min(delay * RECONNECT_FACTOR, RECONNECT_MAX_MS);
+  sharedRetryTimer = window.setTimeout(() => {
+    sharedRetryTimer = null;
+    ensureSharedConnection();
+  }, delay);
+}
+
+function ensureSharedConnection() {
+  if (typeof window === "undefined") return;
+  if (!hasDemand()) {
+    cleanupSocket();
+    return;
+  }
+
+  const token = getStoredToken();
+  if (!token) {
+    cleanupSocket();
+    return;
+  }
+
+  if (sharedSocket?.readyState === WebSocket.OPEN || sharedSocket?.readyState === WebSocket.CONNECTING) {
+    return;
+  }
+
+  const socket = new WebSocket(getWsUrl(token));
+  sharedSocket = socket;
+
+  socket.onopen = () => {
+    sharedRetryDelay = RECONNECT_BASE_MS;
+  };
+
+  socket.onmessage = (event) => {
     let msg;
     try {
       msg = JSON.parse(event.data);
@@ -62,109 +126,139 @@ export function useWebSocket({
       return;
     }
 
-    switch (msg.type) {
-      case "CONNECTED":
-        setConnected(true);
-        retryDelay.current = RECONNECT_BASE_MS;
-        subscribeToAvailableChannels(msg?.data?.availableChannels);
-        break;
-      case "PING":
-        wsRef.current?.send(JSON.stringify({ type: "PONG" }));
-        break;
-      case "NEW_SIGNAL":
-        if (msg.channel === "crypto_signals") onSignalNew?.(msg.data?.signal);
-        if (msg.channel === "stock_signals") onStockNew?.(msg.data?.signal);
-        break;
-      case "SIGNAL_CLOSED":
-        if (msg.channel === "crypto_signals") onSignalClosed?.(msg.data?.signal);
-        if (msg.channel === "stock_signals") onStockClosed?.(msg.data?.signal);
-        break;
-      case "PRICE_UPDATE":
-        onPriceUpdate?.(msg.data?.prices);
-        break;
-      case "stats:update":
-        onStatsUpdate?.({ crypto: msg.crypto, stocks: msg.stocks });
-        break;
-      case "chat:message":
-        onChatMessage?.(msg.message);
-        break;
-      case "engine:status":
-        onEngineStatus?.(msg.engine);
-        break;
-      case "ERROR":
-        console.warn("[ws]", msg.message || "WebSocket error");
-        break;
-      default:
-        break;
+    if (msg.type === "CONNECTED") {
+      emitConnected(true);
+      subscribeChannels(socket, msg?.data?.availableChannels || []);
+      return;
     }
-  }, [onChatMessage, onEngineStatus, onPriceUpdate, onSignalClosed, onSignalNew, onStatsUpdate, onStockClosed, onStockNew, subscribeToAvailableChannels]);
 
-  const connect = useCallback(() => {
-    if (unmounted.current) return;
-    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
+    if (msg.type === "PING") {
+      socket.send(JSON.stringify({ type: "PONG" }));
+      return;
+    }
 
-    const token = getStoredToken();
-    if (!token) return;
+    if (msg.type === "ERROR") {
+      console.warn("[ws]", msg.message || "WebSocket error");
+    }
 
-    const url = getWsUrl(token);
-    console.log("[ws] Connecting to", url);
+    notifyMessage(msg);
+  };
 
-    const ws = new WebSocket(url);
-    wsRef.current = ws;
+  socket.onclose = (event) => {
+    if (sharedSocket === socket) sharedSocket = null;
+    emitConnected(false);
 
-    ws.onopen = () => {
-      console.log("[ws] Connected");
-    };
+    if (!hasDemand()) return;
+    if (event.code === 4001) {
+      console.warn("[ws] Auth failed, not reconnecting");
+      return;
+    }
 
-    ws.onmessage = handleMessage;
+    scheduleReconnect();
+  };
 
-    ws.onclose = (event) => {
-      setConnected(false);
-      wsRef.current = null;
-      if (unmounted.current) return;
-      if (event.code === 4001) {
-        console.warn("[ws] Auth failed, not reconnecting");
-        return;
+  socket.onerror = () => {};
+}
+
+function createListener(handlerRef, setConnected) {
+  return {
+    wantsRealtime() {
+      const current = handlerRef.current;
+      return Boolean(
+        current.onSignalNew ||
+        current.onSignalClosed ||
+        current.onStockNew ||
+        current.onStockClosed ||
+        current.onPriceUpdate ||
+        current.onStatsUpdate ||
+        current.onChatMessage ||
+        current.onEngineStatus
+      );
+    },
+    getDesiredChannels() {
+      const current = handlerRef.current;
+      const desired = [];
+      if (current.onSignalNew || current.onSignalClosed) desired.push("crypto_signals");
+      if (current.onStockNew || current.onStockClosed) desired.push("stock_signals");
+      if (current.onPriceUpdate) desired.push("prices");
+      return desired;
+    },
+    onConnectedChange(next) {
+      setConnected(next);
+    },
+    onMessage(msg) {
+      const current = handlerRef.current;
+      switch (msg.type) {
+        case "NEW_SIGNAL":
+          if (msg.channel === "crypto_signals") current.onSignalNew?.(msg.data?.signal);
+          if (msg.channel === "stock_signals") current.onStockNew?.(msg.data?.signal);
+          break;
+        case "SIGNAL_CLOSED":
+          if (msg.channel === "crypto_signals") current.onSignalClosed?.(msg.data?.signal);
+          if (msg.channel === "stock_signals") current.onStockClosed?.(msg.data?.signal);
+          break;
+        case "PRICE_UPDATE":
+          current.onPriceUpdate?.(msg.data?.prices);
+          break;
+        case "stats:update":
+          current.onStatsUpdate?.({ crypto: msg.crypto, stocks: msg.stocks });
+          break;
+        case "chat:message":
+          current.onChatMessage?.(msg.message);
+          break;
+        case "engine:status":
+          current.onEngineStatus?.(msg.engine);
+          break;
+        default:
+          break;
       }
-      const delay = retryDelay.current;
-      retryDelay.current = Math.min(delay * RECONNECT_FACTOR, RECONNECT_MAX_MS);
-      console.log(`[ws] Disconnected, retrying in ${Math.round(delay / 1000)}s`);
-      retryTimer.current = setTimeout(connect, delay);
-    };
+    },
+  };
+}
 
-    ws.onerror = () => {};
-  }, [handleMessage]);
+export function useWebSocket(handlers = {}) {
+  const [connected, setConnected] = useState(sharedConnected);
+  const handlerRef = useRef(handlers);
+  handlerRef.current = handlers;
 
   useEffect(() => {
-    unmounted.current = false;
-    connect();
+    if (typeof window === "undefined") return undefined;
+
+    const listener = createListener(handlerRef, setConnected);
+    listeners.add(listener);
+    ensureSharedConnection();
 
     function onVisible() {
       if (document.visibilityState === "visible") {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-          clearTimeout(retryTimer.current);
-          retryDelay.current = RECONNECT_BASE_MS;
-          connect();
+        if (sharedRetryTimer) {
+          window.clearTimeout(sharedRetryTimer);
+          sharedRetryTimer = null;
         }
+        sharedRetryDelay = RECONNECT_BASE_MS;
+        ensureSharedConnection();
       }
     }
 
     document.addEventListener("visibilitychange", onVisible);
 
     return () => {
-      unmounted.current = true;
-      clearTimeout(retryTimer.current);
+      listeners.delete(listener);
       document.removeEventListener("visibilitychange", onVisible);
-      wsRef.current?.close(1000, "Component unmounted");
-      wsRef.current = null;
+      if (!hasDemand()) {
+        if (sharedRetryTimer) {
+          window.clearTimeout(sharedRetryTimer);
+          sharedRetryTimer = null;
+        }
+        cleanupSocket();
+      }
     };
-  }, [connect]);
-
-  const send = useCallback((data) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(data));
-    }
   }, []);
+
+  const send = (data) => {
+    if (sharedSocket?.readyState === WebSocket.OPEN) {
+      sharedSocket.send(JSON.stringify(data));
+    }
+  };
 
   return { connected, send };
 }
