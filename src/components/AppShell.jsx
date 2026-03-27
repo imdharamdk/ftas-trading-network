@@ -16,14 +16,14 @@ function fmtExpiry(value) {
 }
 
 const NAV_ITEMS = [
-  { to: "/dashboard", icon: "📊", label: "Dashboard" },
-  { to: "/market", icon: "🔍", label: "Scanner" },
-  { to: "/live-monitor", icon: "🖥️", label: "Live Monitor" },
-  { to: "/crypto", icon: "💹", label: "Crypto" },
-  { to: "/stocks", icon: "🇮🇳", label: "Stocks" },
-  { to: "/commodities", icon: "📊", label: "Commodities" },
-  { to: "/news", icon: "📰", label: "News" },
-  { to: "/community", icon: "👥", label: "Community" },
+  { to: "/dashboard", icon: "📊", label: "Dashboard", shortLabel: "Dash" },
+  { to: "/market", icon: "🔍", label: "Scanner", shortLabel: "Scan" },
+  { to: "/live-monitor", icon: "🖥️", label: "Live Monitor", shortLabel: "Live" },
+  { to: "/crypto", icon: "💹", label: "Crypto", shortLabel: "Crypto" },
+  { to: "/stocks", icon: "🇮🇳", label: "Stocks", shortLabel: "Stocks" },
+  { to: "/commodities", icon: "📊", label: "Commodities", shortLabel: "Comm" },
+  { to: "/news", icon: "📰", label: "News", shortLabel: "News" },
+  { to: "/community", icon: "👥", label: "Community", shortLabel: "Commty" },
 ];
 
 const SIDEBAR_EXTRA = [{ to: "/settings", icon: "⚙️", label: "Settings" }];
@@ -330,13 +330,13 @@ export default function AppShell({ actions = null, children, subtitle, title }) 
         {NAV_ITEMS.map((item) => (
           <NavLink key={item.to} to={item.to} className={({ isActive }) => `bottom-nav-item${isActive ? " active" : ""}`}>
             <span className="nav-icon">{item.icon}</span>
-            <span>{item.label}</span>
+            <span className="bottom-nav-label" data-short={item.shortLabel}>{item.label}</span>
           </NavLink>
         ))}
 
         <NavLink to="/settings" className={({ isActive }) => `bottom-nav-item${isActive ? " active" : ""}`}>
           <span className="nav-icon">⚙️</span>
-          <span>Settings</span>
+          <span className="bottom-nav-label" data-short="Prefs">Settings</span>
         </NavLink>
       </nav>
 
