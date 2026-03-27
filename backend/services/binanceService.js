@@ -14,9 +14,9 @@ let coinsCache = null;
 let coinsCacheTime = 0;
 const COINS_TTL = 10 * 60 * 1000;
 
-let priceCache = {};
-let priceCacheTime = 0;
-const PRICE_TTL = 2000;
+let bookTickerCache = {};
+let bookTickerCacheTime = 0;
+const BOOK_TICKER_TTL = 2000;
 
 const FALLBACK_FUTURES_COINS = [
   "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
@@ -78,6 +78,44 @@ function normalizeBinanceKline(kline) {
   };
 }
 
+function normalizeBookTicker(ticker = {}) {
+  const symbol = String(ticker.symbol || "").toUpperCase();
+  const bid = Number(ticker.bidPrice);
+  const ask = Number(ticker.askPrice);
+  const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : null;
+  const spreadBps = mid && ask >= bid ? Number((((ask - bid) / mid) * 10_000).toFixed(2)) : null;
+  return { symbol, bid, ask, mid, spreadBps };
+}
+
+async function refreshBookTickerCache(force = false) {
+  const now = Date.now();
+  if (!force && now - bookTickerCacheTime <= BOOK_TICKER_TTL && Object.keys(bookTickerCache).length) {
+    return bookTickerCache;
+  }
+
+  try {
+    const res = await requestWithRetry({ method: "get", url: "/fapi/v1/ticker/bookTicker" }, "Binance bookTicker");
+    const tickers = Array.isArray(res.data) ? res.data : [];
+    const fresh = {};
+
+    for (const ticker of tickers) {
+      const normalized = normalizeBookTicker(ticker);
+      if (normalized.symbol && Number.isFinite(normalized.mid)) {
+        fresh[normalized.symbol] = normalized;
+      }
+    }
+
+    if (Object.keys(fresh).length > 0) {
+      bookTickerCache = fresh;
+      bookTickerCacheTime = now;
+    }
+  } catch (error) {
+    console.error("[dataService] Binance bookTicker failed:", error.message);
+  }
+
+  return bookTickerCache;
+}
+
 async function getAllFuturesCoins() {
   const now = Date.now();
   if (coinsCache && now - coinsCacheTime < COINS_TTL) {
@@ -123,42 +161,40 @@ async function getKlines(symbol, interval, limit = 250) {
   }
 }
 
+async function getBookTickers(symbols = []) {
+  const cache = await refreshBookTickerCache();
+  if (!symbols.length) {
+    return Object.values(cache).map((item) => ({ ...item }));
+  }
+
+  const wanted = new Set(symbols.map((symbol) => String(symbol).toUpperCase()));
+  const result = [];
+  for (const symbol of wanted) {
+    if (cache[symbol]) {
+      result.push({ ...cache[symbol] });
+    }
+  }
+  return result;
+}
+
 async function getPrices(symbols = []) {
-  const now = Date.now();
-
-  if (now - priceCacheTime > PRICE_TTL) {
-    try {
-      const res = await requestWithRetry({ method: "get", url: "/fapi/v1/ticker/bookTicker" }, "Binance bookTicker");
-      const tickers = Array.isArray(res.data) ? res.data : [];
-      const fresh = {};
-
-      for (const ticker of tickers) {
-        const sym = String(ticker.symbol || "").toUpperCase();
-        const bid = Number(ticker.bidPrice);
-        const ask = Number(ticker.askPrice);
-        if (bid > 0 && ask > 0) {
-          fresh[sym] = (bid + ask) / 2;
-        }
-      }
-
-      if (Object.keys(fresh).length > 0) {
-        priceCache = fresh;
-        priceCacheTime = now;
-      }
-    } catch (error) {
-      console.error("[dataService] Binance getPrices failed:", error.message);
+  const cache = await refreshBookTickerCache();
+  const prices = {};
+  for (const [symbol, item] of Object.entries(cache)) {
+    if (Number.isFinite(item.mid)) {
+      prices[symbol] = item.mid;
     }
   }
 
   if (!symbols.length) {
-    return { ...priceCache };
+    return prices;
   }
 
   const wanted = new Set(symbols.map((symbol) => String(symbol).toUpperCase()));
   const result = {};
   for (const symbol of wanted) {
-    if (Number.isFinite(priceCache[symbol])) {
-      result[symbol] = priceCache[symbol];
+    if (Number.isFinite(prices[symbol])) {
+      result[symbol] = prices[symbol];
     }
   }
   return result;
@@ -166,6 +202,10 @@ async function getPrices(symbols = []) {
 
 async function getPrice(symbol) {
   const normalizedSymbol = String(symbol || "").toUpperCase();
+  const prices = await getPrices([normalizedSymbol]);
+  if (Number.isFinite(prices[normalizedSymbol])) {
+    return prices[normalizedSymbol];
+  }
 
   try {
     const res = await requestWithRetry({
@@ -174,10 +214,9 @@ async function getPrice(symbol) {
       params: { symbol: normalizedSymbol },
     }, `Binance getPrice(${normalizedSymbol})`);
 
-    const bid = Number(res.data?.bidPrice);
-    const ask = Number(res.data?.askPrice);
-    if (bid > 0 && ask > 0) {
-      return (bid + ask) / 2;
+    const normalized = normalizeBookTicker(res.data || {});
+    if (Number.isFinite(normalized.mid)) {
+      return normalized.mid;
     }
   } catch (error) {
     console.error(`[dataService] Binance getPrice(${normalizedSymbol}) failed:`, error.message);
@@ -199,6 +238,7 @@ async function getAllTickerStats() {
 module.exports = {
   getAllFuturesCoins,
   getAllTickerStats,
+  getBookTickers,
   getKlines,
   getPrice,
   getPrices,

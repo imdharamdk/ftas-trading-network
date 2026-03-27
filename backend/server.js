@@ -24,6 +24,7 @@ const facebookRoutes                 = require("./routes/facebook");
 const settingsRoutes                 = require("./routes/settings");
 const communityRoutes                = require("./routes/community");
 const { getStatus, start, getAdaptiveModelStatus } = require("./services/signalEngine");
+const liveTrendRecorder = require("./services/liveTrendRecorder");
 const adaptiveEngine = require("./services/adaptiveEngine");
 const stockSignalEngine    = require("./services/stockSignalEngine");
 const { createWsServer, getConnectedCount } = require("./services/wsServer");
@@ -335,6 +336,7 @@ async function startServer(port = PORT) {
       }
     })().catch(() => {});
 
+    liveTrendRecorder.start();
     startMaintenanceScheduler();
   });
 }

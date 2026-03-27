@@ -5,6 +5,7 @@ import { apiFetch } from "../lib/api";
 
 function formatPrice(value) {
   const amount = Number(value || 0);
+  if (!Number.isFinite(amount)) return "n/a";
   if (Math.abs(amount) >= 1000) {
     return amount.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 2 });
   }
@@ -14,7 +15,8 @@ function formatPrice(value) {
 }
 
 function formatSignedPercent(value, digits = 2) {
-  const amount = Number(value || 0);
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "n/a";
   const prefix = amount > 0 ? "+" : "";
   return `${prefix}${amount.toFixed(digits)}%`;
 }
@@ -27,69 +29,14 @@ function signalTone(signal) {
   return "pill-warning";
 }
 
-function getTradeGuidance(item) {
-  const signal = String(item?.signal || "").toUpperCase();
-  const strength = String(item?.strength || "").toUpperCase();
-  const change2m = Number(item?.change2m || 0);
-  const nearHigh = Boolean(item?.nearHigh);
-  const nearLow = Boolean(item?.nearLow);
-
-  if (signal === "BREAKOUT_LONG") {
-    return {
-      action: strength === "STRONG" ? "LONG trade dekh sakte ho" : "Confirmation ka wait karo",
-      plan: nearHigh
-        ? "Price breakout zone par hai. Small entry only after candle hold above range."
-        : "Momentum bullish hai, lekin breakout hold confirm karo.",
-    };
-  }
-
-  if (signal === "BREAKOUT_SHORT") {
-    return {
-      action: strength === "STRONG" ? "SHORT trade dekh sakte ho" : "Confirmation ka wait karo",
-      plan: nearLow
-        ? "Price breakdown zone par hai. Short only after candle sustain below range."
-        : "Momentum bearish hai, lekin breakdown hold confirm karo.",
-    };
-  }
-
-  if (signal === "REVERSAL_LONG") {
-    return {
-      action: strength === "STRONG" ? "Aggressive long possible" : "Abhi wait karo",
-      plan: "Reversal signal hai. Entry tab lo jab next candle higher low banaye.",
-    };
-  }
-
-  if (signal === "REVERSAL_SHORT") {
-    return {
-      action: strength === "STRONG" ? "Aggressive short possible" : "Abhi wait karo",
-      plan: "Reversal short hai. Entry tab lo jab next candle lower high confirm kare.",
-    };
-  }
-
-  if (signal === "BULLISH") {
-    return {
-      action: strength === "STRONG" && change2m > 0.3 ? "Dip buy dekh sakte ho" : "Watch rakho",
-      plan: "Trend up hai but full breakout nahi hai. Pullback ya fresh candle confirmation chahiye.",
-    };
-  }
-
-  if (signal === "BEARISH") {
-    return {
-      action: strength === "STRONG" && change2m < -0.3 ? "Short on bounce dekh sakte ho" : "Watch rakho",
-      plan: "Trend down hai but full breakdown nahi hai. Bounce reject hone ka wait karo.",
-    };
-  }
-
-  return {
-    action: "Trade mat lo abhi",
-    plan: "Signal mixed hai. Watchlist me rakho aur clear breakout ya reversal ka wait karo.",
-  };
+function metricTone(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "";
+  return amount >= 0 ? "trend-up" : "trend-down";
 }
 
 function shouldAlert(item) {
-  const signal = String(item?.signal || "").toUpperCase();
-  const strength = String(item?.strength || "").toUpperCase();
-  return strength === "STRONG" && ["BREAKOUT_LONG", "BREAKOUT_SHORT", "REVERSAL_LONG", "REVERSAL_SHORT"].includes(signal);
+  return Boolean(item?.guidance?.shouldTrade) && String(item?.strength || "").toUpperCase() === "STRONG";
 }
 
 function playAlertTone() {
@@ -136,8 +83,7 @@ export default function LiveMonitor() {
   });
   const [lastAlertText, setLastAlertText] = useState("");
   const [viewMode, setViewMode] = useState("all");
-  const seenAlertsRef = useRef(new Set());
-  const bootstrappedRef = useRef(false);
+  const activeAlertKeysRef = useRef(new Set());
 
   useEffect(() => {
     let active = true;
@@ -148,42 +94,29 @@ export default function LiveMonitor() {
         if (!active) return;
         const nextData = res?.trends || [];
         setData(nextData);
-        setMeta({ summary: res?.summary || null, recorder: res?.recorder || null });
+        setMeta({ summary: res?.summary || null, recorder: res?.recorder || null, performance: res?.performance || null });
         setError("");
 
-        const candidates = nextData.filter(shouldAlert);
-        if (!bootstrappedRef.current) {
-          candidates.forEach((item) => {
-            seenAlertsRef.current.add(`${item.symbol}|${item.signal}|${item.updatedAt}`);
-          });
-          bootstrappedRef.current = true;
-          return;
-        }
-
-        for (const item of candidates) {
-          const key = `${item.symbol}|${item.signal}|${item.updatedAt}`;
-          if (seenAlertsRef.current.has(key)) continue;
-          seenAlertsRef.current.add(key);
-
-          if (!alertsEnabled) continue;
-
-          const text = `${item.symbol} ${item.signal.replaceAll("_", " ")} at ${formatPrice(item.price)} | 2m ${formatSignedPercent(item.change2m, 3)}`;
-          setLastAlertText(text);
-
-          if (soundEnabled) {
-            playAlertTone();
-          }
-
-          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-            try {
-              new Notification(`FTAS Live Monitor: ${item.signal.replaceAll("_", " ")}`, {
-                body: text,
-                icon: "/vite.svg",
-                tag: `live-monitor-${item.symbol}`,
-              });
-            } catch {}
+        const nextKeys = new Set();
+        for (const item of nextData.filter(shouldAlert)) {
+          const key = `${item.symbol}|${item.signal}`;
+          nextKeys.add(key);
+          if (!activeAlertKeysRef.current.has(key) && alertsEnabled) {
+            const text = `${item.symbol} ${item.signal.replaceAll("_", " ")} | ${item.guidance?.action || "Review trade"} | 2m ${formatSignedPercent(item.change2m, 3)}`;
+            setLastAlertText(text);
+            if (soundEnabled) playAlertTone();
+            if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+              try {
+                new Notification(`FTAS Live Monitor: ${item.signal.replaceAll("_", " ")}`, {
+                  body: text,
+                  icon: "/vite.svg",
+                  tag: `live-monitor-${item.symbol}`,
+                });
+              } catch {}
+            }
           }
         }
+        activeAlertKeysRef.current = nextKeys;
       } catch (e) {
         if (!active) return;
         setError(e.message || "Failed to load live monitor");
@@ -203,7 +136,7 @@ export default function LiveMonitor() {
 
   const visibleData = data.filter((item) => {
     if (viewMode === "watch") return String(item.signal || "").toUpperCase() === "WATCH";
-    if (viewMode === "action") return String(item.signal || "").toUpperCase() !== "WATCH";
+    if (viewMode === "action") return Boolean(item.guidance?.shouldTrade);
     return true;
   });
 
@@ -231,23 +164,23 @@ export default function LiveMonitor() {
       <section className="stats-grid">
         <article className="metric-card">
           <span className="metric-label">Recorder state</span>
-          <strong>{loading ? "Loading" : "Running"}</strong>
+          <strong>{meta?.recorder?.running ? "Running" : loading ? "Loading" : "Idle"}</strong>
           <span className="metric-meta">Refresh every 15 seconds</span>
         </article>
         <article className="metric-card">
           <span className="metric-label">Tracked pairs</span>
           <strong>{meta?.recorder?.universeSize ?? 0}</strong>
-          <span className="metric-meta">Top Binance perpetual activity</span>
+          <span className="metric-meta">Spread-aware Binance perpetual activity</span>
         </article>
         <article className="metric-card">
-          <span className="metric-label">Bullish / bearish</span>
-          <strong>{`${meta?.summary?.bullish ?? 0} / ${meta?.summary?.bearish ?? 0}`}</strong>
-          <span className="metric-meta">Direction from recorded snapshots</span>
+          <span className="metric-label">Actionable setups</span>
+          <strong>{meta?.summary?.actionable ?? 0}</strong>
+          <span className="metric-meta">Server-side guidance {meta?.recorder?.guidanceVersion || "v2"}</span>
         </article>
         <article className="metric-card">
-          <span className="metric-label">Breakouts / reversals</span>
-          <strong>{`${meta?.summary?.breakouts ?? 0} / ${meta?.summary?.reversals ?? 0}`}</strong>
-          <span className="metric-meta">Fast trend triggers</span>
+          <span className="metric-label">Live win rate</span>
+          <strong>{meta?.performance?.overall?.winRate ?? 0}%</strong>
+          <span className="metric-meta">{meta?.performance?.overall?.total ?? 0} evaluated live recommendations</span>
         </article>
       </section>
 
@@ -263,24 +196,12 @@ export default function LiveMonitor() {
         </div>
 
         <div className="live-monitor-controls">
-          <button className={`button ${viewMode === "all" ? "button-primary" : "button-ghost"}`} onClick={() => setViewMode("all")} type="button">
-            All Signals
-          </button>
-          <button className={`button ${viewMode === "watch" ? "button-secondary" : "button-ghost"}`} onClick={() => setViewMode("watch")} type="button">
-            Watch
-          </button>
-          <button className={`button ${viewMode === "action" ? "button-secondary" : "button-ghost"}`} onClick={() => setViewMode("action")} type="button">
-            Actionable
-          </button>
-          <button className={`button ${alertsEnabled ? "button-primary" : "button-ghost"}`} onClick={() => setAlertsEnabled((value) => !value)} type="button">
-            {alertsEnabled ? "Alerts On" : "Alerts Off"}
-          </button>
-          <button className={`button ${soundEnabled ? "button-secondary" : "button-ghost"}`} onClick={() => setSoundEnabled((value) => !value)} type="button">
-            {soundEnabled ? "Sound On" : "Sound Off"}
-          </button>
-          <button className="button button-ghost" onClick={enableDesktopAlerts} type="button">
-            {permission === "granted" ? "Desktop Allowed" : permission === "denied" ? "Desktop Blocked" : permission === "unsupported" ? "Desktop Unsupported" : "Enable Desktop Alerts"}
-          </button>
+          <button className={`button ${viewMode === "all" ? "button-primary" : "button-ghost"}`} onClick={() => setViewMode("all")} type="button">All Signals</button>
+          <button className={`button ${viewMode === "watch" ? "button-secondary" : "button-ghost"}`} onClick={() => setViewMode("watch")} type="button">Watch</button>
+          <button className={`button ${viewMode === "action" ? "button-secondary" : "button-ghost"}`} onClick={() => setViewMode("action")} type="button">Actionable</button>
+          <button className={`button ${alertsEnabled ? "button-primary" : "button-ghost"}`} onClick={() => setAlertsEnabled((value) => !value)} type="button">{alertsEnabled ? "Alerts On" : "Alerts Off"}</button>
+          <button className={`button ${soundEnabled ? "button-secondary" : "button-ghost"}`} onClick={() => setSoundEnabled((value) => !value)} type="button">{soundEnabled ? "Sound On" : "Sound Off"}</button>
+          <button className="button button-ghost" onClick={enableDesktopAlerts} type="button">{permission === "granted" ? "Desktop Allowed" : permission === "denied" ? "Desktop Blocked" : permission === "unsupported" ? "Desktop Unsupported" : "Enable Desktop Alerts"}</button>
         </div>
 
         {lastAlertText ? <div className="banner banner-success">Latest alert: {lastAlertText}</div> : null}
@@ -294,12 +215,12 @@ export default function LiveMonitor() {
           <article className="live-trend-stat">
             <span>Watchlist count</span>
             <strong>{meta?.summary?.watch ?? 0}</strong>
-            <small>Pairs that are still mixed and not directional yet</small>
+            <small>Mixed pairs or incomplete history. No trade until structure clears.</small>
           </article>
           <article className="live-trend-stat">
             <span>Recorder status</span>
             <strong>{meta?.recorder?.lastError ? "Attention" : "Healthy"}</strong>
-            <small>{meta?.recorder?.lastError || "Sampling Binance market data normally"}</small>
+            <small>{meta?.recorder?.lastError || "Sampling Binance market data continuously"}</small>
           </article>
         </div>
 
@@ -319,9 +240,7 @@ export default function LiveMonitor() {
               </tr>
             </thead>
             <tbody>
-              {visibleData.length ? visibleData.map((item) => {
-                const guidance = getTradeGuidance(item);
-                return (
+              {visibleData.length ? visibleData.map((item) => (
                 <tr key={item.symbol}>
                   <td>
                     <div className="live-trend-symbol-cell">
@@ -329,6 +248,7 @@ export default function LiveMonitor() {
                         <strong>{item.symbol}</strong>
                       </button>
                       <span>{formatPrice(item.price)}</span>
+                      <small>{item.spreadBps !== null ? `Spread ${item.spreadBps} bps` : "Spread n/a"}</small>
                     </div>
                   </td>
                   <td>
@@ -339,26 +259,25 @@ export default function LiveMonitor() {
                   </td>
                   <td>
                     <div className="live-trend-score-stack">
-                      <strong>{guidance.action}</strong>
-                      <small>{guidance.plan}</small>
+                      <strong>{item.guidance?.action || "Wait"}</strong>
+                      <small>{item.guidance?.plan || item.note}</small>
                     </div>
                   </td>
                   <td>
                     <div className="live-trend-score-stack">
-                      <strong className={item.momentumScore >= 0 ? "trend-up" : "trend-down"}>{formatSignedPercent(item.momentumScore)}</strong>
+                      <strong className={metricTone(item.momentumScore)}>{formatSignedPercent(item.momentumScore)}</strong>
                       <small>{item.note}</small>
                     </div>
                   </td>
-                  <td className={item.change30s >= 0 ? "trend-up" : "trend-down"}>{formatSignedPercent(item.change30s, 3)}</td>
-                  <td className={item.change2m >= 0 ? "trend-up" : "trend-down"}>{formatSignedPercent(item.change2m, 3)}</td>
-                  <td className={item.change5m >= 0 ? "trend-up" : "trend-down"}>{formatSignedPercent(item.change5m, 3)}</td>
+                  <td className={metricTone(item.change30s)}>{formatSignedPercent(item.change30s, 3)}</td>
+                  <td className={metricTone(item.change2m)}>{formatSignedPercent(item.change2m, 3)}</td>
+                  <td className={metricTone(item.change5m)}>{formatSignedPercent(item.change5m, 3)}</td>
                   <td>
-                    <span className={`pill ${item.priceChangePercent24h >= 0 ? "pill-success" : "pill-danger"}`}>{formatSignedPercent(item.priceChangePercent24h)}</span>
+                    <span className={`pill ${Number(item.priceChangePercent24h) >= 0 ? "pill-success" : "pill-danger"}`}>{formatSignedPercent(item.priceChangePercent24h)}</span>
                   </td>
                   <td>{`${Math.max(1, Math.round(item.recordedSeconds / 60))}m / ${item.recordedPoints} pts`}</td>
                 </tr>
-              );
-              }) : (
+              )) : (
                 <tr>
                   <td className="empty-row" colSpan="9">{loading ? "Recording live Binance data..." : viewMode === "watch" ? "No watch signals right now." : viewMode === "action" ? "No actionable signals right now." : "No recorder data yet."}</td>
                 </tr>
