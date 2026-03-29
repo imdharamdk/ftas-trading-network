@@ -82,6 +82,8 @@ async function maybeBootstrapAdmin() {
   const email    = process.env.ADMIN_BOOTSTRAP_EMAIL;
   const password = process.env.ADMIN_BOOTSTRAP_PASSWORD;
   const name     = process.env.ADMIN_BOOTSTRAP_NAME || "FTAS Admin";
+  const allowCreate = ["1", "true", "yes", "on"].includes(String(process.env.ADMIN_BOOTSTRAP_ALLOW_CREATE || "").trim().toLowerCase());
+  const isProduction = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
 
   if (!email || !password) {
     console.warn("[bootstrap] ADMIN_BOOTSTRAP_EMAIL or ADMIN_BOOTSTRAP_PASSWORD not set — skipping");
@@ -126,7 +128,12 @@ async function maybeBootstrapAdmin() {
         return { records: next, value: updated };
       }
 
-      // Fresh create
+      // Fresh create is blocked in production unless explicitly allowed.
+      if (isProduction && !allowCreate) {
+        console.warn("[bootstrap] Admin create skipped in production. Set ADMIN_BOOTSTRAP_ALLOW_CREATE=true to allow fresh admin creation.");
+        return { records, value: null };
+      }
+
       const user = createUser({
         email: normalEmail,
         name,
