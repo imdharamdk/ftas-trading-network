@@ -15,7 +15,7 @@ const {
   normalizeSignalPreferences,
   sanitizeUser,
 } = require("../models/User");
-const { mutateCollection, readCollection, writeCollection } = require("../storage/fileStore");
+const { getStorageDebugInfo, mutateCollection, readCollection, writeCollection } = require("../storage/fileStore");
 const { sendResetCodeEmail } = require("../services/emailService");
 const { listAuthSecurityEvents, logAuthSecurityEvent } = require("../services/securityEventService");
 const { verifyFirebaseIdToken } = require("../services/firebaseAdmin");
@@ -883,6 +883,21 @@ router.patch("/me", requireAuth, async (req, res) => {
 
     return res.json({
       user: { ...req.user, riskPreference: preference, effectiveRiskPreference: preference },
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+});
+
+router.get("/users/debug/storage", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const users = await readCollection("users");
+    const debug = getStorageDebugInfo();
+    return res.json({
+      ...debug,
+      usersCount: users.length,
+      sampleUserEmails: users.slice(0, 10).map((user) => user.email),
+      sampleUserIds: users.slice(0, 10).map((user) => user.id),
     });
   } catch (error) {
     return res.status(500).json({ message: error.message });

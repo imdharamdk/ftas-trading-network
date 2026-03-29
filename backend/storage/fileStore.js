@@ -63,7 +63,15 @@ let _mongoClient = null;
 let _db          = null;
 let _mongoFailed = false;
 let _lastFailedAt = 0;
+let _storageModeLogged = false;
 const MONGO_RETRY_INTERVAL_MS = 5 * 60 * 1000; // retry every 5 min after failure
+
+function logStorageMode(level, message, extra = "") {
+  const line = extra ? `${message} ${extra}` : message;
+  if (_storageModeLogged && !line.includes("Retrying MongoDB connection")) return;
+  _storageModeLogged = true;
+  console[level](line);
+}
 
 async function getDb() {
   // If failed recently, check if retry window has passed
@@ -77,7 +85,7 @@ async function getDb() {
   }
   if (_db) return _db;
   if (!MONGODB_URI) {
-    console.warn("[fileStore] MONGODB_URI not set — using local JSON files");
+    logStorageMode("warn", "[fileStore] Storage mode: LOCAL_JSON_FALLBACK", "(reason: MONGODB_URI not set)");
     _mongoFailed = true;
     _lastFailedAt = Date.now();
     return null;
@@ -90,10 +98,10 @@ async function getDb() {
     });
     await _mongoClient.connect();
     _db = _mongoClient.db(DB_NAME);
-    console.log("[fileStore] Connected to MongoDB Atlas ✅");
+    logStorageMode("log", `[fileStore] Storage mode: MONGODB_ATLAS (db: ${DB_NAME})`);
     return _db;
   } catch (err) {
-    console.error("[fileStore] MongoDB connection failed:", err.message);
+    logStorageMode("error", "[fileStore] Storage mode: LOCAL_JSON_FALLBACK", `(reason: MongoDB connection failed: ${err.message})`);
     _mongoFailed = true;
     _lastFailedAt = Date.now();
     return null;
@@ -249,6 +257,17 @@ function queueWork(name, task) {
   return next;
 }
 
+function getStorageDebugInfo() {
+  return {
+    dbName: DB_NAME,
+    mongoConfigured: Boolean(MONGODB_URI),
+    mongoConnected: Boolean(_db),
+    mongoFailed: _mongoFailed,
+    retryIntervalMs: MONGO_RETRY_INTERVAL_MS,
+    fallbackDataDir: DATA_DIR,
+  };
+}
+
 async function mutateCollection(name, updater) {
   return queueWork(name, async () => {
     const current     = await readCollection(name);
@@ -266,6 +285,7 @@ module.exports = {
   COLLECTION_FILES,
   createId,
   ensureCollection,
+  getStorageDebugInfo,
   invalidateReadCache,
   mutateCollection,
   readCollection,
