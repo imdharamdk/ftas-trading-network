@@ -31,6 +31,14 @@ function isConfigured() {
   return Boolean(BOT_TOKEN && CHANNEL_ID);
 }
 
+function getTelegramErrorMessage(err) {
+  const description = err?.response?.data?.description;
+  const errorCode = err?.response?.data?.error_code;
+  if (description && errorCode) return `Telegram ${errorCode}: ${description}`;
+  if (description) return description;
+  return err?.message || "Telegram request failed";
+}
+
 function formatPrice(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return "—";
@@ -154,11 +162,30 @@ router.get("/status", requireAuth, requireAdmin, async (_req, res) => {
     return res.json({ configured: false, message: "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID in Render env vars" });
   }
   try {
-    const r = await axios.get(`${TG_API}/getMe`, { timeout: 5000 });
+    const [botRes, chatRes] = await Promise.allSettled([
+      axios.get(`${TG_API}/getMe`, { timeout: 5000 }),
+      axios.get(`${TG_API}/getChat`, {
+        timeout: 5000,
+        params: { chat_id: CHANNEL_ID },
+      }),
+    ]);
     const settings = await getTelegramSettings();
-    return res.json({ configured: true, bot: r.data.result, settings });
+    if (botRes.status !== "fulfilled") {
+      throw botRes.reason;
+    }
+    const channel = chatRes.status === "fulfilled" ? chatRes.value.data?.result : null;
+    const channelError = chatRes.status === "rejected" ? getTelegramErrorMessage(chatRes.reason) : null;
+    return res.json({
+      configured: true,
+      bot: botRes.value.data.result,
+      channel,
+      channelId: CHANNEL_ID,
+      channelOk: Boolean(channel),
+      channelError,
+      settings,
+    });
   } catch (err) {
-    return res.status(502).json({ configured: true, error: err.message });
+    return res.status(502).json({ configured: true, error: getTelegramErrorMessage(err) });
   }
 });
 
@@ -193,7 +220,7 @@ router.post("/test", requireAuth, requireAdmin, async (req, res) => {
     const data = await sendToTelegram(CHANNEL_ID, msg);
     return res.json({ success: true, messageId: data.result?.message_id });
   } catch (err) {
-    return res.status(502).json({ message: err.message });
+    return res.status(502).json({ message: getTelegramErrorMessage(err) });
   }
 });
 
@@ -220,7 +247,7 @@ router.post("/send-signal", requireAuth, requireAdmin, async (req, res) => {
     }
     return res.json({ success: true, sent: results.length, results });
   } catch (err) {
-    return res.status(502).json({ message: err.message });
+    return res.status(502).json({ message: getTelegramErrorMessage(err) });
   }
 });
 

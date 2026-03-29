@@ -834,6 +834,11 @@ export default function Settings() {
                 <div className="banner banner-success">
                   ✅ Bot connected: @{tgStatus.bot?.username}
                 </div>
+                {tgStatus.channelOk === false && (
+                  <div className="banner banner-warning">
+                    ⚠️ Telegram channel is not reachable: {tgStatus.channelError || "Check TELEGRAM_CHANNEL_ID and bot admin access."}
+                  </div>
+                )}
 
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
                   <div>
