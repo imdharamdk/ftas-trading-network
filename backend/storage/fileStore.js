@@ -2,7 +2,7 @@ const fs   = require("fs/promises");
 const path = require("path");
 
 const MONGODB_URI = process.env.MONGODB_URI || "";
-const DB_NAME     = process.env.MONGODB_DB  || "ftas";
+const DB_NAME     = String(process.env.MONGODB_DB || "").trim();
 
 const COLLECTION_FILES = {
   payments:           "payments.json",
@@ -97,8 +97,8 @@ async function getDb() {
       connectTimeoutMS: 8000,
     });
     await _mongoClient.connect();
-    _db = _mongoClient.db(DB_NAME);
-    logStorageMode("log", `[fileStore] Storage mode: MONGODB_ATLAS (db: ${DB_NAME})`);
+    _db = DB_NAME ? _mongoClient.db(DB_NAME) : _mongoClient.db();
+    logStorageMode("log", `[fileStore] Storage mode: MONGODB_ATLAS (db: ${_db.databaseName || "default"})`);
     return _db;
   } catch (err) {
     logStorageMode("error", "[fileStore] Storage mode: LOCAL_JSON_FALLBACK", `(reason: MongoDB connection failed: ${err.message})`);
@@ -259,7 +259,7 @@ function queueWork(name, task) {
 
 function getStorageDebugInfo() {
   return {
-    dbName: DB_NAME,
+    dbName: _db?.databaseName || DB_NAME || null,
     mongoConfigured: Boolean(MONGODB_URI),
     mongoConnected: Boolean(_db),
     mongoFailed: _mongoFailed,
