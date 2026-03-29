@@ -26,6 +26,9 @@ const LEGACY_COLLECTION_FILES = {
 };
 
 const DATA_DIR = path.join(__dirname, "..", "data");
+const ALLOW_EMPTY_USER_COLLECTION_WRITE = ["1", "true", "yes", "on"].includes(
+  String(process.env.ALLOW_EMPTY_USER_COLLECTION_WRITE || "").trim().toLowerCase(),
+);
 
 function createId(prefix = "ftas") {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -235,6 +238,14 @@ async function readCollection(name) {
 
 async function writeCollection(name, records) {
   const safe = Array.isArray(records) ? records : [];
+  if (name === "users" && safe.length === 0 && !ALLOW_EMPTY_USER_COLLECTION_WRITE) {
+    const current = await readCollection(name);
+    if (current.length > 0) {
+      throw new Error(
+        "Refusing to clear users collection without ALLOW_EMPTY_USER_COLLECTION_WRITE=true",
+      );
+    }
+  }
   const db   = await getDb();
   if (db) {
     const ok = await mongoWrite(name, safe);

@@ -25,3 +25,4 @@ backend/data/*.json
 *.njsproj
 *.sln
 *.sw?
+backend/backups/

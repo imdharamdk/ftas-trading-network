@@ -994,7 +994,7 @@ async function evaluateActiveSignals() {
   closed.forEach(s => {
     try { ws()?.broadcastStockSignalClosed(s);   } catch {}
     try { sse()?.broadcastSignalClosed(s, true); } catch {}
-    // Facebook auto-post removed
+    try { tg()?.autoSendSignalResult(s);         } catch {}
   });
   return closed;
 }

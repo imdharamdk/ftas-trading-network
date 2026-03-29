@@ -115,6 +115,38 @@ function buildSignalMessage(signal) {
   ].filter(l => l !== "").join("\n");
 }
 
+function buildSignalResultMessage(signal) {
+  const sym = formatSymbol(signal);
+  const side = signal.side === "LONG" ? "🟢 LONG" : "🔴 SHORT";
+  const market = isStock(signal)
+    ? `🇮🇳 ${signal.scanMeta?.instrument?.exchange || "NSE/BSE"}`
+    : "💹 Binance Futures";
+  const result = String(signal.result || "").toUpperCase();
+  const isWin = result === "TP1_HIT" || result === "TP2_HIT" || result === "TP3_HIT";
+  const resultLabel = isWin ? result.replace("_HIT", "") : "STOP LOSS";
+
+  return [
+    isWin ? `🏆 *FTAS TRADE WIN*` : `🛑 *FTAS TRADE CLOSED*`,
+    ``,
+    `${side} *${sym}*`,
+    `🏛 Market: ${market}`,
+    `⏱ Timeframe: ${signal.timeframe?.toUpperCase()}`,
+    ``,
+    `📌 *Result:* ${isWin ? `\`${resultLabel} HIT\`` : `\`SL HIT\``}`,
+    `💰 *Entry:* \`${formatPrice(signal.entry)}\``,
+    `🏁 *Close:* \`${formatPrice(signal.closePrice)}\``,
+    `🛡 *Stop Loss:* \`${formatPrice(signal.stopLoss)}\``,
+    `🎯 *TP1 / TP2 / TP3:* \`${formatPrice(signal.tp1)}\` / \`${formatPrice(signal.tp2)}\` / \`${formatPrice(signal.tp3)}\``,
+    ``,
+    isWin
+      ? `✅ Trade reached ${resultLabel}.`
+      : `⚠️ Stop loss triggered. Risk remained capped.`,
+    `🕐 ${nowIST()} IST`,
+    ``,
+    `[Join Channel](https://whatsapp.com/channel/0029VbCbHW97tkizw2PxR61c) | [Facebook](https://facebook.com/Ftas.trading.network)`,
+  ].join("\n");
+}
+
 // ─── Send to Telegram ─────────────────────────────────────────────────────────
 async function sendToTelegram(chatId, text) {
   if (!isConfigured()) throw new Error("Telegram bot not configured");
@@ -144,6 +176,24 @@ async function autoSendSignal(signal) {
     console.log(`[telegram] Signal sent: ${signal.coin} ${signal.side}`);
   } catch (err) {
     console.error("[telegram] autoSendSignal failed:", err.message);
+  }
+}
+
+async function autoSendSignalResult(signal) {
+  if (!isConfigured()) return;
+  try {
+    const settings = await getTelegramSettings();
+    if (!settings.autoSend) return;
+
+    const minConf = Number(settings.minConfidence || 80);
+    if (Number(signal.confidence) < minConf) return;
+    if (!["TP1_HIT", "TP2_HIT", "TP3_HIT", "SL_HIT"].includes(String(signal.result || "").toUpperCase())) return;
+
+    const msg = buildSignalResultMessage(signal);
+    await sendToTelegram(CHANNEL_ID, msg);
+    console.log(`[telegram] Signal result sent: ${signal.coin} ${signal.result}`);
+  } catch (err) {
+    console.error("[telegram] autoSendSignalResult failed:", err.message);
   }
 }
 
@@ -251,4 +301,4 @@ router.post("/send-signal", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-module.exports = { router, autoSendSignal };
+module.exports = { router, autoSendSignal, autoSendSignalResult };
